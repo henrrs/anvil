@@ -1,0 +1,79 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "anvil",
+  "agent": {
+    "build": { "disable": true },
+    "plan": { "disable": true },
+    "general": { "disable": true },
+    "explore": { "disable": true },
+    "anvil": {
+      "description": "Anvil's model-agnostic primary coding agent.",
+      "mode": "primary",
+      "permission": {
+        "*": "deny",
+        "read": {
+          "*": "allow",
+          "*.env": "ask",
+          "*.env.*": "ask",
+          "*.env.example": "allow"
+        },
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "edit": "allow",
+        "bash": {
+          "*": "allow",
+          "git reset --hard*": "ask",
+          "git clean -f*": "ask",
+          "git checkout -- *": "ask",
+          "git restore --worktree*": "ask",
+          "git push --force*": "ask",
+          "git push -f*": "ask",
+          "git branch -D*": "ask",
+          "git stash drop*": "ask",
+          "git stash clear*": "ask"
+        },
+        "webfetch": "allow",
+        "websearch": "allow",
+        "lsp": "allow",
+        "todowrite": "allow",
+        "question": "allow",
+        "doom_loop": "ask",
+        "task": "deny",
+        "skill": {
+          "*": "deny",
+          "anvil-memory": "allow",
+          "anvil-spark-performance": "allow",
+          "anvil-delta-lake": "allow",
+          "anvil-databricks": "allow",
+          "anvil-data-ingestion": "allow"
+        }
+      }
+    }
+  },
+  "mcp": {},
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "tail_turns": 4,
+    "preserve_recent_tokens": 8000,
+    "reserved": 20000
+  },
+  "tool_output": {
+    "max_lines": 1500,
+    "max_bytes": 40000
+  },
+  "watcher": {
+    "ignore": [
+      "**/.git/**",
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/build/**",
+      "**/coverage/**",
+      "**/.venv/**",
+      "**/venv/**",
+      "**/__pycache__/**",
+      "**/target/**"
+    ]
+  }
+}
