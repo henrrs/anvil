@@ -17,6 +17,7 @@ tmp_root="$3"
 
 pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*" >&2; exit 1; }
+contains() { grep -Eq "$1" "$2"; }
 
 # Static and syntax checks do not access the user's OpenCode paths.
 while IFS= read -r -d '' file; do bash -n "$file" || fail "Bash syntax: $file"; done < <(find "$ROOT/scripts" "$ROOT/tests" -type f -name '*.sh' -print0)
@@ -173,18 +174,18 @@ cat <<'JSON' | env HOME="$memory_home" XDG_DATA_HOME="$memory_data" python3 "$RO
 {"id":"databricks-secret-policy","type":"fact","scope":"company","tags":["databricks","security","secrets"],"source":{"type":"user-explicit","note":"User invoked remember"},"confidence":"confirmed","body":"In this company, do not use dbutils secrets get for Databricks credentials."}
 JSON
 env HOME="$memory_home" XDG_DATA_HOME="$memory_data" python3 "$ROOT/scripts/memory.py" recall "Databricks secrets" > "$tmp_root/recall.txt" || fail 'memory recall'
-rg -q 'user-explicit|User invoked remember' "$tmp_root/recall.txt" || fail 'memory source provenance'
+contains 'user-explicit|User invoked remember' "$tmp_root/recall.txt" || fail 'memory source provenance'
 set +e
 cat <<'JSON' | env HOME="$memory_home" XDG_DATA_HOME="$memory_data" python3 "$ROOT/scripts/memory.py" write-json > "$tmp_root/duplicate.txt" 2>&1
 {"id":"another-secret-policy","type":"fact","scope":"company","tags":["databricks","security","secrets"],"source":{"type":"user-explicit"},"confidence":"confirmed","body":"In this company, do not use dbutils secrets get for Databricks credentials."}
 JSON
 duplicate_status=$?
 set -e
-[[ "$duplicate_status" -ne 0 ]] && rg -q 'possible duplicate' "$tmp_root/duplicate.txt" || fail 'duplicate-aware memory write'
+[[ "$duplicate_status" -ne 0 ]] && contains 'possible duplicate' "$tmp_root/duplicate.txt" || fail 'duplicate-aware memory write'
 cat <<'JSON' | env HOME="$memory_home" XDG_DATA_HOME="$memory_data" python3 "$ROOT/scripts/memory.py" write-json >/dev/null
 {"id":"databricks-secret-policy","type":"fact","scope":"company","tags":["databricks","security","secrets"],"source":{"type":"user-explicit","note":"Updated by user"},"confidence":"confirmed","body":"Updated policy: do not use dbutils secrets get for Databricks credentials."}
 JSON
-rg -q '^created: ' "$memory_data/anvil/memory/company/databricks-secret-policy.md" || fail 'memory metadata'
+contains '^created: ' "$memory_data/anvil/memory/company/databricks-secret-policy.md" || fail 'memory metadata'
 [[ "$(stat -c '%a' "$memory_data/anvil/memory/company/databricks-secret-policy.md" 2>/dev/null || stat -f '%Lp' "$memory_data/anvil/memory/company/databricks-secret-policy.md")" == 600 ]] || fail 'private memory file mode'
 pass 'Memory init, narrow recall, provenance, duplicate protection, atomic update, and no automatic writes'
 
@@ -209,7 +210,7 @@ set -e
 [[ "$(anvil_sha256 "$failure_home/.config/opencode/opencode.jsonc")" == "$before_config" ]] || fail 'automatic rollback of global config'
 [[ "$(anvil_sha256 "$failure_home/.bashrc")" == "$before_shell" ]] || fail 'automatic rollback of shell startup'
 [[ ! -e "$failure_home/.opencode/bin/opencode" ]] || fail 'automatic rollback of staged executable'
-rg -q 'Automatic rollback completed' "$tmp_root/failure-reforge.log" || fail 'automatic rollback report'
+contains 'Automatic rollback completed' "$tmp_root/failure-reforge.log" || fail 'automatic rollback report'
 pass 'Injected post-backup failure automatically restored the dirty fixture'
 
 # Verify manual rollback on the separate dirty fixture and memory retention.
@@ -224,9 +225,9 @@ HOME="$fixture_root" XDG_CONFIG_HOME="$fixture_root/.config" XDG_DATA_HOME="$fix
   ' _ "$fixture_target"
 ANVIL_INTERNAL_MODE=1 HOME="$fixture_root" XDG_CONFIG_HOME="$fixture_root/.config" XDG_DATA_HOME="$fixture_data" \
 XDG_STATE_HOME="$fixture_state" PATH="$fixture_path" bash "$ROOT/scripts/rollback.sh" --backup "$fixture_backup" --internal > "$tmp_root/manual-rollback.txt"
-rg -q 'old global rules' "$fixture_current/AGENTS.md" || fail 'manual rollback restored config'
-rg -q 'legacy' "$fixture_current/skills/legacy/SKILL.md" || fail 'manual rollback restored legacy skill'
-rg -q 'preserved outside Anvil memory' "$fixture_data/anvil/memory/company/keep.md" || fail 'rollback preserves Anvil memory'
+contains 'old global rules' "$fixture_current/AGENTS.md" || fail 'manual rollback restored config'
+contains 'legacy' "$fixture_current/skills/legacy/SKILL.md" || fail 'manual rollback restored legacy skill'
+contains 'preserved outside Anvil memory' "$fixture_data/anvil/memory/company/keep.md" || fail 'rollback preserves Anvil memory'
 [[ -f "$fixture_current/cli.json" && -x "$fixture_root/.opencode/bin/opencode" ]] || fail 'rollback restored CLI and installer state'
 pass 'Manual rollback restored config, CLI settings, prior executable, and retained memory'
 
