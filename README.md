@@ -1,5 +1,9 @@
 # Anvil
 
+> Anvil — A lean, model-agnostic OpenCode harness designed to maximize reliable task completion while minimizing unnecessary context and token usage.
+>
+> **Better harness. Better execution.**
+
 ```bash
 make inspect
 make test
@@ -9,7 +13,28 @@ make doctor
 
 Restore the most recent pre-reforge setup with `make rollback`.
 
-Anvil is a lean, model-agnostic OpenCode harness. OpenCode remains responsible for providers, authentication, models, sessions, native tools, file access, shell execution, and compaction. Anvil standardizes the global instructions, one primary coding agent, five lazy skills, two memory commands, and a small file-based memory store.
+Anvil is a model-agnostic harness for OpenCode. OpenCode remains responsible for providers, authentication, models, sessions, native tools, file access, shell execution, and compaction. Anvil standardizes the global instructions, one primary coding agent, five lazy skills, two memory commands, and a small file-based memory store.
+
+## Why Anvil?
+
+An anvil is the steady base on which metal is shaped, refined, and made useful. It is not the material being worked, and it does not replace the craft or energy that shapes it. It provides a reliable surface for that work.
+
+Anvil plays the same role for language models. It does not create or select a model. It gives the model a disciplined environment: focused context, relevant skills and memory, useful tools, clear execution rules, and verification. The model can change; the harness remains the consistent foundation.
+
+```text
+Luna / Terra / Sol / Astra / Sonnet / other models
+                         │
+                         ▼
+                   Anvil harness
+       context · skills · memory · tools · rules
+                         │
+                         ▼
+              reliable, verified execution
+```
+
+## Why `make reforge`?
+
+To forge is to shape material into something useful; to reforge is to shape it again. `make reforge` rebuilds the global OpenCode harness from a clean Anvil baseline. It validates the selected OpenCode release and creates a verified backup before applying that setup.
 
 ## Install
 
