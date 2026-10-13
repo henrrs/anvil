@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Linux or macOS with Bash, Python 3.11+, `tar`, and network access to the official npm registry.
-- The Anvil-managed OpenCode executable under `~/.opencode/bin/opencode` (or the matching home/XDG paths).
+- A supported Anvil V1 global config and matching OpenCode 1 executable. The executable can be under `~/.opencode/bin/opencode` or found on the current `PATH` (for example, a package-managed install).
 - A valid V1 Anvil global config and enough free disk space for a temporary copy of OpenCode data/state and a private backup.
 - Close OpenCode's TUI and background service before starting. Anvil checks for a running OpenCode process and stops before copying if it finds one.
 
@@ -11,7 +11,7 @@ Read-only `make inspect` and `make doctor` can help identify the current setup. 
 
 ## What `make upgrade` does
 
-1. Confirms the current global config matches the V1 Anvil baseline (or a valid V2 config for a later V2 update) and the managed binary reports the matching OpenCode generation.
+1. Confirms the current global config matches the V1 Anvil baseline (or a valid V2 config for a later V2 update) and an available OpenCode executable reports the matching generation. If OpenCode is on `PATH`, Anvil includes that executable in the verified rollback snapshot and leaves the external install untouched.
 2. Resolves the official npm `latest` tag once to an exact stable OpenCode 2 version, downloads its platform package, checks npm's SHA-512 integrity, and stages the exact executable.
 3. Builds the V2 config from repository templates, migrates supported V1 provider/model fields, and retains CLI/TUI preference files.
 4. Rehearses the candidate using a private temporary HOME/XDG environment. It copies the current global config, OpenCode data/state directories, and Anvil Markdown memory; applies V2 config there; starts OpenCode 2 against the copied state through native stats; and checks the candidate's actual agent, commands, skills, plugin, and knowledge Reference.
@@ -20,6 +20,8 @@ Read-only `make inspect` and `make doctor` can help identify the current setup. 
 7. Automatically restores the verified snapshot if config replacement, installation, or postflight doctor fails.
 
 For automation, `ANVIL_YES=1 make upgrade` skips the single confirmation after the rehearsal. The upgrade still requires the same safety checks and backup.
+
+`make test` and `make upgrade` resolve the current stable candidate from the official npm registry. If the resolver reports an HTTP error, its message identifies the exact registry endpoint; check the machine's proxy/firewall access to `registry.npmjs.org` and retry. Anvil does not skip the published SHA-512 integrity check when the registry is unavailable.
 
 ## OpenCode migration details
 

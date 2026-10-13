@@ -7,11 +7,7 @@ anvil_need python3
 
 expected_anvil="$(cat "$ROOT/VERSION")"
 binary=""
-if [[ -x "$ANVIL_INSTALLED_BINARY" ]]; then
-  binary="$ANVIL_INSTALLED_BINARY"
-else
-  binary="$(command -v opencode 2>/dev/null || true)"
-fi
+binary="$(anvil_open_code_binary || true)"
 record_file="$ANVIL_DATA_DIR/installation.json"
 recorded_opencode=""
 recorded_anvil=""
@@ -25,6 +21,29 @@ except (OSError,ValueError):
 print(f"{value.get('version', '')}\t{value.get('anvil_version', '')}")
 PY
 )
+fi
+
+# A V1 config and matching V1 executable are a supported pre-upgrade state.
+# Report the migration path before comparing V1 metadata with this V2 release.
+legacy_version=""
+legacy_major=""
+if [[ -n "$binary" && -x "$binary" ]]; then
+  legacy_version="$("$binary" --version 2>/dev/null | head -n 1)"
+  legacy_version="${legacy_version#opencode }"
+  legacy_version="${legacy_version#v}"
+  legacy_major="${legacy_version%%.*}"
+fi
+repository_major="${expected_anvil%%.*}"
+if [[ "$repository_major" == 2 && "$legacy_major" == 1 ]] && \
+   python3 "$ROOT/scripts/configure.py" audit-v1 "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
+  printf '%s\n' 'Anvil Doctor' '────────────'
+  printf 'Repository Anvil version  %s\n' "$expected_anvil"
+  printf 'Installed Anvil          V1%s\n' "${recorded_anvil:+ (recorded $recorded_anvil)}"
+  printf 'OpenCode version         %s\n' "$legacy_version"
+  printf 'V1 configuration         valid and migratable\n'
+  anvil_warn "This V2 checkout found a supported Anvil V1 installation. Run 'make upgrade' to migrate it."
+  printf '\nStatus: UPGRADE REQUIRED\n'
+  exit 0
 fi
 
 broken=0

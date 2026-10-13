@@ -8,17 +8,13 @@ anvil_need python3
 days="${ANVIL_STATS_DAYS:-30}"
 [[ "$days" =~ ^[0-9]{1,4}$ ]] || { anvil_error 'ANVIL_STATS_DAYS must be an integer from 0 to 9999.'; exit 2; }
 binary=""
-if [[ -x "$ANVIL_INSTALLED_BINARY" ]]; then
-  binary="$ANVIL_INSTALLED_BINARY"
-else
-  binary="$(command -v opencode 2>/dev/null || true)"
-fi
+binary="$(anvil_open_code_binary || true)"
 [[ -n "$binary" && -x "$binary" ]] || { anvil_error 'OpenCode executable not found.'; exit 1; }
 version="$("$binary" --version 2>/dev/null | head -n 1)"
 version="${version#opencode }"
 version="${version#v}"
 [[ "$version" =~ ^2\.[0-9]+\.[0-9]+$ ]] || {
-  anvil_error "Native Anvil stats require OpenCode 2; found ${version:-unknown}."
+  anvil_error "Native Anvil stats require OpenCode 2; found ${version:-unknown}. Run 'make upgrade' to migrate an existing Anvil V1 installation first."
   exit 1
 }
 

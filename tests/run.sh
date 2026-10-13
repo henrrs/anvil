@@ -34,6 +34,32 @@ for folder in (root/"scripts",root/"tests"):
 PY
 pass 'Shell and Python syntax'
 
+python3 - "$ROOT" <<'PY' || fail 'npm registry error diagnostics'
+import importlib.util,sys,urllib.error
+from pathlib import Path
+path=Path(sys.argv[1]) / "scripts" / "opencode_release.py"
+spec=importlib.util.spec_from_file_location("anvil_opencode_release",path)
+module=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+original=module.urllib.request.urlopen
+def forbidden(request,timeout):
+    raise urllib.error.HTTPError(request.full_url,403,"Forbidden",None,None)
+module.urllib.request.urlopen=forbidden
+try:
+    try:
+        module.request_json("https://registry.npmjs.org/@opencode%2fcli")
+    except RuntimeError as exc:
+        message=str(exc)
+        assert "HTTP 403" in message
+        assert "https://registry.npmjs.org/@opencode%2fcli" in message
+        assert "proxy/firewall" in message
+    else:
+        raise AssertionError("HTTP 403 was not reported")
+finally:
+    module.urllib.request.urlopen=original
+PY
+pass 'npm registry HTTP errors include the endpoint and network guidance'
+
 # The repository template contains a path placeholder; validate the generated
 # native config so the audit sees the absolute knowledge Reference path used
 # by an installation.

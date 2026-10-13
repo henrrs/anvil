@@ -13,7 +13,7 @@ make upgrade
 make doctor
 ```
 
-`make upgrade` requires a supported Anvil V1 or V2 managed config plus its matching managed OpenCode major version. Close the OpenCode TUI and background service first. Anvil checks for a same-user OpenCode process and aborts before copying if one is active, so it does not snapshot a changing database.
+`make upgrade` requires a supported Anvil V1 or V2 managed config plus a matching OpenCode major version. The executable can be Anvil-managed or resolved from the current `PATH`; a verified copy is included in the rollback snapshot. Close the OpenCode TUI and background service first. Anvil checks for a same-user OpenCode process and aborts before copying if one is active, so it does not snapshot a changing database.
 
 Upgrade resolves the official npm `latest` dist-tag once, requires a stable OpenCode `2.x.y`, downloads and verifies the exact host package using its published SHA-512 SRI value, and stages one executable. The exact staged candidate is used for the isolated rehearsal and eventual install. Rehearsal copies the global config, OpenCode data/state, and Anvil memory to a private temporary HOME/XDG environment; runs native V2 stats on copied state; validates real candidate discovery of the Anvil agent, commands, skills, plugin, and Reference; and runs doctor. No provider/model request is made.
 

@@ -15,6 +15,7 @@ transaction_active=0
 candidate=""
 candidate_version=""
 old_version=""
+old_binary=""
 old_anvil_version=""
 from_generation=0
 
@@ -73,11 +74,15 @@ else
   exit 1
 fi
 
-if [[ ! -x "$ANVIL_INSTALLED_BINARY" ]]; then
-  anvil_error "Managed OpenCode executable not found at $ANVIL_INSTALLED_BINARY; upgrade requires the backed-up Anvil installer path."
+old_binary="$ANVIL_INSTALLED_BINARY"
+if [[ ! -x "$old_binary" ]]; then
+  old_binary="$(type -P opencode 2>/dev/null || true)"
+fi
+if [[ -z "$old_binary" || ! -x "$old_binary" ]]; then
+  anvil_error "OpenCode executable not found at $ANVIL_INSTALLED_BINARY or on PATH; install or restore the V1 OpenCode executable before upgrading."
   exit 1
 fi
-old_version="$("$ANVIL_INSTALLED_BINARY" --version 2>/dev/null | head -n 1)"
+old_version="$("$old_binary" --version 2>/dev/null | head -n 1)"
 old_version="${old_version#opencode }"
 old_version="${old_version#v}"
 old_major="${old_version%%.*}"
@@ -96,13 +101,14 @@ try:
 except (OSError,ValueError):
     value={}
 recorded=value.get("anvil_version")
-print(recorded or ("V1 (version not recorded)" if sys.argv[2] == "1" else "unknown"))
+print(recorded or ("version not recorded" if sys.argv[2] == "1" else "unknown"))
 PY
 )"
 
 printf '%s\n' 'Anvil Upgrade' '─────────────'
 printf 'Current Anvil generation  V%d (%s)\n' "$from_generation" "$old_anvil_version"
 printf 'Current OpenCode          %s\n' "$old_version"
+printf 'OpenCode executable       %s\n' "$old_binary"
 printf 'Managed configuration     %s\n' "$ANVIL_CONFIG_DIR"
 
 release_json="$tmp_root/release.json"
@@ -167,6 +173,9 @@ if [[ "${ANVIL_TEST_FAIL_AFTER_CONFIG:-0}" == 1 ]]; then
   false
 fi
 bash "$ROOT/scripts/install-opencode.sh" install "$candidate" "$candidate_version"
+path_result="$(python3 "$ROOT/scripts/path_edit.py" apply \
+  --home "$ANVIL_HOME_DIR" --xdg-config-home "$ANVIL_CONFIG_HOME" \
+  --install-dir "$ANVIL_INSTALL_BIN" --shell "${SHELL:-bash}" --path "$PATH")"
 if [[ "${ANVIL_TEST_FAIL_AFTER_INSTALL:-0}" == 1 ]]; then
   anvil_error 'Injected failure after exact candidate installation.'
   false
@@ -203,3 +212,8 @@ fi
 transaction_active=0
 anvil_ok "Anvil $ANVIL_VERSION with OpenCode $candidate_version is installed."
 anvil_ok "Rollback snapshot: $backup_dir"
+if [[ "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("added",False))' "$path_result")" == True ]]; then
+  anvil_log "Added $ANVIL_INSTALL_BIN to the selected shell startup file; open a new shell to refresh PATH."
+elif [[ "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("manual_required",False))' "$path_result")" == True ]]; then
+  anvil_warn "Could not safely edit $(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("file", "the shell startup file"))' "$path_result"). Add $ANVIL_INSTALL_BIN to PATH manually."
+fi

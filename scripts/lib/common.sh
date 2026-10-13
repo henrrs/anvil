@@ -57,10 +57,10 @@ anvil_remove_managed_tree() {
 }
 
 anvil_open_code_binary() {
-  if command -v opencode >/dev/null 2>&1; then
-    command -v opencode
-  elif [[ -x "$ANVIL_INSTALLED_BINARY" ]]; then
+  if [[ -x "$ANVIL_INSTALLED_BINARY" ]]; then
     printf '%s\n' "$ANVIL_INSTALLED_BINARY"
+  else
+    type -P opencode 2>/dev/null || true
   fi
 }
 

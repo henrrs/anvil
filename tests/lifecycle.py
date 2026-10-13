@@ -192,8 +192,35 @@ def reforge_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
     print("PASS make reforge remains a repeatable clean V2 install with one PATH entry")
 
 
-def upgrade_test(temp: pathlib.Path, wrapper: pathlib.Path, *, fail: str | None = None) -> None:
+def upgrade_test(
+    temp: pathlib.Path,
+    wrapper: pathlib.Path,
+    *,
+    fail: str | None = None,
+    external_binary: bool = False,
+) -> None:
     paths = fixture(temp)
+    if external_binary:
+        external_bin = paths["home"] / ".local" / "bin"
+        external_bin.mkdir(parents=True, exist_ok=True)
+        external_binary_path = external_bin / "opencode"
+        shutil.move(paths["binary"], external_binary_path)
+        paths["binary"] = external_binary_path
+        shutil.rmtree(paths["home"] / ".opencode")
+
+    def upgrade_env(**extra: str) -> dict[str, str]:
+        env = env_for(paths, **extra)
+        if external_binary:
+            env["PATH"] = str(paths["binary"].parent) + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin")
+        return env
+
+    if external_binary:
+        doctor = run(["/usr/bin/make", "--no-print-directory", "doctor"], upgrade_env())
+        check("Status: UPGRADE REQUIRED" in doctor.stdout, "doctor did not recognize a migratable V1 install")
+        check("make upgrade" in doctor.stderr, "doctor did not explain how to migrate V1")
+        stats = run(["/usr/bin/make", "--no-print-directory", "stats"], upgrade_env(), expected=2)
+        check("make upgrade" in stats.stderr, "V1 stats error did not explain the required migration")
+
     original_config = tree_hash(paths["config"])
     original_data = tree_hash(paths["data_opencode"])
     original_state = tree_hash(paths["state_opencode"])
@@ -208,7 +235,7 @@ def upgrade_test(temp: pathlib.Path, wrapper: pathlib.Path, *, fail: str | None 
     if fail:
         extra[fail] = "1"
     if fail in {"ANVIL_TEST_FAIL_CANDIDATE_VALIDATION", "ANVIL_TEST_FAIL_REHEARSAL"}:
-        proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env_for(paths, **extra), expected=2)
+        proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], upgrade_env(**extra), expected=2)
         expected = "injected candidate runtime validation failure" if fail == "ANVIL_TEST_FAIL_CANDIDATE_VALIDATION" else "Injected rehearsal failure"
         check(expected in proc.stderr, "candidate/rehearsal failure was not reported")
         check(tree_hash(paths["config"]) == original_config, "failed rehearsal changed config")
@@ -218,7 +245,7 @@ def upgrade_test(temp: pathlib.Path, wrapper: pathlib.Path, *, fail: str | None 
         print(f"PASS {fail} aborts before backup or live mutation")
         return
     if fail == "ANVIL_TEST_FAIL_BACKUP":
-        proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env_for(paths, **extra), expected=2)
+        proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], upgrade_env(**extra), expected=2)
         check("Injected backup creation failure" in proc.stderr, "backup creation failure was not reported")
         check(tree_hash(paths["config"]) == original_config, "backup failure changed config")
         check(tree_hash(paths["data_opencode"]) == original_data, "backup failure changed OpenCode data")
@@ -228,7 +255,7 @@ def upgrade_test(temp: pathlib.Path, wrapper: pathlib.Path, *, fail: str | None 
         print("PASS backup creation failure aborts before any live mutation")
         return
     if fail == "ANVIL_TEST_FAIL_AFTER_BACKUP":
-        proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env_for(paths, **extra), expected=2)
+        proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], upgrade_env(**extra), expected=2)
         check("Injected failure after backup" in proc.stderr, "backup failure was not reported")
         check(tree_hash(paths["config"]) == original_config, "post-backup failure changed config")
         check(file_hash(paths["binary"]) == original_binary, "post-backup failure changed runtime")
@@ -236,7 +263,7 @@ def upgrade_test(temp: pathlib.Path, wrapper: pathlib.Path, *, fail: str | None 
         print("PASS verified backup followed by pre-mutation failure leaves the V1 runtime untouched")
         return
 
-    proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env_for(paths, **extra), expected=2 if fail else 0)
+    proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], upgrade_env(**extra), expected=2 if fail else 0)
     if fail:
         check("Automatic rollback completed" in proc.stderr, "upgrade failure did not report automatic rollback")
         check(tree_hash(paths["config"]) == original_config, "automatic rollback did not restore V1 config")
@@ -260,6 +287,10 @@ def upgrade_test(temp: pathlib.Path, wrapper: pathlib.Path, *, fail: str | None 
     backup = pathlib.Path(installed["migration"]["backup"])
     run([sys.executable, str(ROOT / "scripts" / "state.py"), "verify", str(backup)], env_for(paths))
     check("Status: HEALTHY" in proc.stdout, "post-upgrade doctor did not report healthy")
+    if external_binary:
+        check(file_hash(paths["binary"]) == original_binary, "upgrade changed the external V1 executable")
+        startup = (paths["home"] / ".bashrc").read_text(encoding="utf-8")
+        check(startup.count("# Anvil: OpenCode install directory") == 1, "upgrade did not add the managed executable to PATH")
     print("PASS make upgrade installs the rehearsed candidate and records a verified V1 rollback snapshot")
 
     rolled = run(["/usr/bin/make", "--no-print-directory", "rollback"], env_for(paths))
@@ -269,6 +300,11 @@ def upgrade_test(temp: pathlib.Path, wrapper: pathlib.Path, *, fail: str | None 
     check(tree_hash(paths["data_opencode"]) == original_data and tree_hash(paths["state_opencode"]) == original_state, "manual rollback did not restore OpenCode data/state")
     check(tree_hash(paths["memory"]) == original_memory, "manual rollback changed Anvil memory")
     check("Current Anvil memory was archived before rollback" in rolled.stderr, "manual rollback did not archive current memory")
+    if external_binary:
+        check(file_hash(paths["binary"]) == original_binary, "rollback changed the external V1 executable")
+        check(not (paths["home"] / ".opencode").exists(), "rollback left a managed installer that did not exist before upgrade")
+        startup = (paths["home"] / ".bashrc").read_text(encoding="utf-8")
+        check("# Anvil: OpenCode install directory" not in startup, "rollback left a PATH entry for the removed managed binary")
     print("PASS make rollback restores the complete V1 snapshot and keeps the Markdown memory in place")
 
 
@@ -304,6 +340,8 @@ def main() -> int:
         upgrade_test(pathlib.Path(name), wrapper, fail="ANVIL_TEST_FAIL_DOCTOR")
     with tempfile.TemporaryDirectory(prefix="anvil-upgrade-success-", dir=TEST_ROOT) as name:
         upgrade_test(pathlib.Path(name), wrapper)
+    with tempfile.TemporaryDirectory(prefix="anvil-upgrade-external-v1-binary-", dir=TEST_ROOT) as name:
+        upgrade_test(pathlib.Path(name), wrapper, external_binary=True)
     return 0
 
 

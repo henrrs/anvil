@@ -12,6 +12,7 @@ import platform
 import re
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -21,9 +22,24 @@ PACKAGE = "@opencode/cli"
 USER_AGENT = "Anvil/2.0.0 (official OpenCode release resolver)"
 
 
+def open_url(request: urllib.request.Request, timeout: int):
+    try:
+        return urllib.request.urlopen(request, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(
+            f"official npm request returned HTTP {exc.code} from {request.full_url}; "
+            "check this machine's proxy/firewall access to registry.npmjs.org"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            f"could not reach official npm endpoint {request.full_url}: {exc.reason}; "
+            "check this machine's network and proxy settings"
+        ) from exc
+
+
 def request_json(url: str) -> dict:
     request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=30) as response:
+    with open_url(request, timeout=30) as response:
         data = json.load(response)
     if not isinstance(data, dict):
         raise ValueError("npm registry response was not an object")
@@ -124,7 +140,7 @@ def download(candidate: dict, destination: Path) -> None:
     digest = hashlib.new(algorithm)
     request = urllib.request.Request(candidate["asset"]["url"], headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(request, timeout=120) as response, temporary.open("wb") as output:
+        with open_url(request, timeout=120) as response, temporary.open("wb") as output:
             while block := response.read(1024 * 1024):
                 output.write(block)
                 digest.update(block)
