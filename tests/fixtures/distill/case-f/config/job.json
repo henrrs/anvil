@@ -1,0 +1,4 @@
+{
+  "pipeline": "customer-ingestion",
+  "numPartitions": 16
+}

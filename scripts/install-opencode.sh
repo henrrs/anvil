@@ -13,7 +13,31 @@ Internal OpenCode release helper:
 EOF
 }
 
-candidate_version() { printf '%s\n' "${1#v}"; }
+candidate_version() {
+  local value="$1"
+  value="${value#opencode }"
+  value="${value#v}"
+  printf '%s\n' "$value"
+}
+
+isolated_version() {
+  local binary="$1" check_root output status
+  check_root="$(mktemp -d "${TMPDIR:-/tmp}/anvil-version-check.XXXXXX")"
+  chmod 700 -- "$check_root"
+  mkdir -p -- "$check_root/home" "$check_root/config" "$check_root/data" "$check_root/state"
+  status=0
+  output="$(env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$check_root/home" \
+    XDG_CONFIG_HOME="$check_root/config" XDG_DATA_HOME="$check_root/data" \
+    XDG_STATE_HOME="$check_root/state" "$binary" --version 2>/dev/null | head -n 1)" || status=$?
+  python3 - "$check_root" "${TMPDIR:-/tmp}" <<'PY'
+import os,shutil,sys
+root,base=map(os.path.abspath,sys.argv[1:])
+if os.path.commonpath((root,base)) == base and root != base:
+    shutil.rmtree(root,ignore_errors=True)
+PY
+  (( status == 0 )) || return "$status"
+  printf '%s\n' "$output"
+}
 
 case "${1:-}" in
   resolve)
@@ -27,20 +51,22 @@ case "${1:-}" in
     stage_dir="$3"
     [[ -n "$stage_dir" && "$stage_dir" != / ]] || { anvil_error 'Invalid staging directory.'; exit 2; }
     mkdir -p -- "$stage_dir"
-    archive_name="$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import opencode_release; print(opencode_release.asset_name())' "$ROOT/scripts")"
-    archive="$stage_dir/$archive_name"
+    archive="$stage_dir/opencode-${version}.tgz"
     python3 "$ROOT/scripts/opencode_release.py" download --version "$version" --destination "$archive" > "$stage_dir/release.json"
-    case "$archive" in
-      *.tar.gz) tar -xzf "$archive" -C "$stage_dir" ;;
-      *.zip) anvil_need unzip; unzip -q "$archive" -d "$stage_dir" ;;
-      *) anvil_error "Unsupported candidate archive: $archive"; exit 1 ;;
-    esac
+    tar -xzf "$archive" -C "$stage_dir" package/bin/opencode
+    [[ -f "$stage_dir/package/bin/opencode" ]] || {
+      anvil_error 'Official npm package did not contain package/bin/opencode.'
+      exit 1
+    }
+    mv -- "$stage_dir/package/bin/opencode" "$stage_dir/opencode"
+    rm -rf -- "$stage_dir/package"
+    chmod 755 -- "$stage_dir/opencode"
     candidate="$stage_dir/opencode"
     [[ -f "$candidate" && -x "$candidate" ]] || {
       anvil_error 'Official release archive did not contain an executable named opencode.'
       exit 1
     }
-    actual="$(candidate_version "$("$candidate" --version 2>/dev/null | head -n 1)")"
+    actual="$(candidate_version "$(isolated_version "$candidate")")"
     [[ "$actual" == "$version" ]] || {
       anvil_error "Candidate reports version $actual; expected $version."
       exit 1
@@ -52,7 +78,7 @@ case "${1:-}" in
     candidate="$2"
     version="$(candidate_version "$3")"
     [[ -f "$candidate" && -x "$candidate" ]] || { anvil_error 'Validated candidate binary is unavailable.'; exit 1; }
-    actual="$(candidate_version "$("$candidate" --version 2>/dev/null | head -n 1)")"
+    actual="$(candidate_version "$(isolated_version "$candidate")")"
     [[ "$actual" == "$version" ]] || { anvil_error "Refusing to install $actual; validated release was $version."; exit 1; }
     mkdir -p -- "$ANVIL_INSTALL_BIN"
     tmp="$ANVIL_INSTALL_BIN/.opencode.anvil.$$"
@@ -60,7 +86,7 @@ case "${1:-}" in
     install -m 0755 -- "$candidate" "$tmp"
     mv -f -- "$tmp" "$ANVIL_INSTALLED_BINARY"
     trap - EXIT
-    [[ "$(candidate_version "$("$ANVIL_INSTALLED_BINARY" --version 2>/dev/null | head -n 1)")" == "$version" ]] || {
+    [[ "$(candidate_version "$(isolated_version "$ANVIL_INSTALLED_BINARY")")" == "$version" ]] || {
       anvil_error 'Installed executable did not retain the validated version.'
       exit 1
     }

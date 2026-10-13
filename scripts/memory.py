@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -18,12 +19,20 @@ from typing import Any
 
 MEMORY_TYPES = {"fact", "decision", "lesson", "project"}
 CONFIDENCE = {"confirmed", "high", "medium", "low", "unverified"}
-SOURCE_TYPES = {"user-explicit", "repository", "document", "url", "commit", "test", "other"}
-SOURCE_FIELDS = {"type", "path", "url", "commit", "note"}
+SOURCE_TYPES = {"user-explicit", "repository", "code", "document", "url", "commit", "test", "other"}
+SOURCE_FIELDS = {
+    "type", "path", "url", "commit", "note", "section", "sha256", "repository",
+    "line_start", "line_end", "imported",
+}
+STATUSES = {"sourced", "corroborated", "conflicted", "historical", "uncertain"}
 
 
 def memory_root() -> Path:
     return Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "anvil" / "memory"
+
+
+def data_root() -> Path:
+    return Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "anvil"
 
 
 def slug(value: str, *, max_length: int = 64) -> str:
@@ -50,7 +59,7 @@ def parse_entry(path: Path) -> dict[str, Any] | None:
         end = lines.index("---", 1)
     except ValueError:
         return None
-    meta: dict[str, Any] = {"tags": [], "source": {}}
+    meta: dict[str, Any] = {"tags": [], "aliases": [], "evidence": [], "source": {}}
     section = ""
     for line in lines[1:end]:
         if line.startswith("  ") and section == "source":
@@ -58,15 +67,15 @@ def parse_entry(path: Path) -> dict[str, Any] | None:
             if match:
                 meta["source"][match.group(1)] = match.group(2).replace("''", "'")
             continue
-        if line.startswith("  - ") and section == "tags":
-            meta["tags"].append(line[4:].strip().strip("'").replace("''", "'"))
+        if line.startswith("  - ") and section in {"tags", "aliases", "evidence"}:
+            meta[section].append(line[4:].strip().strip("'").replace("''", "'"))
             continue
         if ":" not in line:
             continue
         key, raw = line.split(":", 1)
         section = key
         raw = raw.strip()
-        if key in ("id", "type", "scope", "confidence", "created", "updated"):
+        if key in ("id", "type", "scope", "confidence", "status", "created", "updated"):
             meta[key] = raw[1:-1].replace("''", "'") if len(raw) >= 2 and raw[0] == raw[-1] == "'" else raw
     meta["body"] = "\n".join(lines[end + 1 :]).strip()
     meta["path"] = str(path)
@@ -83,6 +92,34 @@ def entries(root: Path) -> list[dict[str, Any]]:
             if item is not None:
                 result.append(item)
     return result
+
+
+def valid_entry(path: Path) -> bool:
+    item = parse_entry(path)
+    if not item:
+        return False
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", str(item.get("id", ""))):
+        return False
+    if item.get("type") not in MEMORY_TYPES:
+        return False
+    if not re.fullmatch(r"(?:company|project(?::[A-Za-z0-9_. -]+)?)", str(item.get("scope", ""))):
+        return False
+    if not isinstance(item.get("tags"), list) or not isinstance(item.get("aliases"), list) or not isinstance(item.get("evidence"), list):
+        return False
+    source = item.get("source")
+    if not isinstance(source, dict) or source.get("type") not in SOURCE_TYPES:
+        return False
+    if item.get("confidence") not in CONFIDENCE or not item.get("body", "").strip():
+        return False
+    status = item.get("status")
+    return status is None or status in STATUSES
+
+
+def audit(root: Path | None = None) -> dict[str, int]:
+    location = root or memory_root()
+    files = [path for path in location.rglob("*.md") if path.is_file() and not path.is_symlink()] if location.is_dir() else []
+    valid = sum(valid_entry(path) for path in files)
+    return {"valid": valid, "invalid": len(files) - valid, "files": len(files)}
 
 
 def candidate_files(root: Path, terms: list[str]) -> set[Path] | None:
@@ -113,17 +150,21 @@ def shutil_which(name: str) -> str | None:
 
 
 def scored_matches(root: Path, query: str) -> list[tuple[int, dict[str, Any]]]:
-    terms = list(dict.fromkeys(re.findall(r"[a-z0-9][a-z0-9_-]{1,}", query.lower())))
+    def normalize(value: str) -> str:
+        decomposed = unicodedata.normalize("NFKD", value.casefold())
+        return "".join(char for char in decomposed if not unicodedata.combining(char))
+
+    terms = list(dict.fromkeys(re.findall(r"(?u)[^\W_][\w-]{1,}", normalize(query))))
     candidate_paths = candidate_files(root, terms)
     corpus = entries(root) if candidate_paths is None else [
         item for path in candidate_paths if (item := parse_entry(path)) is not None
     ]
     matches: list[tuple[int, dict[str, Any]]] = []
     for item in corpus:
-        searchable = " ".join(
+        searchable = normalize(" ".join(
             [Path(item["path"]).stem, item.get("id", ""), item.get("type", ""), item.get("scope", ""),
-             " ".join(item.get("tags", [])), item.get("body", "")]
-        ).lower()
+             " ".join(item.get("tags", [])), " ".join(item.get("aliases", [])), item.get("body", "")]
+        ))
         score = sum(1 for term in terms if term in searchable)
         if score:
             matches.append((score, item))
@@ -141,7 +182,7 @@ def show_matches(matches: list[tuple[int, dict[str, Any]]], limit: int) -> None:
         if len(body) > 420:
             body = body[:417].rstrip() + "..."
         print(f"[{item.get('id', 'unknown')}] {item.get('type', '?')} / {item.get('scope', '?')} (match {score})")
-        print(f"  confidence: {item.get('confidence', 'unspecified')}; source: {source.get('type', 'unspecified')}")
+        print(f"  status: {item.get('status', 'unspecified')}; confidence: {item.get('confidence', 'unspecified')}; source: {source.get('type', 'unspecified')}")
         for key in ("path", "url", "commit", "note"):
             if source.get(key):
                 print(f"  {key}: {source[key]}")
@@ -168,6 +209,9 @@ def validate_entry(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("input must be a JSON object")
     required = {"id", "type", "scope", "tags", "source", "confidence", "body"}
+    optional = {"aliases", "status", "evidence"}
+    if set(raw) - required - optional:
+        raise ValueError("unsupported fields: " + ", ".join(sorted(set(raw) - required - optional)))
     missing = required - raw.keys()
     if missing:
         raise ValueError("missing fields: " + ", ".join(sorted(missing)))
@@ -192,12 +236,23 @@ def validate_entry(raw: Any) -> dict[str, Any]:
             raise ValueError(f"source.{key} must be text of at most 1000 characters")
     if raw["confidence"] not in CONFIDENCE:
         raise ValueError("confidence must be confirmed, high, medium, low, or unverified")
+    status = raw.get("status")
+    if status is not None and status not in STATUSES:
+        raise ValueError("status must be sourced, corroborated, conflicted, historical, or uncertain")
+    aliases = raw.get("aliases", [])
+    if not isinstance(aliases, list) or len(aliases) > 24 or any(not isinstance(alias, str) or not alias.strip() or len(alias) > 120 for alias in aliases):
+        raise ValueError("aliases must be an array of at most 24 short text values")
+    evidence = raw.get("evidence", [])
+    if not isinstance(evidence, list) or len(evidence) > 24 or any(not isinstance(item, str) or not item.strip() or len(item) > 1000 for item in evidence):
+        raise ValueError("evidence must be an array of at most 24 short text values")
     if not isinstance(raw["body"], str) or not raw["body"].strip() or len(raw["body"]) > 20000:
         raise ValueError("body must contain 1 to 20000 characters")
     body = raw["body"].replace("\r\n", "\n").replace("\r", "\n").strip()
     return {
         "id": slug(str(raw["id"])), "type": raw["type"], "scope": raw["scope"],
-        "tags": list(dict.fromkeys(tags)), "source": source, "confidence": raw["confidence"], "body": body,
+        "tags": list(dict.fromkeys(tags)), "aliases": list(dict.fromkeys(a.strip() for a in aliases)),
+        "source": source, "confidence": raw["confidence"], "status": status,
+        "evidence": list(dict.fromkeys(e.strip() for e in evidence)), "body": body,
     }
 
 
@@ -207,12 +262,22 @@ def frontmatter(data: dict[str, Any], created: str, updated: str) -> str:
         lines.append(f"{key}: {quote_yaml(data[key])}")
     lines.append("tags:")
     lines.extend(f"  - {quote_yaml(tag)}" for tag in data["tags"])
+    if data.get("aliases"):
+        lines.append("aliases:")
+        lines.extend(f"  - {quote_yaml(alias)}" for alias in data["aliases"])
     lines.append("source:")
     for key in ("type", "path", "url", "commit", "note"):
         if key in data["source"]:
             lines.append(f"  {key}: {quote_yaml(data['source'][key])}")
+    for key in sorted(set(data["source"]) - {"type", "path", "url", "commit", "note"}):
+        lines.append(f"  {key}: {quote_yaml(data['source'][key])}")
+    lines.append(f"confidence: {quote_yaml(data['confidence'])}")
+    if data.get("status"):
+        lines.append(f"status: {quote_yaml(data['status'])}")
+    if data.get("evidence"):
+        lines.append("evidence:")
+        lines.extend(f"  - {quote_yaml(item)}" for item in data["evidence"])
     lines.extend([
-        f"confidence: {quote_yaml(data['confidence'])}",
         f"created: {created}",
         f"updated: {updated}",
         "---",
@@ -279,7 +344,7 @@ def write_entry(data: dict[str, Any], root: Path) -> tuple[Path, bool]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Search Anvil memory or persist an explicitly requested entry")
     sub = parser.add_subparsers(dest="action", required=True)
-    sub.add_parser("init", help="create the empty memory directory layout")
+    sub.add_parser("init", help="create the empty memory, knowledge, and source registry layout")
     p_search = sub.add_parser("search")
     p_search.add_argument("query", nargs="+")
     p_recall = sub.add_parser("recall")
@@ -288,6 +353,11 @@ def main() -> int:
     p_write = sub.add_parser("write-json", help="write one entry from JSON on stdin; never called automatically")
     p_write.add_argument("--allow-duplicate", action="store_true", help="allow a matching entry after explicit review")
     p_check = sub.add_parser("check")
+    p_audit = sub.add_parser("audit", help="report valid and invalid Markdown memory files as JSON")
+    p_tool = sub.add_parser("tool-search", help="bounded JSON search for the Anvil core plugin")
+    p_tool.add_argument("query")
+    p_tool.add_argument("--scope")
+    p_tool.add_argument("--limit", type=int, default=5)
     args = parser.parse_args()
     root = memory_root()
     if args.action == "init":
@@ -295,7 +365,13 @@ def main() -> int:
             directory.mkdir(mode=0o700, parents=True, exist_ok=True)
             os.chmod(directory, 0o700)
         os.chmod(root, 0o700)
+        for directory in (data_root() / "knowledge", data_root() / "sources"):
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            os.chmod(directory, 0o700)
         print(root)
+        return 0
+    if args.action == "audit":
+        print(json.dumps(audit(root)))
         return 0
     if args.action == "check":
         try:
@@ -310,6 +386,29 @@ def main() -> int:
         except OSError as exc:
             print(f"memory is not readable/writable: {exc}", file=sys.stderr)
             return 1
+    if args.action == "tool-search":
+        query = args.query.strip()
+        if not query or len(query) > 500:
+            print(json.dumps({"results": [], "message": "Query must contain 1 to 500 characters."}))
+            return 0
+        limit = max(1, min(args.limit, 5))
+        matches = scored_matches(root, query)
+        results = []
+        for score, item in matches:
+            if args.scope and item.get("scope") != args.scope:
+                continue
+            source = item.get("source", {})
+            excerpt = re.sub(r"\s+", " ", item.get("body", "")).strip()
+            results.append({
+                "id": item.get("id"), "type": item.get("type"), "scope": item.get("scope"),
+                "status": item.get("status"), "confidence": item.get("confidence"),
+                "source": {key: source[key] for key in ("type", "path", "url", "commit", "section", "sha256") if source.get(key)},
+                "relevance": score, "excerpt": excerpt[:240], "path": item.get("path"),
+            })
+            if len(results) >= limit:
+                break
+        print(json.dumps({"results": results}, ensure_ascii=False))
+        return 0
     if args.action in ("search", "recall"):
         query = " ".join(args.query).strip()
         matches = scored_matches(root, query)

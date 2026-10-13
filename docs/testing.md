@@ -1,17 +1,27 @@
 # Testing
 
-`make test` requires Linux or macOS, Bash, Python 3.11+, `tar`, and internet access to the official OpenCode GitHub release API and asset (`unzip` on macOS). It resolves a stable non-prerelease, downloads one exact official release asset, verifies the published SHA-256, and records the candidate version. The candidate is not installed into the user's environment. Windows users can run under WSL.
+`make test` requires Linux or macOS, Bash, Python 3.11+, `tar`, and network access to the official npm registry for the stable OpenCode candidate. It resolves the candidate once, downloads the host package, verifies its published integrity, and keeps all candidate runtime data under temporary HOME/XDG paths. Windows users can run under WSL.
 
 ## Candidate smoke test
 
-OpenCode is run with a temporary `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, and empty project directory. The test invokes `debug config`, `debug skill`, and `agent list` to verify that the exact candidate accepts the generated config, selects Anvil, leaves maintenance agents intact, exposes the five skills and two commands, disables the four built-in user-facing agent IDs, applies task/skill denial, and leaves model selection unpinned.
+The exact official candidate is run with isolated `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_STATE_HOME`. The test validates native V2 config loading and checks the actual runtime registration of the Anvil primary agent, `/remember`, `/recall`, `/distill`, five skills, `anvil-core`, `anvil_memory_search`, and the `anvil-knowledge` Reference. It does not make a provider/model request or open an interactive TUI.
 
-## Local and fixture checks
+## Regression and memory checks
 
-The suite also checks Bash syntax, Python source parsing, required templates, the Anvil config audit, model neutrality, and a narrow secret scan. Memory fixtures cover directory creation, search-without-write, explicit JSON entry creation, frontmatter/provenance, duplicate refusal, and update behavior.
+The deterministic checks parse shell/Python sources, audit the V2 config and V1 fixture, check release documentation consistency, assert model neutrality, disabled built-in agents, denied subagents, empty MCP defaults, the narrow plugin scope, and scan repository files for a small set of accidental secret signatures.
 
-Dirty global fixtures use a HOME and XDG paths containing spaces. Backup tests check config and installer archives, manifest/checksum validation, and restored CLI settings. Repeated config application must be byte-for-byte stable. A controlled failure after replacement in `make reforge` exercises automatic rollback. Manual rollback restores the old config/installer while preserving Anvil memory. No test command receives the real OpenCode config, data, or state paths as its active destination.
+V1-format Markdown fixtures are searched with `PATH` deliberately lacking `rg`; tests verify the original file hash remains unchanged. Memory checks also cover validation counts, accent-insensitive aliases, bounded retrieval, explicit writes, provenance, duplicate handling, and no-write search behavior. `/distill` fixtures cover current doc/code/test corroboration, stale documentation versus active behavior, an unreferenced legacy implementation, normative policy versus implementation conflict, historical claims, documented `numPartitions = 8` versus active configured/tested `16`, and a Markdown reference to an unavailable image. The source registry checks hash drift and unchanged-source skip results.
+
+## Lifecycle and recovery
+
+Lifecycle integration uses temporary HOME/XDG trees and a small executable wrapper that reports a representative V1 version before delegating runtime operations to the exact OpenCode 2 candidate. It tests supported V1 provider/config conversion, isolated rehearsal with copied config/data/state/memory, repeated idempotent reforge and PATH handling, successful upgrade, automatic rollback after injected failures, manual rollback, opaque data/state restoration, and Anvil memory preservation.
+
+Failure injection covers candidate runtime validation failure, rehearsal abort, backup creation failure, failure after a verified backup but before mutation, post-config failure, and post-upgrade doctor failure. Tests assert that pre-mutation failures do not modify live fixture state and that post-mutation failures restore the captured config/runtime/data/state snapshot. No test command is given the developer's real OpenCode directories as its active destination.
+
+## Stats and version documentation
+
+The stats formatter is checked against structured native OpenCode JSON including model, token, and cost values. No-usage behavior is supported by the script's empty native result path. The version documentation validator checks `VERSION`, the matching changelog and version history, capability matrix, migration guide, release guide, and OpenCode compatibility record.
 
 ## Limits
 
-The smoke check validates config behavior against the candidate's CLI and current official schema. It does not authenticate to a provider, start a paid model request, verify every cloud/provider implementation, or exercise organization remote config in the user's account. Those data/state stores are intentionally not copied into the test HOME. Project and managed config precedence is reported separately by doctor.
+Rehearsal triggers OpenCode's native runtime/state handling through standalone stats and validates CLI/API discovery. It does not verify terminal rendering, live provider authentication, every provider integration, or a paid model request. Database files are copied and restored as opaque files; Anvil does not read or mutate internal SQLite schemas. Distillation is model-guided semantic synthesis, so deterministic fixtures check workflow instructions, provenance, evidence labels and registry behavior, not the quality of a future model's reasoning.

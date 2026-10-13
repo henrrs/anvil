@@ -41,6 +41,9 @@ import json, sys
 data = json.load(open(sys.argv[1], encoding="utf-8"))
 value = data
 for key in sys.argv[2].split("."):
+    if not isinstance(value, dict) or key not in value:
+        value = None
+        break
     value = value[key]
 print("" if value is None else ("yes" if value is True else "no" if value is False else value))
 PY
@@ -48,8 +51,16 @@ PY
 
 saved_config_dir="$(read_manifest previous.config_dir)"
 saved_install_dir="$(read_manifest previous.installer_dir)"
+saved_data_dir="$(read_manifest previous.data_dir)"
+saved_state_dir="$(read_manifest previous.state_dir)"
 [[ "$saved_config_dir" == "$ANVIL_CONFIG_DIR" ]] || { anvil_error 'Backup belongs to a different OpenCode config path.'; exit 1; }
 [[ "$saved_install_dir" == "$ANVIL_INSTALL_ROOT" ]] || { anvil_error 'Backup belongs to a different home directory.'; exit 1; }
+if [[ -n "$saved_data_dir" && "$saved_data_dir" != "$ANVIL_DATA_HOME/opencode" ]]; then
+  anvil_error 'Backup belongs to a different OpenCode data path.'; exit 1
+fi
+if [[ -n "$saved_state_dir" && "$saved_state_dir" != "$ANVIL_STATE_DIR" ]]; then
+  anvil_error 'Backup belongs to a different OpenCode state path.'; exit 1
+fi
 if ! anvil_safe_managed_path "$ANVIL_CONFIG_DIR" "$ANVIL_CONFIG_DIR"; then
   anvil_error 'Current config path did not pass the managed-path check.'; exit 1
 fi
@@ -59,6 +70,8 @@ fi
 
 config_present="$(read_manifest previous.config_present)"
 installer_present="$(read_manifest previous.installer_present)"
+data_present="$(read_manifest previous.data_present)"
+state_present="$(read_manifest previous.state_present)"
 old_version="$(read_manifest previous.executable_version)"
 path_added="$(read_manifest previous.path_update.added)"
 path_file="$(read_manifest previous.path_update.file)"
@@ -69,11 +82,36 @@ printf 'Backup                %s\n' "$backup_real"
 printf 'Prior OpenCode        %s\n' "${old_version:-not found}"
 printf 'Restore global config %s\n' "$config_present"
 printf 'Restore installer dir %s\n' "$installer_present"
+printf 'Restore OpenCode data %s\n' "${data_present:-not captured by this backup}"
+printf 'Restore OpenCode state %s\n' "${state_present:-not captured by this backup}"
+
+memory_backup=""
+if [[ -d "$ANVIL_MEMORY_DIR" ]]; then
+  umask 077
+  mkdir -p -- "$ANVIL_DATA_DIR/memory-backups"
+  chmod 700 -- "$ANVIL_DATA_DIR/memory-backups"
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  memory_backup="$ANVIL_DATA_DIR/memory-backups/memory-before-rollback-$stamp.tar.gz"
+  suffix=0
+  while [[ -e "$memory_backup" ]]; do
+    suffix=$((suffix + 1))
+    memory_backup="$ANVIL_DATA_DIR/memory-backups/memory-before-rollback-$stamp-$suffix.tar.gz"
+  done
+  python3 "$ROOT/scripts/archive.py" create "$ANVIL_MEMORY_DIR" "$memory_backup" memory
+  printf '%s  %s\n' "$(anvil_sha256 "$memory_backup")" "$(basename -- "$memory_backup")" > "$memory_backup.sha256"
+  chmod 600 -- "$memory_backup.sha256"
+fi
 
 config_archive="$backup_real/config.tar.gz"
 installer_archive="$backup_real/opencode-root.tar.gz"
 python3 "$ROOT/scripts/archive.py" restore "$config_archive" "$ANVIL_CONFIG_DIR" "$config_present"
 python3 "$ROOT/scripts/archive.py" restore "$installer_archive" "$ANVIL_INSTALL_ROOT" "$installer_present"
+if [[ -n "$saved_data_dir" && "$data_present" != "" ]]; then
+  python3 "$ROOT/scripts/archive.py" restore "$backup_real/opencode-data.tar.gz" "$saved_data_dir" "$data_present"
+fi
+if [[ -n "$saved_state_dir" && "$state_present" != "" ]]; then
+  python3 "$ROOT/scripts/archive.py" restore "$backup_real/opencode-state.tar.gz" "$saved_state_dir" "$state_present"
+fi
 
 if [[ "$path_added" == yes && -n "$path_file" && -n "$path_line" ]]; then
   safe_path="$(python3 - "$ANVIL_HOME_DIR" "$path_file" <<'PY'
@@ -111,5 +149,8 @@ if [[ -n "$old_version" ]]; then
       exit 1
     }
   fi
+fi
+if [[ -n "$memory_backup" ]]; then
+  anvil_ok "Current Anvil memory was archived before rollback: $memory_backup"
 fi
 anvil_ok 'Rollback completed. Anvil memory remains at its data path and is inert without the Anvil harness.'

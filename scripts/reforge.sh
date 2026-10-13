@@ -5,8 +5,9 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source "$ROOT/scripts/lib/common.sh"
 source "$ROOT/scripts/lib/install.sh"
 source "$ROOT/scripts/lib/backup.sh"
+ANVIL_VERSION="$(cat "$ROOT/VERSION")"
 
-anvil_need python3 tar cp mv install chmod date
+anvil_need python3 tar cp mv install chmod date ps
 python3 - <<'PY'
 import sys
 if sys.version_info < (3, 11):
@@ -25,12 +26,35 @@ if [[ -L "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_BIN" ]]; then
   anvil_error 'The OpenCode installer directory or bin directory is a symlink; refusing to install through it.'
   exit 1
 fi
+python3 "$ROOT/scripts/active-opencode.py" || {
+  anvil_error 'Close OpenCode before reforge so its database can be backed up consistently.'
+  exit 1
+}
 
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/anvil-reforge.XXXXXX")"
 backup_dir=""
 transaction_active=0
 candidate=""
 candidate_version=""
+previous_anvil_version=""
+previous_opencode_version=""
+from_generation=0
+
+if [[ -f "$ANVIL_DATA_DIR/installation.json" ]]; then
+  IFS=$'\t' read -r previous_anvil_version previous_opencode_version < <(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
+import json,sys
+try: value=json.load(open(sys.argv[1],encoding="utf-8"))
+except (OSError,ValueError): value={}
+print(f"{value.get('anvil_version','')}\t{value.get('version','')}")
+PY
+)
+fi
+if python3 "$ROOT/scripts/configure.py" audit-v1 "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
+  from_generation=1
+  [[ -n "$previous_anvil_version" ]] || previous_anvil_version='V1 (version not recorded)'
+elif python3 "$ROOT/scripts/configure.py" audit "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
+  from_generation=2
+fi
 
 cleanup_temp() {
   local base="${TMPDIR:-/tmp}/anvil-reforge."
@@ -67,11 +91,16 @@ release_json="$tmp_root/release.json"
 if [[ "${ANVIL_TEST_MODE:-0}" == 1 ]]; then
   candidate="${ANVIL_TEST_CANDIDATE_BINARY:-}"
   [[ -n "$candidate" && -x "$candidate" ]] || { anvil_error 'Test mode requires ANVIL_TEST_CANDIDATE_BINARY.'; exit 2; }
-  candidate_version="$("$candidate" --version 2>/dev/null | head -n 1)"
+  mkdir -p -- "$tmp_root/test-home" "$tmp_root/test-config" "$tmp_root/test-data" "$tmp_root/test-state"
+  candidate_version="$(env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$tmp_root/test-home" \
+    XDG_CONFIG_HOME="$tmp_root/test-config" XDG_DATA_HOME="$tmp_root/test-data" \
+    XDG_STATE_HOME="$tmp_root/test-state" "$candidate" --version 2>/dev/null | head -n 1)"
+  candidate_version="${candidate_version#opencode }"
   candidate_version="${candidate_version#v}"
   python3 - "$release_json" "$candidate_version" <<'PY'
 import json,sys
-open(sys.argv[1],"w",encoding="utf-8").write(json.dumps({"version":sys.argv[2],"release_url":"isolated fixture","asset":{"sha256":None}}))
+with open(sys.argv[1],"w",encoding="utf-8") as stream:
+  json.dump({"version":sys.argv[2],"channel":"latest","published_at":None,"release_url":"isolated fixture","asset":{"name":"fixture","integrity":"sha512-fixture"}},stream)
 PY
 else
   anvil_need python3
@@ -82,7 +111,7 @@ else
   cp -- "$tmp_root/candidate/release.json" "$release_json"
 fi
 
-[[ "$candidate_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { anvil_error "Invalid stable version: $candidate_version"; exit 1; }
+[[ "$candidate_version" =~ ^2\.[0-9]+\.[0-9]+$ ]] || { anvil_error "Invalid stable OpenCode 2 version: $candidate_version"; exit 1; }
 anvil_ok "Staged official OpenCode $candidate_version"
 
 ready_config="$tmp_root/global-config"
@@ -124,37 +153,13 @@ path_result="$(python3 "$ROOT/scripts/path_edit.py" apply \
 export PATH="$ANVIL_INSTALL_BIN:$PATH"
 XDG_DATA_HOME="$ANVIL_DATA_HOME" python3 "$ANVIL_CONFIG_DIR/scripts/memory.py" init >/dev/null
 
-python3 - "$release_json" "$ANVIL_DATA_DIR/installation.json" "$candidate_version" "$ANVIL_INSTALLED_BINARY" <<'PY'
-import json, os, sys, tempfile
-from datetime import datetime, timezone
-source, destination, version, binary = sys.argv[1:]
-try:
-    release = json.load(open(source, encoding="utf-8"))
-except (OSError, ValueError):
-    release = {"version": version, "release_url": None, "asset": {}}
-record = {
-    "version": version,
-    "binary": binary,
-    "release_url": release.get("release_url"),
-    "artifact_sha256": (release.get("asset") or {}).get("sha256"),
-    "installed_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    "config_schema": "https://opencode.ai/config.json",
-}
-os.makedirs(os.path.dirname(destination), mode=0o700, exist_ok=True)
-fd, temporary = tempfile.mkstemp(prefix=".installation.", dir=os.path.dirname(destination))
-try:
-    os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        json.dump(record, stream, indent=2)
-        stream.write("\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, destination)
-except BaseException:
-    try: os.unlink(temporary)
-    except OSError: pass
-    raise
-PY
+python3 "$ROOT/scripts/installation.py" \
+  --destination "$ANVIL_DATA_DIR/installation.json" \
+  --opencode-version "$candidate_version" --anvil-version "$ANVIL_VERSION" \
+  --binary "$ANVIL_INSTALLED_BINARY" --release-json "$release_json" \
+  --migration-status reforge --previous-anvil-version "$previous_anvil_version" \
+  --previous-opencode-version "$previous_opencode_version" --from-generation "$from_generation" \
+  --backup "$backup_dir"
 
 doctor_status=0
 bash "$ROOT/scripts/doctor.sh" || doctor_status=$?
@@ -169,7 +174,7 @@ elif (( doctor_status == 2 )); then
 fi
 
 transaction_active=0
-anvil_ok "Anvil 0.1.0 installed with OpenCode $candidate_version."
+anvil_ok "Anvil $ANVIL_VERSION installed with OpenCode $candidate_version."
 anvil_ok "Verified backup: $backup_dir"
 if [[ "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("added",False))' "$path_result")" == True ]]; then
   anvil_log "Added $ANVIL_INSTALL_BIN to the selected shell startup file; open a new shell to refresh PATH."

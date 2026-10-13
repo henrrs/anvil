@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small standard-library config helper for Anvil's OpenCode lifecycle."""
+"""Build and audit Anvil's native OpenCode 2 configuration."""
 
 from __future__ import annotations
 
@@ -11,6 +11,18 @@ import sys
 import tomllib
 from pathlib import Path
 from typing import Any
+
+
+SKILLS = {
+    "anvil-memory", "anvil-spark-performance", "anvil-delta-lake",
+    "anvil-databricks", "anvil-data-ingestion",
+}
+COMMANDS = {"remember", "recall", "distill"}
+BUILTINS = {"build", "plan", "general", "explore"}
+PROTECTED_SHELL = (
+    "git reset --hard*", "git clean -f*", "git checkout -- *", "git restore --worktree*",
+    "git push --force*", "git push -f*", "git branch -D*", "git stash drop*", "git stash clear*",
+)
 
 
 def parse_jsonc(text: str, source: str = "<input>") -> Any:
@@ -52,8 +64,6 @@ def parse_jsonc(text: str, source: str = "<input>") -> Any:
         out.append(ch)
         i += 1
     cleaned = "".join(out)
-
-    # Remove commas immediately before a closing bracket, outside strings.
     out.clear()
     i = 0
     in_string = False
@@ -87,47 +97,131 @@ def parse_jsonc(text: str, source: str = "<input>") -> Any:
     return json.loads("".join(out))
 
 
-def old_provider(config_dir: Path) -> dict[str, Any]:
-    provider: dict[str, Any] = {}
+def _read_config(path: Path) -> dict[str, Any]:
+    try:
+        value = parse_jsonc(path.read_text(encoding="utf-8"), str(path))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"WARN  Could not read prior provider configuration from {path}: {exc}", file=sys.stderr)
+        return {}
+
+
+def _move_model(raw: Any) -> Any:
+    if not isinstance(raw, dict):
+        return raw
+    model = dict(raw)
+    if "id" in model and "modelID" not in model:
+        model["modelID"] = model.pop("id")
+    if "options" in model:
+        settings = model.pop("options")
+        if isinstance(settings, dict):
+            model["settings"] = {**settings, **(model.get("settings") if isinstance(model.get("settings"), dict) else {})}
+    if model.pop("status", None) == "deprecated":
+        model["disabled"] = True
+    if "tool_call" in model:
+        capabilities = model.setdefault("capabilities", {})
+        if isinstance(capabilities, dict):
+            capabilities.setdefault("tools", bool(model.pop("tool_call")))
+    variants = model.get("variants")
+    if isinstance(variants, dict):
+        model["variants"] = [{"id": name, "settings": value if isinstance(value, dict) else {}} for name, value in variants.items()]
+    return model
+
+
+def _move_provider(raw: Any) -> Any:
+    if not isinstance(raw, dict):
+        return raw
+    provider = dict(raw)
+    result: dict[str, Any] = {}
+    for key in ("name", "env", "npm", "package", "headers", "body", "models", "options", "settings", "compatibility"):
+        if key in provider:
+            result[key] = provider[key]
+    package = result.pop("npm", None)
+    if package is not None and "package" not in result:
+        if isinstance(package, str) and package.startswith("@ai-sdk/"):
+            package = "aisdk:" + package
+        result["package"] = package
+    settings = result.pop("options", {})
+    settings = settings if isinstance(settings, dict) else {}
+    settings = {**settings, **(result.get("settings") if isinstance(result.get("settings"), dict) else {})}
+    if "api" in provider:
+        settings.setdefault("baseURL", provider["api"])
+    if "headers" in settings and "headers" not in result:
+        result["headers"] = settings.pop("headers")
+    if "body" in settings and "body" not in result:
+        result["body"] = settings.pop("body")
+    compatibility = result.get("compatibility")
+    if settings.pop("setCacheKey", None) is True:
+        compatibility = dict(compatibility) if isinstance(compatibility, dict) else {}
+        compatibility["supportsPromptCacheKey"] = True
+        result["compatibility"] = compatibility
+    if settings:
+        result["settings"] = settings
+    if isinstance(result.get("models"), dict):
+        result["models"] = {model_id: _move_model(model) for model_id, model in result["models"].items()}
+    if "api" in provider and "settings" not in result:
+        result["settings"] = {"baseURL": provider["api"]}
+    # V1 custom provider adapters sometimes use unstandardized model options.
+    # Preserve unknown values under settings so supported provider packages can still consume them.
+    known = {"name", "env", "npm", "package", "api", "options", "settings", "headers", "body", "models", "compatibility", "id", "whitelist", "blacklist"}
+    extra = {key: value for key, value in provider.items() if key not in known}
+    if extra:
+        target = result.setdefault("settings", {})
+        if isinstance(target, dict):
+            target.update(extra)
+    return result
+
+
+def old_providers(config_dir: Path) -> dict[str, Any]:
+    providers: dict[str, Any] = {}
     for name in ("config.json", "opencode.json", "opencode.jsonc"):
         path = config_dir / name
         if not path.is_file():
             continue
-        try:
-            data = parse_jsonc(path.read_text(encoding="utf-8"), str(path))
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            print(f"WARN  Could not read prior provider configuration from {path}: {exc}", file=sys.stderr)
-            continue
-        if isinstance(data, dict) and isinstance(data.get("provider"), dict):
-            provider.update(data["provider"])
-
+        data = _read_config(path)
+        if isinstance(data.get("providers"), dict):
+            providers.update(data["providers"])
+        if isinstance(data.get("provider"), dict):
+            providers.update({key: _move_provider(value) for key, value in data["provider"].items()})
     legacy = config_dir / "config"
     if legacy.is_file():
         try:
             data = tomllib.loads(legacy.read_text(encoding="utf-8"))
+            if isinstance(data.get("providers"), dict):
+                providers.update(data["providers"])
             if isinstance(data.get("provider"), dict):
-                provider.update(data["provider"])
+                providers.update({key: _move_provider(value) for key, value in data["provider"].items()})
         except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
             print(f"WARN  Could not read prior provider configuration from {legacy}: {exc}", file=sys.stderr)
-    return provider
+    return providers
 
 
-def build(source: Path, destination: Path, prior_config_dir: Path | None) -> None:
-    data = parse_jsonc(source.read_text(encoding="utf-8"), str(source))
+def build(source: Path, destination: Path, prior_config_dir: Path | None, preserve_cli: bool) -> None:
+    data = parse_jsonc((source / "opencode.jsonc").read_text(encoding="utf-8"), str(source / "opencode.jsonc"))
     if not isinstance(data, dict):
         raise ValueError("Anvil OpenCode config must be a JSON object")
+    knowledge = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "anvil" / "knowledge"
+    data["references"]["anvil-knowledge"]["path"] = str(knowledge)
     if prior_config_dir is not None:
-        provider = old_provider(prior_config_dir)
-        if provider:
-            data["provider"] = provider
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(destination.name + f".tmp-{os.getpid()}")
+        providers = old_providers(prior_config_dir)
+        if providers:
+            data["providers"] = providers
+    destination.mkdir(parents=True, exist_ok=True)
+    if preserve_cli and prior_config_dir is not None:
+        for name in ("cli.json", "tui.json", "tui.jsonc"):
+            path = prior_config_dir / name
+            if path.is_file():
+                (destination / name).write_bytes(path.read_bytes())
+                os.chmod(destination / name, 0o600)
+    output = destination / "opencode.jsonc"
+    temporary = output.with_name(output.name + f".tmp-{os.getpid()}")
     temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     os.chmod(temporary, 0o600)
-    os.replace(temporary, destination)
+    os.replace(temporary, output)
 
 
-def audit(path: Path) -> list[str]:
+def _audit_v1(path: Path) -> list[str]:
+    """Retain the precise V1 baseline check for upgrade detection and regression fixtures."""
     errors: list[str] = []
     try:
         data = parse_jsonc(path.read_text(encoding="utf-8"), str(path))
@@ -141,76 +235,102 @@ def audit(path: Path) -> list[str]:
     if not isinstance(agents, dict):
         errors.append("agent must be an object")
         agents = {}
-    unexpected_agents = set(agents) - {"build", "plan", "general", "explore", "anvil"}
-    if unexpected_agents:
-        errors.append(f"unexpected global agent definitions: {', '.join(sorted(unexpected_agents))}")
+    if set(agents) != {"build", "plan", "general", "explore", "anvil"}:
+        errors.append("unexpected global agent definitions")
     if data.get("default_agent") != "anvil":
         errors.append("default_agent is not anvil")
-    for name in ("build", "plan", "general", "explore"):
+    for name in BUILTINS:
         if not isinstance(agents.get(name), dict) or agents[name].get("disable") is not True:
             errors.append(f"built-in agent {name} is not disabled")
     anvil = agents.get("anvil", {})
     if not isinstance(anvil, dict) or anvil.get("mode") != "primary":
         errors.append("anvil primary agent is missing")
         anvil = {}
-    for key in ("model", "variant", "prompt"):
-        if key in anvil:
-            errors.append(f"anvil unexpectedly pins {key} or replaces the provider prompt")
+    if any(key in anvil for key in ("model", "variant", "prompt")):
+        errors.append("anvil unexpectedly pins a model or replaces the provider prompt")
     permission = anvil.get("permission", {})
-    if not isinstance(permission, dict):
-        errors.append("anvil permission must be an object")
+    if not isinstance(permission, dict) or permission.get("*") != "deny" or permission.get("task") != "deny":
+        errors.append("V1 permissions do not deny arbitrary tools and subagents")
         permission = {}
-    if permission.get("*") != "deny" or permission.get("task") != "deny":
-        errors.append("anvil does not default-deny tools and subagents")
-    expected_permission_keys = {
-        "*", "read", "glob", "grep", "list", "edit", "bash", "webfetch", "websearch",
-        "lsp", "todowrite", "question", "doom_loop", "task", "skill",
-    }
-    unexpected_permission_keys = set(permission) - expected_permission_keys
-    if unexpected_permission_keys:
-        errors.append(f"unexpected Anvil tool permissions: {', '.join(sorted(unexpected_permission_keys))}")
-    read_rules = permission.get("read", {})
-    if not isinstance(read_rules, dict) or read_rules.get("*") != "allow" or read_rules.get("*.env") != "ask" or read_rules.get("*.env.*") != "ask" or read_rules.get("*.env.example") != "allow":
-        errors.append("Anvil does not preserve OpenCode's sensitive .env read prompts")
-    bash_rules = permission.get("bash", {})
-    protected_commands = (
-        "git reset --hard*", "git clean -f*", "git checkout -- *", "git restore --worktree*",
-        "git push --force*", "git push -f*", "git branch -D*", "git stash drop*", "git stash clear*",
-    )
-    if not isinstance(bash_rules, dict) or bash_rules.get("*") != "allow" or any(bash_rules.get(pattern) != "ask" for pattern in protected_commands):
-        errors.append("Anvil does not ask before destructive Git commands")
-    for tool in ("glob", "grep", "list", "edit", "webfetch", "websearch", "lsp", "todowrite", "question"):
-        if permission.get(tool) != "allow":
-            errors.append(f"Anvil core tool {tool} is not allowed")
-    if permission.get("doom_loop") != "ask":
-        errors.append("Anvil does not ask before continuing a detected tool loop")
-    skill_rules = permission.get("skill", {})
-    if not isinstance(skill_rules, dict) or skill_rules.get("*") != "deny":
-        errors.append("anvil does not deny arbitrary skills")
-    allowed_skills = {
-        key for key, value in skill_rules.items() if key != "*" and value == "allow"
-    } if isinstance(skill_rules, dict) else set()
-    expected = {
-        "anvil-memory", "anvil-spark-performance", "anvil-delta-lake",
-        "anvil-databricks", "anvil-data-ingestion",
-    }
-    if allowed_skills != expected:
-        errors.append("Anvil skill allowlist does not match the five shipped skills")
-    mcp = data.get("mcp", {})
-    if not isinstance(mcp, dict) or mcp:
-        errors.append("managed global MCP config is not empty")
-    plugins = data.get("plugin", [])
-    if not isinstance(plugins, list) or plugins:
-        errors.append("managed global plugins are configured")
+    read = permission.get("read", {})
+    if not isinstance(read, dict) or read.get("*") != "allow" or read.get("*.env") != "ask" or read.get("*.env.*") != "ask" or read.get("*.env.example") != "allow":
+        errors.append("V1 sensitive .env read prompts are missing")
+    shell = permission.get("bash", {})
+    if not isinstance(shell, dict) or shell.get("*") != "allow" or any(shell.get(pattern) != "ask" for pattern in PROTECTED_SHELL):
+        errors.append("V1 destructive Git shell prompts are missing")
+    skill = permission.get("skill", {})
+    if not isinstance(skill, dict) or skill.get("*") != "deny" or {k for k, v in skill.items() if k != "*" and v == "allow"} != SKILLS:
+        errors.append("V1 skill allowlist does not match the shipped set")
+    if data.get("mcp") not in ({}, None):
+        errors.append("V1 global MCP config is not empty")
+    if data.get("plugin") not in ([], None):
+        errors.append("V1 managed global plugins are not empty")
     compact = data.get("compaction", {})
     if not isinstance(compact, dict) or compact.get("auto") is not True:
-        errors.append("native automatic compaction is not enabled")
+        errors.append("V1 automatic compaction is not enabled")
+    return errors
+
+
+def audit(path: Path) -> list[str]:
+    errors: list[str] = []
+    try:
+        data = parse_jsonc(path.read_text(encoding="utf-8"), str(path))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return [f"config is unreadable or invalid JSONC: {exc}"]
+    if not isinstance(data, dict):
+        return ["config root must be an object"]
+    if any(key in data for key in ("model", "small_model", "agent", "permission", "plugin")):
+        errors.append("legacy V1 config keys remain in the native V2 configuration")
+    agents = data.get("agents", {})
+    if not isinstance(agents, dict):
+        errors.append("agents must be an object")
+        agents = {}
+    if set(agents) != BUILTINS | {"anvil"}:
+        errors.append("agent definitions do not match the native Anvil set")
+    if data.get("default_agent") != "anvil":
+        errors.append("default_agent is not anvil")
+    for name in BUILTINS:
+        if not isinstance(agents.get(name), dict) or agents[name].get("disabled") is not True:
+            errors.append(f"built-in agent {name} is not disabled")
+    anvil = agents.get("anvil", {})
+    if not isinstance(anvil, dict) or anvil.get("mode") != "primary":
+        errors.append("anvil primary agent is missing")
+        anvil = {}
+    if any(key in anvil for key in ("model", "system", "prompt", "variant")):
+        errors.append("Anvil pins a model or replaces the native system prompt")
+    permissions = anvil.get("permissions", [])
+    if not isinstance(permissions, list):
+        errors.append("Anvil permissions must be an ordered array")
+        permissions = []
+    rules = {(rule.get("action"), rule.get("resource")): rule.get("effect") for rule in permissions if isinstance(rule, dict)}
+    if rules.get(("*", "*")) != "deny" or rules.get(("subagent", "*")) != "deny":
+        errors.append("Anvil does not deny arbitrary actions and subagents")
+    if rules.get(("read", "*.env")) != "ask" or rules.get(("read", "*.env.*")) != "ask" or rules.get(("read", "*.env.example")) != "allow":
+        errors.append("Anvil does not preserve sensitive .env read prompts")
+    if rules.get(("shell", "*")) != "allow" or any(rules.get(("shell", pattern)) != "ask" for pattern in PROTECTED_SHELL):
+        errors.append("Anvil does not ask before destructive Git shell commands")
+    for action in ("read", "glob", "grep", "edit", "shell", "webfetch", "websearch", "question", "anvil_memory_search"):
+        if rules.get((action, "*")) != "allow":
+            errors.append(f"Anvil core action {action} is not allowed")
+    allowed_skills = {resource for (action, resource), effect in rules.items() if action == "skill" and resource != "*" and effect == "allow"}
+    if rules.get(("skill", "*")) != "deny" or allowed_skills != SKILLS:
+        errors.append("Anvil skill allowlist does not match the five shipped skills")
+    mcp = data.get("mcp", {})
+    if not isinstance(mcp, dict) or mcp.get("servers", {}) != {} or set(mcp) - {"servers"}:
+        errors.append("managed global MCP server config is not empty")
+    if data.get("plugins") != ["./plugins/anvil-core"]:
+        errors.append("anvil-core is not the only managed plugin")
+    compaction = data.get("compaction", {})
+    if not isinstance(compaction, dict) or compaction.get("auto") is not True or compaction.get("keep", {}).get("tokens") != 8000 or compaction.get("buffer") != 20000 or set(compaction) != {"auto", "keep", "buffer"}:
+        errors.append("native V2 compaction settings are missing or contain legacy fields")
     output = data.get("tool_output", {})
     if not isinstance(output, dict) or not output.get("max_lines") or not output.get("max_bytes"):
         errors.append("bounded tool output is not configured")
-    watcher = data.get("watcher", {})
-    if not isinstance(watcher, dict) or not watcher.get("ignore"):
+    if not isinstance(data.get("watcher", {}).get("ignore"), list) or not data["watcher"]["ignore"]:
         errors.append("watcher ignore patterns are missing")
+    reference = data.get("references", {}).get("anvil-knowledge", {})
+    if not isinstance(reference, dict) or not reference.get("path") or reference.get("path") == "__ANVIL_KNOWLEDGE_PATH__":
+        errors.append("native anvil-knowledge reference is missing its absolute path")
     return errors
 
 
@@ -221,18 +341,21 @@ def main() -> int:
     p_build.add_argument("--source", type=Path, required=True)
     p_build.add_argument("--destination", type=Path, required=True)
     p_build.add_argument("--prior-config-dir", type=Path)
+    p_build.add_argument("--preserve-cli", action="store_true")
     p_audit = sub.add_parser("audit")
     p_audit.add_argument("config", type=Path)
+    p_v1 = sub.add_parser("audit-v1")
+    p_v1.add_argument("config", type=Path)
     args = parser.parse_args()
     try:
         if args.action == "build":
-            build(args.source, args.destination, args.prior_config_dir)
+            build(args.source, args.destination, args.prior_config_dir, args.preserve_cli)
             return 0
-        errors = audit(args.config)
+        errors = _audit_v1(args.config) if args.action == "audit-v1" else audit(args.config)
         for error in errors:
             print(f"ERROR {error}")
         if not errors:
-            print("OK config meets the Anvil baseline")
+            print("OK config meets the native OpenCode 2 Anvil baseline")
         return 1 if errors else 0
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)

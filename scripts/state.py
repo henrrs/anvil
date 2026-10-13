@@ -47,6 +47,11 @@ def create_manifest(args: argparse.Namespace) -> None:
             "config_present": args.config_present == "yes",
             "installer_dir": args.installer_dir,
             "installer_present": args.installer_present == "yes",
+            "data_dir": args.data_dir or None,
+            "data_present": args.data_present == "yes",
+            "state_dir": args.state_dir or None,
+            "state_present": args.state_present == "yes",
+            "anvil_version": args.previous_anvil_version or None,
             "executable_path": args.executable_path or None,
             "executable_resolved": args.executable_resolved or None,
             "executable_version": args.executable_version or None,
@@ -56,11 +61,13 @@ def create_manifest(args: argparse.Namespace) -> None:
                 "added": args.path_added == "yes",
                 "file_preexisted": args.path_file_preexisted == "yes",
             },
-            "authentication_and_session_state": "preserved in place; not copied or rewritten",
+            "authentication_and_session_state": "opaque archive; no schema reads or writes",
         },
         "artifacts": {
             "config_archive": "config.tar.gz" if (root / "config.tar.gz").is_file() else None,
             "installer_archive": "opencode-root.tar.gz" if (root / "opencode-root.tar.gz").is_file() else None,
+            "data_archive": "opencode-data.tar.gz" if (root / "opencode-data.tar.gz").is_file() else None,
+            "state_archive": "opencode-state.tar.gz" if (root / "opencode-state.tar.gz").is_file() else None,
             "inspect": "inspect.txt",
             "binary_copy": "previous-opencode-binary" if (root / "previous-opencode-binary").is_file() else None,
             "previous_installation": "previous-installation.json" if (root / "previous-installation.json").is_file() else None,
@@ -120,6 +127,11 @@ def main() -> int:
     p_create.add_argument("--config-present", choices=("yes", "no"), required=True)
     p_create.add_argument("--installer-dir", required=True)
     p_create.add_argument("--installer-present", choices=("yes", "no"), required=True)
+    p_create.add_argument("--data-dir", default="")
+    p_create.add_argument("--data-present", choices=("yes", "no"), default="no")
+    p_create.add_argument("--state-dir", default="")
+    p_create.add_argument("--state-present", choices=("yes", "no"), default="no")
+    p_create.add_argument("--previous-anvil-version", default="")
     p_create.add_argument("--candidate-version", required=True)
     p_create.add_argument("--executable-path", default="")
     p_create.add_argument("--executable-resolved", default="")

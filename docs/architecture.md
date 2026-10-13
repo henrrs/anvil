@@ -2,38 +2,44 @@
 
 ## Responsibility boundary
 
-Anvil controls the user/global OpenCode harness: global `AGENTS.md`, the `anvil` agent definition, the explicit skill allowlist, the two memory commands, global context limits, backups, and a file-based memory store. OpenCode controls providers, authentication, model selection/switching, sessions, filesystem and shell tools, native compaction, and runtime execution.
+OpenCode owns providers, model selection, authentication, sessions, TUI, filesystem and shell execution, and native compaction. Anvil owns the user-global harness, lifecycle safety, allowlisted skills, explicit Markdown memory, the source registry, and its narrow read-only memory search plugin.
 
-Anvil installs the neutral harness into OpenCode's global config directory (`$XDG_CONFIG_HOME/opencode`, default `~/.config/opencode`). It does not change repository-owned `AGENTS.md`, `.opencode`, `opencode.json(c)`, `.claude`, or `.agents` assets. Project configuration has higher precedence and can add capabilities; inspect and doctor report this state rather than deleting team files.
+The managed config lives at `$XDG_CONFIG_HOME/opencode` (default `~/.config/opencode`). OpenCode data lives under `$XDG_DATA_HOME/opencode`; state lives under `$XDG_STATE_HOME/opencode`. Anvil's memory, knowledge, source registry, installation metadata, and backups are separate under `$XDG_DATA_HOME/anvil`. `anvil-knowledge` is a native OpenCode Reference to `$XDG_DATA_HOME/anvil/knowledge`; it is not the memory store.
 
-## Installation lifecycle
+Project, system-managed, and organization settings are outside Anvil's global ownership boundary. They may affect effective behavior; inspect and doctor report visible project overrides without deleting user or team files.
 
-`make reforge` resolves the latest non-prerelease GitHub release, records its exact version, selects the platform asset, and checks its SHA-256 against the official release API. It downloads that exact version into a temporary staging directory, validates the binary version, writes Anvil into a separate temporary HOME, and asks that candidate OpenCode to resolve the config, list skills, and list agents. Only after those checks pass does it create and verify a protected backup of the active global config and `~/.opencode` installer tree. After one confirmation, it replaces the global config and installs the already-tested binary at OpenCode's official user installer location. A post-reset error invokes rollback.
+## Agent and policy
 
-The old config archive includes provider definitions, global harness files, CLI settings, and any config-local MCP/plugin data. Anvil constructs a fresh config tree. It carries forward only OpenCode `provider` definitions, because those describe how OpenCode exposes user-selected providers/models; it drops the old global `model` and `small_model` defaults. It does not carry forward old agent, skill, command, plugin, MCP, or instruction files.
+OpenCode 2 native configuration defines one model-neutral `anvil` primary agent and disables the built-in `build`, `plan`, `general`, and `explore` user-facing agents. The model is not pinned. Ordered `{action, resource, effect}` permissions begin with deny-all and explicitly allow normal coding tools, prompt for sensitive `.env` reads and destructive Git operations, allowlist the five Anvil skills and the single memory search tool, and deny subagents. Global MCP servers are empty by default.
 
-## Agent and prompt
-
-The global config disables OpenCode's built-in `build`, `plan`, `general`, and `explore` entries using the current `disable` field, and names `anvil` as the default `primary` agent. The Anvil agent has no `model`, `variant`, or custom `prompt`. This leaves the provider/model-native system prompt intact; the compact global `AGENTS.md` adds behavior without replacing that base prompt.
-
-Anvil's tool policy is default-deny. It allows the normal read, search, edit, shell, web, language-server, and interaction tools; it denies `task` and arbitrary skills, and allows only the five Anvil skill names. It retains OpenCode's `.env` read prompts and asks before destructive Git commands. OpenCode's external-directory safeguards remain in place. Hidden maintenance agents such as compaction, title, and summary are not disabled.
+The local `anvil-core` plugin uses the official OpenCode 2 plugin API to register only `anvil_memory_search`. Search is lexical and bounded: it returns a small number of short excerpts and never writes memory. The plugin does not add context hooks, prompt mutation, model routing, retries, or custom compaction.
 
 ## Skills and commands
 
-Skills use OpenCode's native lazy skill discovery under the global `skills/` directory. Their descriptions identify when to load them, while their concise bodies outline the evidence and reasoning workflow. The global prompt does not duplicate domain knowledge.
+Five native lazy skills cover memory, Spark performance, Delta Lake, Databricks, and data ingestion. Native Markdown commands provide `/remember`, `/recall`, and `/distill`, all assigned to the Anvil agent. Persistent memory writes require explicit `/remember`, `/distill`, or direct user intent.
 
-`remember.md` and `recall.md` are native OpenCode command templates assigned to Anvil. They call a small standard-library memory helper copied into the global config tree. A memory write is available only through an explicit command or direct user request; reads are narrow and on demand.
+## Upgrade lifecycle
 
-## Memory
+`make upgrade` is the normal V1-to-V2 and V2-update path. It first checks the managed paths and running OpenCode processes, detects a supported Anvil V1 or V2 config/runtime pair, resolves one exact stable OpenCode 2 candidate, verifies and stages its platform artifact, generates the V2 config, and rehearses migration under a private temporary HOME/XDG tree. The rehearsal copies config, OpenCode data and state, and Anvil Markdown memory. It starts the candidate against copied data with native stats, validates the actual V2 CLI registration of the agent, commands, skills, plugin, and Reference, then runs doctor.
 
-Memory is Markdown plus YAML frontmatter under `$XDG_DATA_HOME/anvil/memory/`, default `~/.local/share/anvil/memory/`. There is no database or index service. The helper searches with ripgrep when available and scores a small candidate set using local text. Writes validate metadata, reject likely duplicates, and atomically replace one file. Memory and OpenCode data are separate: rollback may leave inert Anvil memory in place.
+After rehearsal, Anvil creates and verifies a checksummed backup of global config, installer runtime, OpenCode data/state, prior installation metadata, and inspection output. It installs the same staged executable and config, records release/migration metadata, and runs postflight doctor. A failure after live mutation triggers rollback from that backup.
 
-## Reset, backup, and rollback boundary
+`make reforge` is a separate clean installation/rebuild path. It remains suitable for first install or explicit reset. It does not serve as the V1-to-V2 migration mechanism.
 
-Backups live in `$XDG_DATA_HOME/anvil/backups/<timestamp>/`. They contain the user/global config archive, the OpenCode installer directory archive, a previous executable copy where available, a read-only inspection, path-update metadata, a manifest, and checksums. Directory archives preserve symlinks without following them; rollback validates members before restoring them.
+## Backup and rollback boundary
 
-Provider authentication, OpenCode databases, and session history stay in place. Anvil does not read secrets from those stores or mutate undocumented SQLite schemas. The backup manifest records state paths and whether known files exist, not their contents. Rollback restores global config and the prior installer tree; memory and backups remain.
+Backups are private, timestamped directories under `$XDG_DATA_HOME/anvil/backups/`. Checksums cover each archived artifact. OpenCode databases and authentication/session state are copied and restored as opaque files; Anvil does not read or edit undocumented database schemas. `make rollback` restores the exact saved config, installer runtime, data, and state snapshot instead of attempting a database downgrade.
 
-## Project and organization overrides
+Anvil memory is outside the OpenCode config and runtime snapshot. Before rollback, current Markdown memory is archived separately under `$XDG_DATA_HOME/anvil/memory-backups/`, then left at its normal path. Source registry and knowledge are also Anvil-owned and remain in the Anvil data root.
 
-The global config cannot remove higher-precedence project config, managed system config, or organization remote config. Reforge only resets the user/global boundary. Doctor reports project files and environment variables that override normal config. It reports the managed global file's MCP count; remote and system policy may add settings outside that file and should be inspected with OpenCode's resolved-config command where the account permits it.
+## Memory and source registry
+
+Markdown is the source of truth under `$XDG_DATA_HOME/anvil/memory/`. V1 entries remain readable without mass migration. Optional V2 aliases, status, evidence, sections, line ranges, repository and content-hash provenance are handled when present. Lexical search normalizes Unicode accents and falls back to the standard library when `rg` is unavailable.
+
+The file-based source registry lives at `$XDG_DATA_HOME/anvil/sources/`, one atomic JSON record per explicitly distilled local source. It records the source identity, hash, available Git metadata, dates, and linked memory IDs. `/distill` first inspects and plans each named source. Unchanged registered sources can be skipped; changed sources are surfaced for review rather than blindly duplicated. Knowledge files remain untouched.
+
+Distillation is a model-guided semantic workflow defined in `config/commands/distill.md`, not an automatic parser or chunker. It asks the Anvil agent to assess source claims, check relevant active code paths and tests where requested, distinguish normative requirements from implementation behavior, preserve conflicts and historical status, deduplicate, and record honest provenance. The deterministic registry supplies hash-based idempotency; tests do not claim to prove an LLM's semantic quality.
+
+## Native runtime controls
+
+V2 uses OpenCode's native References, ordered permissions, compaction controls, bounded tool output, and structured `stats --json`. `make stats` formats native statistics without maintaining a separate telemetry store. The installation record stores Anvil/OpenCode versions, release artifact integrity, previous versions, migration status, and backup path.

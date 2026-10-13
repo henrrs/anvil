@@ -1,0 +1,9 @@
+{
+  "case-a": {"status": "corroborated", "sources": ["current.md", "src/ingestion.py", "tests/test_ingestion.py"]},
+  "case-b": {"status": "conflicted", "normative": "append-only", "implementation": "SCD2", "active": ["src/history_store.py", "tests/test_history_store.py"]},
+  "case-c": {"status": "corroborated", "implementation": "append-only", "ignore_unreferenced": "old/scd2_legacy.py"},
+  "case-d": {"status": "conflicted", "normative": "never store raw credentials", "implementation": "stores raw token", "active": ["src/token_cache.py", "tests/test_token_cache.py"]},
+  "case-e": {"status": "historical", "date": "2023"},
+  "case-f": {"status": "conflicted", "documented": 8, "implemented": 16, "active": ["config/job.json", "src/pipeline.py", "tests/test_pipeline.py"]},
+  "case-g": {"status": "image-not-inspected", "path": "images/pipeline-topology.png"}
+}

@@ -6,6 +6,12 @@ anvil_backup_create() {
   local candidate_version="$1" path_plan_json="$2"
   local backup_dir stamp suffix executable executable_resolved executable_version
   local config_present=no installer_present=no path_file path_line path_added=no path_file_preexisted=no
+  local data_dir="$ANVIL_DATA_HOME/opencode" state_dir="$ANVIL_STATE_DIR" data_present=no state_present=no previous_anvil_version=""
+
+  if [[ "${ANVIL_TEST_MODE:-0}" == 1 && "${ANVIL_TEST_FAIL_BACKUP:-0}" == 1 ]]; then
+    anvil_error 'Injected backup creation failure before archive creation.'
+    return 1
+  fi
 
   umask 077
   mkdir -p -- "$ANVIL_BACKUP_ROOT"
@@ -27,6 +33,14 @@ anvil_backup_create() {
     installer_present=yes
     python3 "$ANVIL_ROOT/scripts/archive.py" create "$ANVIL_INSTALL_ROOT" "$backup_dir/opencode-root.tar.gz" "$(basename -- "$ANVIL_INSTALL_ROOT")"
   fi
+  if [[ -e "$data_dir" || -L "$data_dir" ]]; then
+    data_present=yes
+    python3 "$ANVIL_ROOT/scripts/archive.py" create "$data_dir" "$backup_dir/opencode-data.tar.gz" "$(basename -- "$data_dir")"
+  fi
+  if [[ -e "$state_dir" || -L "$state_dir" ]]; then
+    state_present=yes
+    python3 "$ANVIL_ROOT/scripts/archive.py" create "$state_dir" "$backup_dir/opencode-state.tar.gz" "$(basename -- "$state_dir")"
+  fi
 
   executable="$(type -P opencode 2>/dev/null || true)"
   if [[ -z "$executable" && -x "$ANVIL_INSTALLED_BINARY" ]]; then
@@ -46,6 +60,18 @@ anvil_backup_create() {
   if [[ -f "$ANVIL_DATA_DIR/installation.json" ]]; then
     cp -- "$ANVIL_DATA_DIR/installation.json" "$backup_dir/previous-installation.json"
     chmod 600 -- "$backup_dir/previous-installation.json"
+    previous_anvil_version="$(python3 - "$backup_dir/previous-installation.json" <<'PY'
+import json,sys
+try:
+    value=json.load(open(sys.argv[1],encoding="utf-8"))
+    print(value.get("anvil_version") or value.get("previous_anvil_version") or "")
+except (OSError,ValueError):
+    print("")
+PY
+)"
+  fi
+  if [[ -n "${ANVIL_PREVIOUS_ANVIL_VERSION:-}" ]]; then
+    previous_anvil_version="$ANVIL_PREVIOUS_ANVIL_VERSION"
   fi
 
   bash "$ANVIL_ROOT/scripts/inspect.sh" > "$backup_dir/inspect.txt"
@@ -63,6 +89,9 @@ anvil_backup_create() {
   python3 "$ANVIL_ROOT/scripts/state.py" create "$backup_dir" \
     --config-dir "$ANVIL_CONFIG_DIR" --config-present "$config_present" \
     --installer-dir "$ANVIL_INSTALL_ROOT" --installer-present "$installer_present" \
+    --data-dir "$data_dir" --data-present "$data_present" \
+    --state-dir "$state_dir" --state-present "$state_present" \
+    --previous-anvil-version "$previous_anvil_version" \
     --candidate-version "$candidate_version" \
     --executable-path "$executable" --executable-resolved "$executable_resolved" \
     --executable-version "$executable_version" \

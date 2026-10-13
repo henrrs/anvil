@@ -1,25 +1,25 @@
 # Anvil
 
-> Anvil — A lean, model-agnostic OpenCode harness designed to maximize reliable task completion while minimizing unnecessary context and token usage.
+> **Anvil — A lean, model-agnostic OpenCode harness designed to maximize reliable task completion while minimizing unnecessary context and token usage.**
 >
 > **Better harness. Better execution.**
 
 ```bash
 make inspect
 make test
-make reforge
+make upgrade
 make doctor
 ```
 
-Restore the most recent pre-reforge setup with `make rollback`.
+Use `make reforge` for a clean installation or rebuild. Use `make rollback` to restore the latest verified runtime snapshot. `make stats` displays OpenCode's native usage report.
 
-Anvil is a model-agnostic harness for OpenCode. OpenCode remains responsible for providers, authentication, models, sessions, native tools, file access, shell execution, and compaction. Anvil standardizes the global instructions, one primary coding agent, five lazy skills, two memory commands, and a small file-based memory store.
+Anvil is a lean, model-agnostic harness and lifecycle layer for OpenCode. OpenCode remains responsible for models, providers, authentication, sessions, tools, and execution. Anvil supplies a focused behavioral environment: compact instructions, one primary agent, a small set of skills, explicit file memory, evidence-driven workflows, and safe upgrade and recovery operations.
 
 ## Why Anvil?
 
-An anvil is the steady base on which metal is shaped, refined, and made useful. It is not the material being worked, and it does not replace the craft or energy that shapes it. It provides a reliable surface for that work.
+Anvil means a blacksmith's anvil: the stable base on which material is shaped, refined, and made useful. The anvil is not the material and does not supply all the energy; it provides a dependable surface for the work.
 
-Anvil plays the same role for language models. It does not create or select a model. It gives the model a disciplined environment: focused context, relevant skills and memory, useful tools, clear execution rules, and verification. The model can change; the harness remains the consistent foundation.
+Anvil plays that role for language models. It does not create or route models. It gives the selected model disciplined context, useful skills and memory, clear execution rules, and verification. Models may change; the harness remains the foundation.
 
 ```text
 Luna / Terra / Sol / Astra / Sonnet / other models
@@ -32,54 +32,40 @@ Luna / Terra / Sol / Astra / Sonnet / other models
               reliable, verified execution
 ```
 
-## Why `make reforge`?
+## Install and upgrade
 
-To forge is to shape material into something useful; to reforge is to shape it again. `make reforge` rebuilds the global OpenCode harness from a clean Anvil baseline. It validates the selected OpenCode release and creates a verified backup before applying that setup.
+Prerequisites: Linux or macOS, Bash, Python 3.11+, `tar`, and internet access to the official npm registry. Anvil resolves the current stable OpenCode 2 release when needed, stages one exact candidate, and verifies the published SHA-512 integrity metadata. Windows users can run Anvil under WSL.
 
-## Install
+`make inspect` reads the current OpenCode setup without changing it. `make test` checks the V2 config, memory behavior, upgrade lifecycle, rollback and failure recovery in isolated temporary environments, and smoke-tests the exact official stable candidate.
 
-Prerequisites: Linux or macOS, Bash, Python 3.11+, `tar`, and internet access for the official OpenCode release check and download. On macOS, `unzip` is also needed for the official release archive. On Windows, run Anvil under WSL.
+`make upgrade` is the normal path for an existing Anvil V1 installation. It rehearses migration using copied config, OpenCode data/state, and Anvil memory under a temporary HOME/XDG tree. Only after rehearsal succeeds does it create and verify a complete backup, install that exact tested candidate, and run post-upgrade doctor. Failed postflight checks trigger automatic rollback.
 
-`make inspect` reads the active global and current project setup without changing it. `make test` downloads the current official stable OpenCode candidate, verifies the release checksum, tests it under an isolated HOME, and runs fixture backup/rollback/failure checks. It never uses the real OpenCode directories for test state.
+`make reforge` remains the clean install and rebuild path. It is also suitable for first installation or recovery from a corrupted managed setup. Anvil installs OpenCode under `~/.opencode/bin` and updates a supported shell startup file if necessary.
 
-`make reforge` stages and validates one exact OpenCode release before replacing the active global config. It creates a verified backup first, then asks once before the reset. For a confirmed automation run, set `ANVIL_YES=1`. The official user install location is `~/.opencode/bin`; if needed, Anvil adds that directory to the selected shell startup file so a new shell can find it.
+Backups live under `$XDG_DATA_HOME/anvil/backups/` (default `~/.local/share/anvil/backups/`). They use restrictive permissions and include checksums plus the prior config, installer runtime, OpenCode data and state, and install metadata. OpenCode databases are treated as opaque files; Anvil does not edit undocumented schemas. Backups may contain sensitive session or authentication state.
 
-Backups are stored at `~/.local/share/anvil/backups/<timestamp>/` (or under `$XDG_DATA_HOME/anvil/backups/`). Each contains a manifest, SHA-256 checksums, the old global config and installer directory, inspection output, and a copy of the previous executable when available. Backups can contain provider configuration and are restricted to the current user.
+## Memory and knowledge
 
-`make doctor` checks the installed Anvil baseline and the current workspace for project overrides. Exit codes are `0` healthy, `2` warning, and `1` broken. A warning means repository or environment configuration is active and may change the effective agent or capabilities.
+Anvil keeps Markdown memory under `$XDG_DATA_HOME/anvil/memory/`. Existing V1 entries remain readable without rewriting. Search is lexical, accent-insensitive, bounded, and can use aliases for multilingual retrieval. Memory is not a database, vector index, or automatic transcript store.
 
-## Rollback
+- `/remember` saves a specific fact or decision the user explicitly wants retained.
+- `/recall` searches existing entries and returns a small relevant set.
+- `/distill` turns explicitly named documents, pasted content, or evidence into a small set of reusable memories with provenance. It checks duplicates, preserves historical or conflicting claims, and detects unchanged sources so they are not reprocessed unnecessarily.
 
-`make rollback` verifies and restores the newest valid backup. It restores the global config and the previous `~/.opencode` installer directory, and removes only the PATH entry Anvil added. It does not delete backups. Anvil memory remains under `~/.local/share/anvil/memory/`; it is inert when the Anvil global harness is not active.
+Persistent writes require explicit `/remember`, `/distill`, or direct user intent. Knowledge documents remain the source material; memory contains compact derived claims. The `anvil-knowledge` OpenCode Reference points to the separate `$XDG_DATA_HOME/anvil/knowledge/` directory.
 
-Provider authentication and session databases remain in their OpenCode data/state locations throughout reforge and rollback. Anvil does not copy or mutate those databases. The old global CLI config is archived and removed from the active reset config; rollback restores it.
+Anvil's local `anvil-core` OpenCode 2 plugin exposes one bounded, read-only `anvil_memory_search` tool. It does not rewrite prompts, route models, or write memories.
 
-## Using memory
+## Models, agents, and skills
 
-Memory is human-readable Markdown under `$XDG_DATA_HOME/anvil/memory/`, organized into company, project, decision, and lesson folders. Retrieval is narrow text search. There is no database, embedding index, or automatic extraction.
+Anvil configures one model-neutral `anvil` primary agent. No model is pinned; select models through OpenCode as usual. The four built-in user-facing agents are disabled, subagents are denied, and no MCP servers are enabled by default. Five allowlisted skills cover memory, Spark performance, Delta Lake, Databricks, and data ingestion.
 
-Use `/remember` or explicitly ask OpenCode to remember, save, or store durable information. The command checks for duplicates, keeps the entry's provenance and confidence, and reports its file. Memory is never written just because a conversation contains something that seems important.
+## Recovery and status
 
-Use `/recall` followed by a few search terms. It returns only relevant entries and their provenance; current repository or official source evidence takes precedence over memory.
+`make rollback` restores the latest verified pre-upgrade/rebuild OpenCode config, executable, data, and state snapshot. Current Anvil Markdown memory is archived separately before rollback and remains portable. Rollback restores the original runtime snapshot rather than trying to downgrade a migrated database.
 
-## Skills and models
+`make doctor` checks the V2 config and agent policy, commands and skills, plugin files, memory, knowledge reference, source registry, migration metadata, and visible workspace overrides. It reports `HEALTHY`, `WARNING`, or `BROKEN`; exit codes are `0`, `2`, and `1` respectively. Workspace, system, or organization-managed configuration can still affect effective behavior.
 
-OpenCode discovers Anvil's five skills lazily: `anvil-memory`, `anvil-spark-performance`, `anvil-delta-lake`, `anvil-databricks`, and `anvil-data-ingestion`. Anvil denies arbitrary discovered skills and enables only these names. Skills route work to the evidence and reasoning that matter for that domain; they are not reference encyclopedias.
+## Version history
 
-The Anvil agent has no model or variant configured and adds no custom prompt that replaces the provider's native system prompt. Switch models through OpenCode as usual. Anvil does not route or select them.
-
-## What reforge changes
-
-Reforge replaces the user/global OpenCode config tree with the Anvil files. It removes old global agents, skills, plugins, commands, MCP definitions, CLI settings, and global rules from the active config. It selectively carries forward the old OpenCode `provider` definitions so custom provider/model availability is retained, while dropping old global model defaults. It does not merge old global harness files into Anvil.
-
-Reforge does not edit repository-owned `AGENTS.md`, `.opencode/`, `opencode.json(c)`, `.claude/`, or `.agents/` files. Project configuration has higher precedence than the global config. `make inspect` and `make doctor` report project rules, agents, skills, plugins, MCP servers, and config files. Managed system or organization-provided remote configuration may also override user settings; see [OpenCode compatibility](docs/opencode-compatibility.md).
-
-## Troubleshooting
-
-- If reforge stops before its confirmation, no global setup was changed. Check the candidate release download, checksum, or isolated OpenCode smoke-test output.
-- If installation fails after the reset begins, Anvil attempts rollback automatically. The verified backup path is included in the error output.
-- If `make doctor` returns `2`, inspect its project/environment override paths. The global Anvil installation can be healthy while a repository adds its own agent, skill, or MCP configuration.
-- If `opencode` is not found in a new shell, confirm `~/.opencode/bin` is in `PATH` and reopen the shell. Anvil updates the first suitable startup file for the detected shell.
-- To validate installed CLI details, use OpenCode's `opencode debug config`, `opencode debug skill`, `opencode agent list`, and `opencode debug paths` commands.
-
-See [operations](docs/operations.md), [architecture](docs/architecture.md), [memory](docs/memory.md), and [testing](docs/testing.md) for the lifecycle details.
+See [the V1/V2 capability matrix](docs/versions/README.md), [V1 history](docs/versions/v1.md), [V2 release notes](docs/versions/v2.md), [V1-to-V2 migration guide](docs/migrations/v1-to-v2.md), [memory behavior](docs/memory.md), and [OpenCode compatibility](docs/opencode-compatibility.md).
