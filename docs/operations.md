@@ -25,9 +25,9 @@ After the rehearsal succeeds, Anvil creates a mode-restricted backup and verifie
 
 ## Doctor and stats
 
-`make doctor` checks V2 config structure, the primary model-neutral agent and permissions, the managed skills and commands, plugin entrypoint, memory, knowledge root, source registry, installation/migration metadata, and visible project overrides. High-level statuses are `HEALTHY`, `WARNING`, and `BROKEN`; exit codes are `0`, `2`, and `1` respectively.
+`make doctor` checks V2 config structure, the primary model-neutral agent and permissions, the managed skills and commands, plugin entrypoint, memory, knowledge root, source registry, installation/migration metadata, and visible project overrides. High-level statuses are `HEALTHY`, `WARNING`, and `BROKEN`; exit codes are `0`, `2`, and `1` respectively. A supported V1 installation is reported as `UPGRADE REQUIRED` with exit code `0`.
 
-`make stats` invokes OpenCode's native structured stats in standalone mode and formats period, model, token, and available cost totals. It does not create a separate usage database. No historical usage is a valid empty result.
+`make stats` invokes OpenCode's native structured stats in standalone mode and formats period, model, token, and available cost totals. It does not create a separate usage database. No historical usage is a valid empty result. Before OpenCode 2 is installed, it prints first-install or migration guidance and exits successfully without a report.
 
 ## Backup and sensitive data
 

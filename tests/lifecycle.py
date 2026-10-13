@@ -218,8 +218,9 @@ def upgrade_test(
         doctor = run(["/usr/bin/make", "--no-print-directory", "doctor"], upgrade_env())
         check("Status: UPGRADE REQUIRED" in doctor.stdout, "doctor did not recognize a migratable V1 install")
         check("make upgrade" in doctor.stderr, "doctor did not explain how to migrate V1")
-        stats = run(["/usr/bin/make", "--no-print-directory", "stats"], upgrade_env(), expected=2)
+        stats = run(["/usr/bin/make", "--no-print-directory", "stats"], upgrade_env())
         check("make upgrade" in stats.stderr, "V1 stats error did not explain the required migration")
+        check("WARN" in stats.stderr and "ERROR" not in stats.stderr, "V1 stats did not report a non-error notice")
 
     original_config = tree_hash(paths["config"])
     original_data = tree_hash(paths["data_opencode"])
@@ -322,6 +323,29 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="anvil-provider-migration-", dir=TEST_ROOT) as name:
         provider_migration_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-first-install-stats-", dir=TEST_ROOT) as name:
+        temp = pathlib.Path(name)
+        home = temp / "home"
+        tools = temp / "tools"
+        tools.mkdir()
+        for command in ("bash", "dirname", "env", "python3"):
+            source = shutil.which(command)
+            check(source is not None, f"test requires {command}")
+            (tools / command).symlink_to(source)
+        first_install_env = {
+            "PATH": str(tools),
+            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(temp / "xdg-config"),
+            "XDG_DATA_HOME": str(temp / "xdg-data"),
+            "XDG_STATE_HOME": str(temp / "xdg-state"),
+            "SHELL": "/bin/bash",
+            "TMPDIR": "/tmp",
+            "LANG": "C.UTF-8",
+        }
+        first_stats = run(["/usr/bin/make", "--no-print-directory", "stats"], first_install_env)
+        check("make reforge" in first_stats.stderr, "first-use stats did not direct the user to reforge")
+        check("WARN" in first_stats.stderr and "ERROR" not in first_stats.stderr, "first-use stats did not exit with an informational notice")
+        print("PASS make stats gives first-install guidance when OpenCode is absent")
     with tempfile.TemporaryDirectory(prefix="anvil-upgrade-rehearsal-", dir=TEST_ROOT) as name:
         rehearsal_test(pathlib.Path(name), wrapper)
     with tempfile.TemporaryDirectory(prefix="anvil-reforge-idempotent-", dir=TEST_ROOT) as name:

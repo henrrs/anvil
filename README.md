@@ -5,13 +5,17 @@
 > **Better harness. Better execution.**
 
 ```bash
-make inspect
+# First installation
+make reforge
+make doctor
+
+# Existing Anvil V1 installation
 make test
 make upgrade
 make doctor
 ```
 
-Use `make reforge` for a clean installation or rebuild. Use `make rollback` to restore the latest verified runtime snapshot. `make stats` displays OpenCode's native usage report.
+Use `make inspect` to review the current setup before either flow. Use `make rollback` to restore the latest verified runtime snapshot. `make stats` displays OpenCode's native usage report after OpenCode 2 is installed; before that, it prints the appropriate setup or migration command without failing.
 
 Anvil is a lean, model-agnostic harness and lifecycle layer for OpenCode. OpenCode remains responsible for models, providers, authentication, sessions, tools, and execution. Anvil supplies a focused behavioral environment: compact instructions, one primary agent, a small set of skills, explicit file memory, evidence-driven workflows, and safe upgrade and recovery operations.
 
@@ -37,6 +41,8 @@ Luna / Terra / Sol / Astra / Sonnet / other models
 Prerequisites: Linux or macOS, Bash, Python 3.11+, `tar`, and internet access to the official npm registry. Anvil resolves the current stable OpenCode 2 release when needed, stages one exact candidate, and verifies the published SHA-512 integrity metadata. Windows users can run Anvil under WSL.
 
 `make inspect` reads the current OpenCode setup without changing it. `make test` checks the V2 config, memory behavior, upgrade lifecycle, rollback and failure recovery in isolated temporary environments, and smoke-tests the exact official stable candidate.
+
+For a first installation, run `make reforge`, then `make doctor`. Anvil's OpenCode commands and native stats become available after this installs OpenCode 2 and the V2 config. `make inspect` and `make test` can run before installation.
 
 `make upgrade` is the normal path for an existing Anvil V1 installation. It rehearses migration using copied config, OpenCode data/state, and Anvil memory under a temporary HOME/XDG tree. Only after rehearsal succeeds does it create and verify a complete backup, install that exact tested candidate, and run post-upgrade doctor. Failed postflight checks trigger automatic rollback.
 
@@ -64,7 +70,7 @@ Anvil configures one model-neutral `anvil` primary agent. No model is pinned; se
 
 `make rollback` restores the latest verified pre-upgrade/rebuild OpenCode config, executable, data, and state snapshot. Current Anvil Markdown memory is archived separately before rollback and remains portable. Rollback restores the original runtime snapshot rather than trying to downgrade a migrated database.
 
-`make doctor` checks the V2 config and agent policy, commands and skills, plugin files, memory, knowledge reference, source registry, migration metadata, and visible workspace overrides. It reports `HEALTHY`, `WARNING`, or `BROKEN`; exit codes are `0`, `2`, and `1` respectively. Workspace, system, or organization-managed configuration can still affect effective behavior.
+`make doctor` checks the V2 config and agent policy, commands and skills, plugin files, memory, knowledge reference, source registry, migration metadata, and visible workspace overrides. It reports `HEALTHY`, `WARNING`, or `BROKEN`; exit codes are `0`, `2`, and `1` respectively. A supported V1 setup is reported as `UPGRADE REQUIRED` with exit code `0`. Workspace, system, or organization-managed configuration can still affect effective behavior.
 
 ## Version history
 
