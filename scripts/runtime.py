@@ -18,7 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "config" / "runtime-policy.json"
 FEATURES = {
     1: {
-        "native_plugins": False,
+        "native_plugins": True,
+        "anvil_core_plugin": False,
         "native_references": False,
         "native_memory_search": False,
         "native_stats": True,
@@ -30,6 +31,7 @@ FEATURES = {
     },
     2: {
         "native_plugins": True,
+        "anvil_core_plugin": True,
         "native_references": True,
         "native_memory_search": True,
         "native_stats": True,

@@ -93,7 +93,9 @@ v1=module.capabilities(requested_major=1)
 v2=module.capabilities(requested_major=2)
 assert v1["core"]["distill"] and v1["memory"]["source_registry"] and not v1["memory"]["native_search_tool"]
 assert not v1["knowledge"]["native_references"] and v1["stats"]["native_stats"] and not v1["stats"]["structured_native_stats"]
+assert v1["runtime_features"]["native_plugins"] and not v1["runtime_features"]["anvil_core_plugin"]
 assert v2["memory"]["native_search_tool"] and v2["knowledge"]["native_references"] and v2["stats"]["structured_native_stats"]
+assert v2["runtime_features"]["native_plugins"] and v2["runtime_features"]["anvil_core_plugin"]
 PY
 pass 'Runtime policy exposes independent OpenCode 1/2 adapters and capability profiles'
 python3 - "$ROOT" <<'PY' || fail 'V1/V2 baseline, model neutrality, plugin scope, or secret scan'

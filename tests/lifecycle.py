@@ -380,6 +380,9 @@ def upgrade_preserves_v1_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
     check(tree_hash(paths["data_opencode"]) == before_data and tree_hash(paths["state_opencode"]) == before_state, "make upgrade changed OpenCode data/state")
     check("Target OpenCode major     1 (preserved)" in proc.stdout, "upgrade plan did not state that OpenCode major 1 is preserved")
     check("Status: HEALTHY" in proc.stdout, "OpenCode 1 Anvil 2.1 doctor was not healthy")
+    for section in ("Capabilities", "Stats", "Memory", "Knowledge", "Project overrides", "Version documentation"):
+        check(section in proc.stdout, f"OpenCode 1 doctor omitted the {section} category")
+    check("/distill               YES" in proc.stdout and "file-fallback" in proc.stdout, "OpenCode 1 doctor omitted core command or fallback capability status")
     print("PASS make upgrade advances Anvil on OpenCode 1 without changing the runtime major")
 
 
@@ -398,6 +401,9 @@ def upgrade_preserves_v2_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
     check(tree_hash(paths["data_opencode"]) == before_data and tree_hash(paths["state_opencode"]) == before_state, "OpenCode 2 upgrade changed opaque user data/state")
     check("Target OpenCode major     2 (preserved)" in proc.stdout, "upgrade plan did not state that OpenCode major 2 is preserved")
     check("Status: HEALTHY" in proc.stdout, "OpenCode 2 Anvil 2.1 doctor was not healthy")
+    for section in ("Capabilities", "Stats", "Memory", "Knowledge", "Project overrides", "Version documentation"):
+        check(section in proc.stdout, f"OpenCode 2 doctor omitted the {section} category")
+    check("/distill               YES" in proc.stdout and "native-tool+file-fallback" in proc.stdout, "OpenCode 2 doctor omitted core command or native search capability status")
     print("PASS make upgrade advances Anvil on OpenCode 2 without changing the runtime major")
 
 
@@ -471,6 +477,9 @@ def main() -> int:
         first_stats = run(["/usr/bin/make", "--no-print-directory", "stats"], first_install_env)
         check("make reforge" in first_stats.stderr, "first-use stats did not direct the user to reforge")
         check("WARN" in first_stats.stderr and "ERROR" not in first_stats.stderr, "first-use stats did not exit with an informational notice")
+        first_doctor = run(["/usr/bin/make", "--no-print-directory", "doctor"], first_install_env)
+        check("Status: NOT INSTALLED" in first_doctor.stdout and "Approved policy major  1" in first_doctor.stdout, "first-use doctor did not report the approved runtime policy informatively")
+        check("Version documentation  valid" in first_doctor.stdout, "first-use doctor omitted release documentation health")
         print("PASS make stats gives first-install guidance when OpenCode is absent")
     with tempfile.TemporaryDirectory(prefix="anvil-upgrade-rehearsal-", dir=TEST_ROOT) as name:
         rehearsal_test(pathlib.Path(name), wrapper_v2)

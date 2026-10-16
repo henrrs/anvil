@@ -6,11 +6,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 from configure import _audit_v1, audit, parse_jsonc
 import memory
+import runtime
 import source_registry
 
 
@@ -111,12 +113,18 @@ def main() -> int:
     data_root = args.data_dir / "anvil"
     memory_root = data_root / "memory"
     memory_audit = memory.audit()
+    stale_ids = memory.stale_memory_ids()
     registry_audit = source_registry.audit()
     installation = read_json(data_root / "installation.json")
     migration = installation.get("migration", {})
     if not isinstance(migration, dict):
         migration = {}
     overrides = project_overrides(args.cwd)
+    capabilities = runtime.capabilities(requested_major=runtime_major)
+    release_check = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve().with_name("version_docs.py"))],
+        capture_output=True, text=True, check=False,
+    )
 
     if skills != EXPECTED_SKILLS:
         problems.append(f"Anvil skill set mismatch: missing={sorted(EXPECTED_SKILLS - skills)}, extra={sorted(skills - EXPECTED_SKILLS)}")
@@ -140,31 +148,52 @@ def main() -> int:
         problems.append("Anvil memory root is missing or inaccessible")
     if overrides:
         warnings.append("project-level OpenCode instructions or overrides are active")
+    if release_check.returncode != 0:
+        detail = release_check.stderr.strip() or release_check.stdout.strip() or "unknown documentation check failure"
+        warnings.append(f"release documentation check failed: {detail}")
 
+    print("Harness")
     print(f"OpenCode {runtime_major} configuration")
     print(f"  runtime config         {'valid' if not config_audit(config_path) else 'invalid'}")
     print(f"  default agent          {config.get('default_agent', 'missing')}")
     print(f"  model pinned           {'yes' if config.get('model') or anvil.get('model') else 'no'}")
     denied_subagents = rules.get(("task", "*")) == "deny" if runtime_major == 1 else rules.get(("subagent", "*")) == "deny"
     print(f"  subagents denied       {'yes' if denied_subagents else 'no'}")
+    print(f"  primary agents         {1 if anvil.get('mode') == 'primary' else 0}")
     print(f"  anvil-core configured  {'yes' if runtime_major == 2 and './plugins/anvil-core' in plugin_entries and plugin_file.is_file() else 'no (runtime fallback)'}")
-    print(f"  memory search tool     {'native plugin' if runtime_major == 2 else 'file helper fallback'}")
+    print("Capabilities")
+    print(f"  /remember              {'YES' if commands >= {'remember'} else 'NO'}")
+    print(f"  /recall                {'YES' if commands >= {'recall'} else 'NO'}")
+    print(f"  /distill               {'YES' if commands >= {'distill'} else 'NO'}")
+    print(f"  memory search backend  {capabilities['memory']['search_backend']}")
+    print(f"  native References      {'YES' if capabilities['knowledge']['native_references'] else 'NO'}")
+    print("Stats")
+    print(f"  native stats           {'YES' if capabilities['stats']['native_stats'] else 'NO'}")
+    print(f"  structured stats       {'YES' if capabilities['stats']['structured_native_stats'] else 'NO'}")
     print(f"  global MCP count       {len(mcp_servers)}")
     print(f"  unexpected plugins     {len(unexpected_plugins)}")
     print(f"  native compaction      {'enabled' if compaction.get('auto') else 'missing'}")
     print(f"  tool output cap        {output.get('max_lines', 'not available')} lines / {output.get('max_bytes', 'not available')} bytes")
-    print("Memory and knowledge")
+    print("Memory")
     print(f"  memory root            {memory_root}")
     print(f"  valid / invalid        {memory_audit['valid']} / {memory_audit['invalid']}")
+    print(f"  stale-source entries   {len(stale_ids)}")
+    print(f"  search backend         {capabilities['memory']['search_backend']}")
+    print(f"  source registry        {registry_audit['sources']} records, {registry_audit['invalid']} invalid, {registry_audit['drifted']} drifted")
+    print("Knowledge")
     if runtime_major == 2:
+        print(f"  native References      {'active' if capabilities['knowledge']['native_references'] else 'unavailable'}")
         print(f"  knowledge reference    {knowledge_root or 'missing'} ({'present' if knowledge_root and knowledge_root.is_dir() else 'missing'})")
     else:
-        print("  knowledge access       direct file paths (References not supported)")
-    print(f"  source registry        {registry_audit['sources']} records, {registry_audit['invalid']} invalid, {registry_audit['drifted']} drifted")
+        print("  native References      unavailable")
+        print("  fallback               direct file paths")
     print("Migration and workspace")
     print(f"  previous Anvil version {installation.get('previous_anvil_version') or migration.get('from_anvil') or 'unknown'}")
     print(f"  migration state        {migration.get('status', 'not recorded')}")
-    print(f"  project overrides      {', '.join(overrides) if overrides else 'none'}")
+    print("Project overrides")
+    print(f"  active                 {', '.join(overrides) if overrides else 'none'}")
+    print("Version documentation")
+    print(f"  release consistency    {'valid' if release_check.returncode == 0 else 'check failed'}")
     for problem in problems:
         print(f"ERROR {problem}")
     for warning in warnings:

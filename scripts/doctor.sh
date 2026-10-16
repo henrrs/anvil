@@ -5,7 +5,14 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source "$ROOT/scripts/lib/common.sh"
 anvil_need python3
 
-expected_anvil="$(cat "$ROOT/VERSION")"
+expected_anvil="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").strip())' "$ROOT/VERSION")"
+policy_json="$(python3 "$ROOT/scripts/runtime.py" policy)"
+read -r policy_major policy_majors automatic_major_upgrade < <(python3 - "$policy_json" <<'PY'
+import json,sys
+opencode=json.loads(sys.argv[1])["opencode"]
+print(opencode["default_major"], ",".join(map(str,opencode["supported_majors"])), str(opencode["allow_automatic_major_upgrade"]))
+PY
+)
 binary="$(anvil_open_code_binary || true)"
 record_file="$ANVIL_DATA_DIR/installation.json"
 recorded_opencode=""
@@ -31,21 +38,31 @@ fi
 
 if [[ -z "$binary" || ! -x "$binary" ]]; then
   printf 'OpenCode runtime       not installed\n'
+  printf 'Approved policy major  %s\n' "$policy_major"
+  printf 'Supported majors       %s\n' "$policy_majors"
+  printf 'Major auto-upgrade     %s\n' "$( [[ "$automatic_major_upgrade" == True ]] && printf 'YES' || printf 'NO')"
+  if python3 "$ROOT/scripts/version_docs.py" >/dev/null 2>&1; then
+    printf 'Version documentation  valid\n'
+  else
+    anvil_warn 'Release documentation does not match this checkout.'
+  fi
   anvil_warn "Anvil can be configured on first use; run 'make reforge' to install the approved runtime."
   printf '\nStatus: NOT INSTALLED\n'
   exit 0
 fi
 
 capability_json="$(python3 "$ROOT/scripts/runtime.py" capabilities --binary "$binary")"
-read -r normalized major supported minimum policy_major < <(python3 - "$capability_json" <<'PY'
+read -r normalized major supported minimum < <(python3 - "$capability_json" <<'PY'
 import json,sys
-d=json.loads(sys.argv[1]); r=d['runtime']; p=d['policy']
-print(r.get('version') or 'unknown', r.get('major') or '', str(r.get('supported')), r.get('minimum_version') or '', p['default_major'])
+d=json.loads(sys.argv[1]); r=d['runtime']
+print(r.get('version') or 'unknown', r.get('major') or '', str(r.get('supported')), r.get('minimum_version') or '')
 PY
 )
 printf 'OpenCode version        %s\n' "$normalized"
 printf 'OpenCode runtime        %s (%s)\n' "${major:-unknown}" "${major:+opencode-v$major}"
 printf 'Approved policy major   %s\n' "$policy_major"
+printf 'Supported majors        %s\n' "$policy_majors"
+printf 'Major auto-upgrade      %s\n' "$( [[ "$automatic_major_upgrade" == True ]] && printf 'YES' || printf 'NO')"
 broken=0
 warning=0
 if [[ "$supported" != True ]]; then

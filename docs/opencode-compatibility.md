@@ -10,7 +10,7 @@ Anvil version and OpenCode runtime major are independent. Current tested candida
 
 ## Runtime-specific behavior
 
-- OpenCode 1 uses singular `agent`, `permission`, and `plugin` config keys. Anvil keeps global plugins empty and supplies the shared commands, skills, explicit Markdown memory, source registry, and `/distill`. Its native stats command emits terminal text; memory search and knowledge use file-based helpers/reads.
+- OpenCode 1 uses singular `agent`, `permission`, and `plugin` config keys and supports its native plugin API. The Anvil V1 profile leaves that plugin facility unused because `anvil-core` targets the OpenCode 2 plugin API; shared commands, skills, explicit Markdown memory, source registry, and `/distill` remain active. Its native stats command emits terminal text; memory search and knowledge use file-based helpers/reads.
 - OpenCode 2 uses plural `agents` and `plugins`, ordered permissions, native local plugins, References, native compaction/output settings, and structured `stats --json`. Anvil's local `anvil-core` plugin exposes only bounded, read-only Markdown search; it does not route models or rewrite prompts.
 - Commands and skills are Markdown files shared between profiles. OpenCode 1 and 2 discover the same global `commands/` and `skills/` trees.
 - OpenCode owns authentication, session/database schemas, and runtime state. Anvil copies these paths opaquely during rehearsal and backup, and never edits undocumented database tables.
