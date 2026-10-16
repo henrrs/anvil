@@ -2,6 +2,32 @@
 
 Release notes for user-visible Anvil changes. See [version history](docs/versions/README.md) and [release discipline](docs/RELEASING.md).
 
+## [2.3.0] - 2026-10-16
+
+### Added
+
+- Capability-based Databricks provider resolution with the official CLI, isolated Python SDK, optional SQL Connector, Databricks Connect detection, and VS Code assisted status.
+- Explicit `make databricks-setup` CLI installation attempt from official GitHub releases with SHA-256 verification and a user-local, no-elevation install path.
+- Anvil-owned isolated SDK environment and Unified Authentication profile reuse when CLI setup is blocked or unavailable.
+- PATH-resilient CLI discovery, atomic schema-versioned provider metadata, provider-aware doctor/capabilities, and `make databricks-setup DRY_RUN=1`.
+- Offline provider tests for install outcomes, PATH changes, SDK routing, VS Code detection, state security, setup idempotency, and dry-run behavior.
+
+### Changed
+
+- Databricks capability is no longer hard-coupled to the CLI; the CLI remains preferred when healthy, with per-capability SDK fallback.
+- `make reforge` and `make upgrade` no longer prompt to configure Databricks or perform Databricks network/install work.
+- CLI or SDK installation blockage is reported independently from the Anvil lifecycle and other available Databricks providers.
+
+### Preserved
+
+- OpenCode 1.x and 2.x compatibility, existing Anvil 2.2 execution bounds, profile non-switching, secret-free Anvil state, and the no-silent-remote-mutation guardrails.
+- One model-neutral Anvil agent, no mandatory MCP, and no model routing.
+
+### Limitations
+
+- The mandatory test suite uses local doubles and does not contact a Databricks workspace or install real providers.
+- CLI and SDK installation require access to official GitHub/PyPI sources when `make databricks-setup` is explicitly run. VS Code is assisted; Anvil does not automate the IDE.
+
 ## [2.2.0] - 2026-10-16
 
 ### Added

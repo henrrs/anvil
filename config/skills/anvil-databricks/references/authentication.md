@@ -1,19 +1,19 @@
 # Authentication and workspace profiles
 
-The supported interface is the official Databricks CLI. Anvil 2.2 requires CLI `1.0.0` or newer; this is the first documented release where U2M OAuth tokens use OS-native secure storage by default. The CLI profile remains the authentication source of truth.
+Anvil 2.3 uses supported Databricks Unified Authentication through the official CLI and Python SDK. CLI `1.0.0` or newer remains preferred when available. The CLI profile is reused by the SDK; authentication remains under Databricks-owned configuration and credential storage.
 
 ## Setup and cross-session selection
 
-`make databricks-setup` invokes `databricks auth profiles`, `databricks auth describe --profile NAME` (without `--sensitive`), and `databricks current-user me --profile NAME`. The first uses the CLI's own profile validation. Anvil stores only `selected_profile`, `workspace_host`, and `last_verified_at` in `${XDG_CONFIG_HOME:-$HOME/.config}/anvil/databricks.json`, mode `0600` in a mode `0700` directory.
+`make databricks-setup` is explicit setup intent. It attempts to install the official CLI into Anvil's user-local data path with SHA-256 validation. If the CLI is blocked, it prepares the official SDK in an Anvil-owned isolated virtual environment. The selected profile is validated with the active provider. Anvil state is atomic, mode `0600` inside a mode `0700` directory, and contains only profile, host, provider, and capability metadata.
 
 - One valid workspace profile can be selected automatically during setup.
 - Several valid profiles require an interactive choice. The profile name and HTTPS workspace host are shown; Anvil does not silently choose the first.
 - A selected profile that becomes invalid stays selected and is reported for repair. Authenticate that same profile with `databricks auth login --profile NAME`, then rerun setup. Anvil does not fall back to another workspace.
 - Task commands may accept an explicit `--profile NAME`; it is validated for that invocation and does not change the stored default.
 
-For a human workstation, prefer OAuth U2M through `databricks auth login`. The CLI stores OAuth tokens in the platform's native secure store on supported operating systems. Existing managed CLI installations are preserved; Anvil does not install over them, create PATs, log out, or read token-bearing output.
+For a human workstation, use OAuth U2M through `databricks auth login` or the supported sign-in path in the official VS Code extension. The SDK can reuse resulting Unified Authentication state. VS Code is assisted only; Anvil does not automate the UI or inspect extension internals. Anvil never creates PATs, logs out, or reads token-bearing output.
 
-If the CLI is absent, install it using the [official Databricks CLI guide](https://docs.databricks.com/aws/en/dev-tools/cli/install), then run `make databricks-setup`. Anvil continues to work without Databricks access.
+If setup is blocked by enterprise policy, review the reported provider state and use an already supported auth profile or official VS Code sign-in. Anvil does not request elevation or bypass policy. `make databricks-setup DRY_RUN=1` previews local discovery without network access or state changes.
 
 ## Official behavior checked
 

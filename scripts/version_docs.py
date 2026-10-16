@@ -19,11 +19,12 @@ def main() -> int:
     required = {
         "CHANGELOG.md": [f"## [{version}]"],
         release_doc: [f"# Anvil {version}"],
-        "docs/versions/README.md": ["Anvil 2.2 + OpenCode 1", "Anvil 2.2 + OpenCode 2", "Databricks live system catalog and FinOps", "Runtime-major migration command", "do not require OpenCode 2"],
+        "docs/versions/README.md": ["Anvil 2.2 + OpenCode 1", "Anvil 2.2 + OpenCode 2", "Anvil 2.3 + OpenCode 1", "Anvil 2.3 + OpenCode 2", "Databricks live system catalog and FinOps", "Runtime-major migration command", "do not require OpenCode 2"],
         "docs/versions/v2.1.md": ["Runtime Independence", "make upgrade", "migrate-runtime", "make capabilities", "/distill", "stale"],
         "docs/migrations/v1-to-v2.md": ["make upgrade", "migrate-runtime", "rollback", "rehearsal"],
         "docs/migrations/v2-to-v2.1.md": ["make upgrade", "migrate-runtime", "OPENCODE_MAJOR", "rollback", "runtime policy"],
         "docs/migrations/v2.1-to-v2.2.md": ["make upgrade", "DRY_RUN=1", "Databricks", "rollback", "OpenCode major"],
+        "docs/migrations/v2.2-to-v2.3.md": ["make databricks-setup", "DRY_RUN=1", "SDK fallback", "rollback", "OpenCode major"],
         "docs/runtime-compatibility.md": ["1.18.18", "2.0.0", "opencode-v1", "opencode-v2", "offline profile fixture", "minimum supported CLI", "1.0.0"],
         "docs/RELEASING.md": ["PATCH", "MINOR", "MAJOR", "make test", "offline", "runtime compatibility"],
         "docs/opencode-compatibility.md": ["dist-tag", "migrate-v1", "npm", "OpenCode 1.x and 2.x", "local CLI fixtures"],
@@ -34,7 +35,7 @@ def main() -> int:
         "docs/databricks/system-tables.md": ["2026-10-16", "SHOW SCHEMAS", "live schema", "read-only"],
         "docs/databricks/finops.md": ["Evidence Confidence Score", "shared all-purpose", "not a total cloud bill"],
         "docs/databricks/security.md": ["token", "system-table", "silently", "credential"],
-        "docs/databricks/testing.md": ["offline", "tests/fixtures/bin/databricks", "does not resolve or download OpenCode"],
+        "docs/databricks/testing.md": ["offline", "tests/fixtures/bin/databricks", "do not resolve/download OpenCode"],
     }
     errors = []
     for relative, phrases in required.items():

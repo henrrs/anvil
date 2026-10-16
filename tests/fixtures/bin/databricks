@@ -78,7 +78,9 @@ if args == ["-v"] or args == ["version"]:
     raise SystemExit(0)
 
 if args[:2] == ["auth", "profiles"]:
-    if scenario == "multiple_profiles":
+    if scenario == "environment_auth":
+        print("", end="")
+    elif scenario == "multiple_profiles":
         print((FIXTURES / "auth" / "profiles-multiple.txt").read_text(encoding="utf-8"), end="")
     elif scenario == "invalid_profile":
         print((FIXTURES / "auth" / "profiles-invalid.txt").read_text(encoding="utf-8"), end="")

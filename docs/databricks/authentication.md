@@ -1,18 +1,31 @@
 # Databricks authentication
 
-Anvil 2.2 uses the official Databricks CLI, minimum version `1.0.0`. The CLI owns authentication and OAuth U2M token storage. Anvil runs `databricks auth profiles`, non-sensitive `databricks auth describe --profile NAME`, and `databricks current-user me --profile NAME` to discover and validate a selected workspace. It never calls `auth describe --sensitive`, `auth env`, or `auth token`.
+Anvil uses Databricks Unified Authentication through supported configuration profiles, environment variables, and provider libraries. It does not create credentials, scrape IDE storage, or implement OAuth itself.
 
-Use OAuth U2M on a human workstation:
+## Profiles
+
+Databricks configuration profiles live in the supported `.databrickscfg` location (or the path selected by `DATABRICKS_CONFIG_FILE`). The SDK accepts a selected profile through `WorkspaceClient(profile=...)`; the CLI uses `--profile`. Anvil discovers profile names and HTTPS workspace hosts, validates the selected identity through the active provider, and stores only the selected name and host in its own state.
+
+One valid workspace profile can be selected automatically. Several valid profiles require a user choice. If the saved profile disappears or becomes invalid, Anvil asks for repair and does not silently choose another workspace. With only the SDK provider, Anvil can also use the supported default profile or environment-based Unified Authentication.
+
+The official CLI manages its own secure credential storage (“secure storage”) and OAuth U2M token lifecycle. To authenticate through the official CLI, use:
 
 ```bash
 databricks auth login
 make databricks-setup
 ```
 
-The CLI prompts for the workspace and profile and completes browser login. On supported operating systems, CLI 1.0.0 and later use OS-native secure storage for U2M tokens. See the [official install guide](https://docs.databricks.com/aws/en/dev-tools/cli/install), [auth command reference](https://docs.databricks.com/aws/en/dev-tools/cli/reference/auth-commands), and [OAuth U2M documentation](https://docs.databricks.com/aws/en/dev-tools/auth/oauth-u2m).
+When the CLI is unavailable, sign in through the official Databricks VS Code extension or prepare another supported Unified Authentication profile, then rerun `make databricks-setup`. VS Code is a guided authentication path; Anvil does not automate its UI.
 
-Anvil stores only the selected profile name, HTTPS workspace host, and verification timestamp in `${XDG_CONFIG_HOME:-$HOME/.config}/anvil/databricks.json`. It is atomically written with mode `0600` inside a `0700` directory. The preference survives new OpenCode sessions. CLI profiles and secure credentials stay in their existing Databricks-owned location.
+## State and secrets
 
-One valid workspace profile can be selected automatically. Multiple valid profiles require a user choice. If the selected profile disappears or fails validation, Anvil reports that profile and asks for repair; it never chooses another workspace automatically. A task may use an explicit `--profile NAME` without changing the saved default.
+Anvil state is `${XDG_CONFIG_HOME:-$HOME/.config}/anvil/databricks.json`, atomically written with mode `0600` inside a `0700` directory. It contains a schema version, selected profile, workspace host, provider health/discovery metadata, and capability resolution. It never contains tokens, passwords, client secrets, signed URLs, or raw identity payloads.
 
-When the CLI is missing or too old, setup points to the official install/update guide and leaves the existing environment untouched. Non-interactive setup may fail with an actionable message without blocking Anvil installation or upgrade.
+The provider state is a cache. The active executable/package and authentication are revalidated when used. Existing 2.2 profile and host preferences migrate without changing Databricks authentication or profile files.
+
+## Official references
+
+- [Unified Authentication](https://docs.databricks.com/aws/en/dev-tools/auth/unified-auth)
+- [Configuration profiles](https://docs.databricks.com/aws/en/dev-tools/auth/config-profiles)
+- [OAuth U2M](https://docs.databricks.com/aws/en/dev-tools/auth/oauth-u2m)
+- [CLI authentication commands](https://docs.databricks.com/aws/en/dev-tools/cli/reference/auth-commands)

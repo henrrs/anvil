@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for Anvil 2.2.
+Accepted for Anvil 2.2; superseded by [ADR-0012](ADR-0012-databricks-provider-independence.md) in Anvil 2.3.
 
 ## Context
 

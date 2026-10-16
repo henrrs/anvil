@@ -184,5 +184,5 @@ contains_stats="$(python3 -c 'import sys; print(int("total tokens    135" in sys
 [[ "$contains_stats" == 1 ]] || fail 'stats summary fields'
 pass 'Native OpenCode statistics are rendered from structured JSON'
 
-printf '\nAll Anvil 2.2 offline checks passed.\n'
+printf '\nAll Anvil offline checks passed.\n'
 printf 'Isolation: runtime and lifecycle fixture calls used temporary HOME and XDG roots; no external runtime, Databricks, or model service was used.\n'

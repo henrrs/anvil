@@ -1,6 +1,6 @@
 # Classic compute discovery and Python execution
 
-The CLI adapter lists classic all-purpose clusters using `databricks clusters list --output json`. It includes user/API-created classic clusters, excludes job, pipeline, and other compute sources, and reports ID, name, state, source, Databricks Runtime, worker/driver node type, fixed worker count, and autoscale bounds.
+The provider adapter lists classic all-purpose clusters through the CLI when healthy or the official SDK fallback. It includes user/API-created classic clusters, excludes job, pipeline, and other compute sources, and reports ID, name, state, source, Databricks Runtime, worker/driver node type, fixed worker count, and autoscale bounds.
 
 Use a running cluster for Command Execution. If more than one suitable cluster is running, ask the user to choose. If none runs, present stopped cluster choices and wait for approval before starting one. Anvil does not expose a cluster-start operation in its adapter.
 

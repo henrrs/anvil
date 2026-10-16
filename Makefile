@@ -17,7 +17,8 @@ help:
 	  'make doctor     Check Anvil, runtime, memory, knowledge and project state.' \
 	  'make capabilities  Show features available on the detected runtime.' \
 	  'make stats      Show native stats, or an honest runtime fallback.' \
-	  'make databricks-setup  Configure the optional Databricks CLI profile.' \
+	  'make databricks-setup  Configure Databricks; attempts safe CLI install, then SDK fallback.' \
+	  '  DRY_RUN=1            Preview providers and auth without changes or network access.' \
 	  'make rollback   Restore the latest complete pre-upgrade/rebuild snapshot.' \
 	  '' \
 	  'upgrade never changes OpenCode major; use migrate-runtime OPENCODE_MAJOR=N for an explicit runtime migration.' \
@@ -50,7 +51,7 @@ stats:
 	@bash scripts/stats.sh
 
 databricks-setup:
-	@python3 scripts/databricks.py setup
+	@python3 scripts/databricks.py setup $(if $(filter 1 true yes,$(DRY_RUN)),--dry-run,)
 
 rollback:
 	@bash scripts/rollback.sh

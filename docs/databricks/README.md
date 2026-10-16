@@ -1,17 +1,21 @@
 # Databricks capability
 
-Anvil uses the official Databricks CLI and REST APIs through the CLI, shared shell/filesystem primitives, and the `anvil-databricks` skill. It does not require MCP, a Python SDK, or OpenCode 2. Databricks remains optional; the rest of Anvil works when the CLI or workspace is unavailable.
+Anvil integrates with Databricks capabilities, not one Databricks client. The capability layer routes each operation to the best available provider while preserving Anvil's execution bounds and mutation guardrails. It works with OpenCode 1 and OpenCode 2 and does not require MCP.
 
 ```text
 Anvil primary agent
   → anvil-databricks skill
-  → installed stdlib Python adapter
-  → Databricks CLI profiles and REST API
-  → bounded Python/SQL results and live system-table discovery
+  → capability resolver
+  → CLI / Python SDK / SQL Connector / Connect / assisted VS Code
+  → supported Unified Authentication
 ```
 
-Run `make databricks-setup` to select a persistent default CLI profile. `make doctor` reports non-secret health information; `make capabilities` reports the functions available in the current environment. Neither command changes Databricks resources.
+Run `make databricks-setup` only when you want to configure Databricks. That command attempts a safe user-local installation of the official Databricks CLI and prepares an isolated SDK fallback if needed. Preview local discovery and planned actions with `make databricks-setup DRY_RUN=1`; dry-run does not install, write state, or make network requests. Reforge and upgrade never install Databricks tooling or probe workspace auth.
 
-The adapter discovers classic all-purpose clusters for remote Python and SQL warehouses for SQL. It asks when more than one suitable running resource exists and never starts or reconfigures compute. SQL uses inline Statement Execution results limited to 100 rows and 1 MB. Python command contexts are polled, bounded, canceled on timeout when possible, and destroyed.
+Anvil reuses supported `.databrickscfg` profiles and environment-based Unified Authentication without extracting credentials. Provider state stores only profile, host, absolute executable path, versions, health metadata, and capability resolution. The official Databricks VS Code extension is an assisted integration; Anvil uses the public `code --list-extensions` command and does not automate IDE UI or inspect extension files.
 
-See [authentication](authentication.md), [execution](execution.md), [system tables](system-tables.md), [FinOps](finops.md), [security](security.md), and [offline tests](testing.md). The skill's current dated catalog and focused references are shipped under `config/skills/anvil-databricks/references/`.
+The CLI remains the preferred provider when healthy. The isolated Databricks SDK for Python provides headless identity, compute, warehouse, Command Execution and Statement Execution capabilities when the CLI is unavailable. SQL Connector and Databricks Connect remain specialized paths and are not installed by default.
+
+The adapter discovers classic all-purpose clusters for requested remote Python and SQL warehouses for SQL. It asks when multiple suitable running resources exist, never starts or reconfigures compute, bounds returned SQL results to 100 rows and 1 MB, and checks live system-table schemas before relying on the dated reference snapshot. FinOps recipes return filtered aggregates and distinguish Databricks usage/list-cost estimates from a complete cloud bill.
+
+See [setup](setup.md), [providers and routing](providers.md), [authentication](authentication.md), [VS Code](vscode.md), [Python SDK](python-sdk.md), [SQL](sql.md), [Databricks Connect](connect.md), [execution](execution.md), [system tables](system-tables.md), [FinOps](finops.md), [security](security.md), and [offline tests](testing.md).

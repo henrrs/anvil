@@ -1,0 +1,83 @@
+"""Pure deterministic provider selection for Databricks capabilities."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+CAPABILITY_ORDER: dict[str, tuple[str, ...]] = {
+    "auth.status": ("cli", "sdk"),
+    "auth.profiles": ("cli", "sdk"),
+    "workspace.list": ("cli", "sdk"),
+    "compute.list": ("cli", "sdk"),
+    "compute.get": ("cli", "sdk"),
+    "warehouse.list": ("cli", "sdk"),
+    "warehouse.get": ("cli", "sdk"),
+    "python.execute": ("cli", "sdk", "vscode"),
+    "sql.execute": ("cli", "sdk", "sql_connector"),
+    "system_tables.query": ("cli", "sdk", "sql_connector"),
+    "jobs.list": ("cli", "sdk"),
+    "jobs.get": ("cli", "sdk"),
+    "pipelines.list": ("cli", "sdk"),
+    "pipelines.get": ("cli", "sdk"),
+    "spark.develop": ("connect", "vscode"),
+    "bundles.run": ("cli", "vscode"),
+}
+
+PROVIDER_CAPABILITIES = {
+    "cli": set(CAPABILITY_ORDER),
+    "sdk": {"auth.status", "auth.profiles", "workspace.list", "compute.list", "compute.get",
+            "warehouse.list", "warehouse.get", "python.execute", "sql.execute",
+            "system_tables.query", "jobs.list", "jobs.get", "pipelines.list", "pipelines.get"},
+    "sql_connector": {"sql.execute", "system_tables.query"},
+    "connect": {"spark.develop"},
+    "vscode": {"python.execute", "spark.develop", "bundles.run"},
+}
+
+PROVIDER_LABELS = {
+    "cli": "CLI", "sdk": "SDK", "sql_connector": "SQL Connector",
+    "connect": "Databricks Connect", "vscode": "VS Code",
+}
+
+
+def resolve(providers: dict[str, dict[str, Any]], *, auth_valid: bool) -> dict[str, dict[str, Any]]:
+    """Choose a provider per capability; assisted paths never count as headless."""
+    result: dict[str, dict[str, Any]] = {}
+    for capability, priority in CAPABILITY_ORDER.items():
+        selected = None
+        assisted = None
+        for name in priority:
+            state = providers.get(name, {})
+            if capability not in PROVIDER_CAPABILITIES.get(name, set()):
+                continue
+            if name in {"cli", "sdk", "sql_connector", "connect"}:
+                if state.get("status") == "READY" and auth_valid:
+                    selected = name
+                    break
+            elif name == "vscode" and state.get("status") == "AVAILABLE":
+                assisted = name
+        if selected:
+            result[capability] = {"provider": selected, "state": "READY", "headless": True}
+        elif assisted:
+            result[capability] = {"provider": assisted, "state": "ASSISTED", "headless": False}
+        else:
+            result[capability] = {"provider": None, "state": "UNAVAILABLE", "headless": False}
+    return result
+
+
+def overall_state(providers: dict[str, dict[str, Any]], capabilities: dict[str, dict[str, Any]], *, auth_valid: bool) -> str:
+    if not auth_valid:
+        if any(p.get("status") == "READY" for p in providers.values()):
+            return "NOT_CONFIGURED"
+        if any(p.get("status") == "BLOCKED" for p in providers.values()):
+            return "BLOCKED"
+        return "NOT_CONFIGURED"
+    core = ("workspace.list", "compute.list", "warehouse.list", "python.execute", "sql.execute")
+    usable = sum(capabilities.get(name, {}).get("state") in {"READY", "ASSISTED"} for name in core)
+    if usable == len(core):
+        return "READY"
+    if usable:
+        return "DEGRADED"
+    if any(p.get("status") == "BLOCKED" for p in providers.values()):
+        return "BLOCKED"
+    return "BROKEN"

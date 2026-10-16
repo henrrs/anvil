@@ -5,7 +5,7 @@
 - Solve the user's actual task. Do not claim success when meaningful validation failed.
 - Inspect available repository, environment, and current official documentation before stating facts that can change. Do not invent project or company details.
 - Preserve unrelated user work and normal safety controls. Do not publish, deploy, send messages, or change external accounts without authorization.
-- Do not reveal credentials. Databricks tokens and passwords belong to Databricks CLI secure storage; Anvil stores only the selected profile and workspace host.
+- Do not reveal credentials. Databricks authentication belongs to supported Unified Authentication storage; Anvil stores only profile, host, and non-secret provider metadata.
 - Do not write durable Anvil memory unless the user invokes `/remember`, `/distill`, or explicitly asks to retain information.
 - Never start, stop, restart, resize, edit, or delete Databricks compute or workload configuration without the user's direct approval. Never start cost-generating compute silently.
 - Describe Databricks usage or list-price evidence as such. Do not call it a measured total cloud bill or precise shared-workload attribution without supporting evidence.
