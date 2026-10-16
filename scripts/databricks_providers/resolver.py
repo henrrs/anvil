@@ -81,3 +81,26 @@ def overall_state(providers: dict[str, dict[str, Any]], capabilities: dict[str, 
     if any(p.get("status") == "BLOCKED" for p in providers.values()):
         return "BLOCKED"
     return "BROKEN"
+
+
+def resolve_local(providers: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Report locally installed providers without asserting workspace auth."""
+    result: dict[str, dict[str, Any]] = {}
+    for capability, priority in CAPABILITY_ORDER.items():
+        selected = next((name for name in priority
+                         if name in PROVIDER_CAPABILITIES.get(name, set())
+                         and providers.get(name, {}).get("status") == "READY"
+                         and name != "vscode"), None)
+        assisted = next((name for name in priority
+                         if name in PROVIDER_CAPABILITIES.get(name, set())
+                         and providers.get(name, {}).get("status") == "AVAILABLE"), None)
+        if selected:
+            result[capability] = {"provider": selected, "state": "AVAILABLE", "headless": True,
+                                  "auth_checked": False}
+        elif assisted:
+            result[capability] = {"provider": assisted, "state": "ASSISTED", "headless": False,
+                                  "auth_checked": False}
+        else:
+            result[capability] = {"provider": None, "state": "UNAVAILABLE", "headless": False,
+                                  "auth_checked": False}
+    return result

@@ -33,7 +33,7 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ "$structured_stats" == True ]]; then
-  if ! "$binary" stats --standalone --days "$days" --models --cost --json > "$tmp_root/stats.json" 2>"$tmp_root/stats.stderr"; then
+  if ! OPENCODE_DISABLE_AUTOUPDATE=1 "$binary" stats --standalone --days "$days" --models --cost --json > "$tmp_root/stats.json" 2>"$tmp_root/stats.stderr"; then
     anvil_warn "OpenCode $version could not provide structured stats; no data was changed."
     exit 0
   fi
@@ -45,7 +45,7 @@ if [[ "$structured_stats" == True ]]; then
 else
   # OpenCode 1 exposes native terminal stats, but not the structured JSON
   # interface Anvil uses for its normalized report.
-  if ! "$binary" stats --days "$days" > "$tmp_root/stats.txt" 2>"$tmp_root/stats.stderr"; then
+  if ! OPENCODE_DISABLE_AUTOUPDATE=1 "$binary" stats --days "$days" > "$tmp_root/stats.txt" 2>"$tmp_root/stats.stderr"; then
     anvil_warn "OpenCode $version could not provide its native stats report; no values were inferred."
     exit 0
   fi

@@ -1,7 +1,7 @@
 # OpenCode compatibility
 
 **checked_at:** 2026-10-16 (UTC)
-**Anvil version:** `2.3.0`
+**Anvil version:** `2.3.1`
 **Supported runtime majors:** OpenCode 1.x and 2.x
 **Default major for a first installation:** OpenCode 1.x
 **Automatic major upgrade:** disabled.
@@ -18,18 +18,19 @@ Anvil version and OpenCode runtime major are independent. Compatibility limits a
 
 ## Distribution and version selection
 
-The OpenCode 1 resolver selects the latest stable `1.x.y` GitHub release and matching platform artifact. It requires an official asset digest and verifies the downloaded archive with SHA-256 before extracting the executable.
+The OpenCode 1 resolver is used only for explicit runtime operations or fresh runtime provisioning. It selects the latest stable `1.x.y` GitHub release and matching platform artifact. It requires an official asset digest and verifies the downloaded archive with SHA-256 before extracting the executable.
 
-The OpenCode 2 resolver selects the official npm `latest` dist-tag for `@opencode/cli`, requires an exact stable `2.x.y`, verifies the host optional package and SHA-512 SRI metadata, and extracts only the executable from the verified tarball.
+The OpenCode 2 resolver is used only for explicit runtime operations or fresh runtime provisioning. It selects the official npm `latest` dist-tag for `@opencode/cli`, requires an exact stable `2.x.y`, verifies the host optional package and SHA-512 SRI metadata, and extracts only the executable from the verified tarball.
 
 The resolved patch versions are compatibility observations and are not pinned in Anvil source. Network errors identify the official endpoint; a missing or invalid digest stops the operation rather than silently substituting another binary.
 
 ## Lifecycle
 
-- `make reforge` follows the first-install policy default or preserves the installed OpenCode major when rebuilding.
-- `make upgrade` updates Anvil and the selected runtime within that same major. It never changes OpenCode major implicitly.
+- `make reforge` reuses an existing healthy runtime exactly; only a fresh install resolves and provisions OpenCode.
+- `make upgrade` updates Anvil only, works offline, and preserves the exact validated OpenCode executable and version.
+- `make update-runtime` is the explicit same-major runtime update path; it resolves, rehearses, backs up and installs a candidate while preserving Anvil release/config.
 - `make migrate-runtime OPENCODE_MAJOR=N` is the explicit major migration path. It rehearses the target profile with copied state, verifies a full backup, performs postflight doctor, and rolls back on failure.
-- `make upgrade DRY_RUN=1` stages and rehearses without creating a live backup or changing user files.
+- `make upgrade DRY_RUN=1` uses local state and rehearses without release lookup, backup, or live changes.
 
 OpenCode 1 and 2 have different configuration and capability models. See [the official V2 V1 migration guide](https://dev.opencode.ai/v2/docs/migrate-v1/) for V2 field and plugin changes. Anvil runtime migration details are in [the 2.0-to-2.1 guide](migrations/v2-to-v2.1.md), [the 2.1-to-2.2 guide](migrations/v2.1-to-v2.2.md), and [the 2.2-to-2.3 guide](migrations/v2.2-to-v2.3.md).
 

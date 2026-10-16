@@ -18,7 +18,7 @@ OpenCode 2 uses plural `agents` and `plugins` fields and ordered permissions. It
 
 ## Capabilities and progressive enhancement
 
-Callers use the central capability record rather than treating every Anvil release as one OpenCode generation. OpenCode 2 adds the local `anvil-core` plugin, native `anvil-knowledge` Reference, ordered permissions, bounded tool output, and structured stats JSON. OpenCode 1 uses its native config, commands/skills, and text stats; shared Python memory search and direct reads of explicitly named knowledge files provide the fallbacks. `scripts/capabilities.py` combines those runtime capabilities with live Databricks CLI/profile/resource status in one text or JSON result.
+Callers use the central capability record rather than treating every Anvil release as one OpenCode generation. OpenCode 2 adds the local `anvil-core` plugin, native `anvil-knowledge` Reference, ordered permissions, bounded tool output, and structured stats JSON. OpenCode 1 uses its native config, commands/skills, and text stats; shared Python memory search and direct reads of explicitly named knowledge files provide the fallbacks. `scripts/capabilities.py` combines those runtime capabilities with local Databricks provider and saved-profile metadata in one text or JSON result. Inventory commands do not check authentication, identity, compute, warehouse, or system-catalog reachability.
 
 The V2 plugin uses the OpenCode 2 API to register only bounded, read-only `anvil_memory_search`. It does not add context hooks, prompt mutation, model routing, retries, memory writes, or custom compaction. Capabilities are visible through `make capabilities` and `make doctor`.
 
@@ -34,15 +34,33 @@ CLI installation is attempted only by an explicit `make databricks-setup`; the u
 
 The Databricks skill references a dated official system-table snapshot, focused schema notes, and query recipes. Live workspace discovery takes precedence for a task. SQL recipes aggregate and bound operational data before it enters model context. Remote execution requires a clear user request; compute and workload mutations are not exposed by the adapter, and stopped compute is never started automatically. FinOps output distinguishes measured usage identifiers, list-price estimates, and approximate shared-compute allocation, with a deterministic evidence-quality score.
 
-## Upgrade lifecycle
+## Lifecycle dependency matrix
 
-`make upgrade` is the normal Anvil product upgrade. It detects the installed OpenCode major, resolves a stable candidate within that same major, generates and audits the matching profile, and rehearses against a private copy of config/data/state/memory. It then verifies a full backup, applies the exact rehearsed candidate, records runtime/migration metadata, runs postflight doctor, and rolls back after a post-mutation failure. `DRY_RUN=1` ends after rehearsal without creating a live backup or changing user state.
+| Command | Network required | May mutate OpenCode | May download OpenCode | Release lookup |
+|---|---:|---:|---:|---:|
+| `make inspect` | No | No | No | No |
+| `make test` | No | No | No | No |
+| `make reforge` with a healthy runtime | No | No; reuses exact runtime | No | No |
+| `make reforge` without a runtime | Yes, for provisioning | Yes; first install only | Yes | Yes |
+| `make upgrade` | No | No; config and Anvil metadata only | No | No |
+| `make update-runtime` | Yes | Yes | Yes | Yes, same major |
+| `make migrate-runtime OPENCODE_MAJOR=N` | Yes | Yes | Yes | Yes, requested major |
+| `make doctor` | No | No | No | No |
+| `make capabilities` | No | No | No | No |
+| `make stats` | No | No | No | No |
+| `make rollback` | No | Only when the selected backup has runtime scope | No | No |
+| `make databricks-setup DRY_RUN=1` | No | No | No | No |
+| `make databricks-setup` | May, for provider installation or workspace validation | No | No OpenCode; may install Databricks CLI/SDK | No OpenCode lookup |
 
-`make migrate-runtime OPENCODE_MAJOR=N` is the only operation that changes runtime major. It uses the same rehearsal, backup, postflight, and rollback path with a target adapter named explicitly by the user. `make reforge` follows the default runtime policy on first installation and preserves the detected runtime major when rebuilding.
+`make upgrade` validates local runtime discovery, builds the matching Anvil config, rehearses against copied state, creates an Anvil-scoped backup, applies Anvil files, and runs local doctor. It preserves the exact OpenCode executable/version, OpenCode data/state, and Databricks preferences. `DRY_RUN=1` stops before a live backup or mutation.
+
+`make update-runtime` owns same-major runtime resolution and installation. It rehearses the new executable against the current config and copied user state, backs up runtime/config/data/state, installs the candidate, runs doctor, and rolls back on failure while retaining the installed Anvil release. `make migrate-runtime OPENCODE_MAJOR=N` is the explicit major change and also updates the Anvil config adapter required by that runtime. `make reforge` reuses the exact supported runtime already installed; only a genuinely fresh installation provisions OpenCode.
+
+`make inspect`, `make doctor`, and `make capabilities` use central local runtime discovery and local Databricks provider inventory. Authentication or workspace reachability is checked only by an explicit operation that requires it. Network-dependent runtime behavior is limited to fresh provisioning, `update-runtime`, and `migrate-runtime`.
 
 ## Backup and rollback boundary
 
-Backups are private, timestamped directories under `$XDG_DATA_HOME/anvil/backups/`. Checksums cover each archived artifact. OpenCode databases and authentication/session state are copied and restored as opaque files; Anvil does not read or edit undocumented database schemas. `make rollback` restores the exact saved config, installer runtime, data, and state snapshot instead of attempting a database downgrade.
+Backups are private, timestamped directories under `$XDG_DATA_HOME/anvil/backups/`. Checksums cover each archived artifact and each manifest records Anvil-only or runtime scope. An Anvil-only snapshot restores Anvil config and metadata while leaving OpenCode executable/data/state untouched. Runtime snapshots restore the saved config, installer runtime, data, and state instead of attempting a database downgrade.
 
 Anvil memory is outside the OpenCode config/runtime snapshot. Before rollback, current Markdown memory is archived separately under `$XDG_DATA_HOME/anvil/memory-backups/`, then remains at its normal path. Source registry and knowledge also remain in the Anvil data root.
 
@@ -56,4 +74,4 @@ Distillation is a model-guided semantic workflow defined in `config/commands/dis
 
 ## Runtime controls and installation record
 
-Each installation record stores Anvil version separately from OpenCode runtime major/version and release artifact digest. Native stats use the current runtime interface and do not maintain a separate telemetry store. See [runtime compatibility](runtime-compatibility.md) for tested versions and capability gaps.
+Each installation record stores Anvil version separately from OpenCode runtime major/version and release artifact digest when available. The local runtime-state cache stores an absolute executable path, version, generation, adapter, file identity hash, and verification time; discovery re-executes the binary and checks policy before use. Native stats use the current runtime interface and do not maintain a separate telemetry store. See [runtime compatibility](runtime-compatibility.md) for tested versions and capability gaps.

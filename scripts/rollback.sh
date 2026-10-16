@@ -51,6 +51,9 @@ PY
 
 saved_config_dir="$(read_manifest previous.config_dir)"
 saved_install_dir="$(read_manifest previous.installer_dir)"
+backup_scope="$(read_manifest scope)"
+[[ -n "$backup_scope" ]] || backup_scope=runtime
+[[ "$backup_scope" == anvil || "$backup_scope" == runtime ]] || { anvil_error "Unknown rollback snapshot scope: $backup_scope"; exit 1; }
 saved_data_dir="$(read_manifest previous.data_dir)"
 saved_state_dir="$(read_manifest previous.state_dir)"
 [[ "$saved_config_dir" == "$ANVIL_CONFIG_DIR" ]] || { anvil_error 'Backup belongs to a different OpenCode config path.'; exit 1; }
@@ -79,11 +82,17 @@ path_line="$(read_manifest previous.path_update.line)"
 path_file_preexisted="$(read_manifest previous.path_update.file_preexisted)"
 printf '%s\n' 'Anvil Rollback' '──────────────'
 printf 'Backup                %s\n' "$backup_real"
+printf 'Rollback scope        %s\n' "$backup_scope"
 printf 'Prior OpenCode        %s\n' "${old_version:-not found}"
 printf 'Restore global config %s\n' "$config_present"
-printf 'Restore installer dir %s\n' "$installer_present"
-printf 'Restore OpenCode data %s\n' "${data_present:-not captured by this backup}"
-printf 'Restore OpenCode state %s\n' "${state_present:-not captured by this backup}"
+if [[ "$backup_scope" == runtime ]]; then
+  printf 'Restore installer dir %s\n' "$installer_present"
+  printf 'Restore OpenCode data %s\n' "${data_present:-not captured by this backup}"
+  printf 'Restore OpenCode state %s\n' "${state_present:-not captured by this backup}"
+else
+  printf 'OpenCode runtime      PRESERVE EXACTLY\n'
+  printf 'OpenCode data/state   PRESERVE EXACTLY\n'
+fi
 
 memory_backup=""
 if [[ -d "$ANVIL_MEMORY_DIR" ]]; then
@@ -103,17 +112,19 @@ if [[ -d "$ANVIL_MEMORY_DIR" ]]; then
 fi
 
 config_archive="$backup_real/config.tar.gz"
-installer_archive="$backup_real/opencode-root.tar.gz"
 python3 "$ROOT/scripts/archive.py" restore "$config_archive" "$ANVIL_CONFIG_DIR" "$config_present"
-python3 "$ROOT/scripts/archive.py" restore "$installer_archive" "$ANVIL_INSTALL_ROOT" "$installer_present"
-if [[ -n "$saved_data_dir" && "$data_present" != "" ]]; then
-  python3 "$ROOT/scripts/archive.py" restore "$backup_real/opencode-data.tar.gz" "$saved_data_dir" "$data_present"
-fi
-if [[ -n "$saved_state_dir" && "$state_present" != "" ]]; then
-  python3 "$ROOT/scripts/archive.py" restore "$backup_real/opencode-state.tar.gz" "$saved_state_dir" "$state_present"
+if [[ "$backup_scope" == runtime ]]; then
+  installer_archive="$backup_real/opencode-root.tar.gz"
+  python3 "$ROOT/scripts/archive.py" restore "$installer_archive" "$ANVIL_INSTALL_ROOT" "$installer_present"
+  if [[ -n "$saved_data_dir" && "$data_present" != "" ]]; then
+    python3 "$ROOT/scripts/archive.py" restore "$backup_real/opencode-data.tar.gz" "$saved_data_dir" "$data_present"
+  fi
+  if [[ -n "$saved_state_dir" && "$state_present" != "" ]]; then
+    python3 "$ROOT/scripts/archive.py" restore "$backup_real/opencode-state.tar.gz" "$saved_state_dir" "$state_present"
+  fi
 fi
 
-if [[ "$path_added" == yes && -n "$path_file" && -n "$path_line" ]]; then
+if [[ "$backup_scope" == runtime && "$path_added" == yes && -n "$path_file" && -n "$path_line" ]]; then
   safe_path="$(python3 - "$ANVIL_HOME_DIR" "$path_file" <<'PY'
 import os, sys
 home, path = map(os.path.abspath, sys.argv[1:])
@@ -140,7 +151,19 @@ else
   rm -f -- "$ANVIL_DATA_DIR/installation.json"
 fi
 
-if [[ -n "$old_version" ]]; then
+runtime_state_file="$(read_manifest previous.runtime_state_file)"
+runtime_state_present="$(read_manifest previous.runtime_state_present)"
+if [[ -n "$runtime_state_file" && "$runtime_state_file" == "$ANVIL_DATA_DIR/runtime.json" ]]; then
+  if [[ "$runtime_state_present" == yes && -f "$backup_real/previous-runtime.json" ]]; then
+    mkdir -p -- "$ANVIL_DATA_DIR"
+    install -m 0600 -- "$backup_real/previous-runtime.json" "$runtime_state_file.tmp"
+    mv -f -- "$runtime_state_file.tmp" "$runtime_state_file"
+  else
+    rm -f -- "$runtime_state_file"
+  fi
+fi
+
+if [[ "$backup_scope" == runtime && -n "$old_version" ]]; then
   previous_path="$(read_manifest previous.executable_path)"
   if [[ -n "$previous_path" && -x "$previous_path" ]]; then
     restored_version="$("$previous_path" --version 2>/dev/null | head -n 1 || true)"

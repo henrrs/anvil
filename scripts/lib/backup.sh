@@ -4,9 +4,12 @@
 
 anvil_backup_create() {
   local candidate_version="$1" path_plan_json="$2"
+  local scope="${3:-runtime}"
   local backup_dir stamp suffix executable executable_resolved executable_version
-  local config_present=no installer_present=no path_file path_line path_added=no path_file_preexisted=no
+  local config_present=no installer_present=no path_file path_line path_added=no path_file_preexisted=no runtime_state_file runtime_state_present=no
   local data_dir="$ANVIL_DATA_HOME/opencode" state_dir="$ANVIL_STATE_DIR" data_present=no state_present=no previous_anvil_version=""
+
+  [[ "$scope" == anvil || "$scope" == runtime ]] || { anvil_error "Unknown backup scope: $scope"; return 2; }
 
   if [[ "${ANVIL_TEST_MODE:-0}" == 1 && "${ANVIL_TEST_FAIL_BACKUP:-0}" == 1 ]]; then
     anvil_error 'Injected backup creation failure before archive creation.'
@@ -29,28 +32,25 @@ anvil_backup_create() {
     config_present=yes
     python3 "$ANVIL_ROOT/scripts/archive.py" create "$ANVIL_CONFIG_DIR" "$backup_dir/config.tar.gz" "$(basename -- "$ANVIL_CONFIG_DIR")"
   fi
-  if [[ -e "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_ROOT" ]]; then
+  if [[ "$scope" == runtime && ( -e "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_ROOT" ) ]]; then
     installer_present=yes
     python3 "$ANVIL_ROOT/scripts/archive.py" create "$ANVIL_INSTALL_ROOT" "$backup_dir/opencode-root.tar.gz" "$(basename -- "$ANVIL_INSTALL_ROOT")"
   fi
-  if [[ -e "$data_dir" || -L "$data_dir" ]]; then
+  if [[ "$scope" == runtime && ( -e "$data_dir" || -L "$data_dir" ) ]]; then
     data_present=yes
     python3 "$ANVIL_ROOT/scripts/archive.py" create "$data_dir" "$backup_dir/opencode-data.tar.gz" "$(basename -- "$data_dir")"
   fi
-  if [[ -e "$state_dir" || -L "$state_dir" ]]; then
+  if [[ "$scope" == runtime && ( -e "$state_dir" || -L "$state_dir" ) ]]; then
     state_present=yes
     python3 "$ANVIL_ROOT/scripts/archive.py" create "$state_dir" "$backup_dir/opencode-state.tar.gz" "$(basename -- "$state_dir")"
   fi
 
-  executable="$(type -P opencode 2>/dev/null || true)"
-  if [[ -z "$executable" && -x "$ANVIL_INSTALLED_BINARY" ]]; then
-    executable="$ANVIL_INSTALLED_BINARY"
-  fi
+  executable="$(anvil_open_code_binary || true)"
   executable_resolved=""
   executable_version=""
   if [[ -n "$executable" && -f "$executable" ]]; then
     executable_resolved="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$executable")"
-    if [[ -r "$executable_resolved" ]]; then
+    if [[ "$scope" == runtime && -r "$executable_resolved" ]]; then
       cp -- "$executable_resolved" "$backup_dir/previous-opencode-binary"
       chmod 700 -- "$backup_dir/previous-opencode-binary"
       executable_version="$("$executable" --version 2>/dev/null | head -n 1 || true)"
@@ -70,6 +70,13 @@ except (OSError,ValueError):
 PY
 )"
   fi
+  runtime_state_file="$ANVIL_DATA_DIR/runtime.json"
+  runtime_state_present=no
+  if [[ -f "$runtime_state_file" ]]; then
+    cp -- "$runtime_state_file" "$backup_dir/previous-runtime.json"
+    chmod 600 -- "$backup_dir/previous-runtime.json"
+    runtime_state_present=yes
+  fi
   if [[ -n "${ANVIL_PREVIOUS_ANVIL_VERSION:-}" ]]; then
     previous_anvil_version="$ANVIL_PREVIOUS_ANVIL_VERSION"
   fi
@@ -83,10 +90,12 @@ PY
   if [[ "$(python3 -c 'import json,sys; print("yes" if json.loads(sys.argv[1]).get("file_preexisted") else "no")' "$path_plan_json")" == yes ]]; then path_file_preexisted=yes; fi
 
   python3 "$ANVIL_ROOT/scripts/state.py" create "$backup_dir" \
+    --scope "$scope" \
     --config-dir "$ANVIL_CONFIG_DIR" --config-present "$config_present" \
     --installer-dir "$ANVIL_INSTALL_ROOT" --installer-present "$installer_present" \
     --data-dir "$data_dir" --data-present "$data_present" \
     --state-dir "$state_dir" --state-present "$state_present" \
+    --runtime-state-file "$runtime_state_file" --runtime-state-present "$runtime_state_present" \
     --previous-anvil-version "$previous_anvil_version" \
     --candidate-version "$candidate_version" \
     --executable-path "$executable" --executable-resolved "$executable_resolved" \

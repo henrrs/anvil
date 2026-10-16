@@ -2,6 +2,20 @@
 
 Release notes for user-visible Anvil changes. See [version history](docs/versions/README.md) and [release discipline](docs/RELEASING.md).
 
+## [2.3.1] - 2026-10-16
+
+### Fixed
+
+- Decoupled `make upgrade` from OpenCode release discovery and installation. Anvil can now be upgraded offline while preserving the exact validated OpenCode executable and version.
+- Added `make update-runtime` for explicit same-major OpenCode updates; `make migrate-runtime OPENCODE_MAJOR=N` remains the explicit major migration path.
+- Made `make reforge` reuse an existing healthy supported runtime, while clean first-use provisioning remains an explicit network-capable path.
+- Made inspect, doctor, and capabilities report local Databricks provider state without querying workspace identity, compute, warehouses, or system tables.
+- Added runtime discovery state with validation, PATH visibility reporting, scope-aware backups/rollback, offline lifecycle guards, and a repository hygiene check for the retired standalone identifier.
+
+### Release choice
+
+This is a patch release because it corrects lifecycle coupling and local status behavior without changing Anvil's supported feature set or persistent user-data formats.
+
 ## [2.3.0] - 2026-10-16
 
 ### Added

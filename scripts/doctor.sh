@@ -29,7 +29,7 @@ PY
 fi
 
 printf '%s\n' 'Anvil Doctor' '────────────'
-databricks_status="$(python3 "$ROOT/scripts/databricks.py" status --format text 2>/dev/null || true)"
+databricks_status="$(python3 "$ROOT/scripts/databricks.py" status --local --format text 2>/dev/null || true)"
 printf '%s\n' "$databricks_status"
 printf 'Anvil version          %s' "$expected_anvil"
 if [[ "$recorded_anvil" == "$expected_anvil" ]]; then
@@ -128,6 +128,11 @@ fi
 path_binary="$(type -P opencode 2>/dev/null || true)"
 if [[ -n "$path_binary" && "$path_binary" != "$ANVIL_INSTALLED_BINARY" && "$binary" == "$ANVIL_INSTALLED_BINARY" ]]; then
   anvil_warn "PATH resolves OpenCode to $path_binary instead of the Anvil-managed executable"
+  warning=1
+fi
+runtime_path_ready="$(python3 -c 'import json,sys; print("yes" if json.loads(sys.argv[1]).get("runtime", {}).get("path_ready") else "no")' "$(anvil_runtime_json)")"
+if [[ "$runtime_path_ready" == no ]]; then
+  anvil_warn "OpenCode is usable through its validated absolute path but its directory is not in this session's PATH."
   warning=1
 fi
 

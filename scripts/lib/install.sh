@@ -23,6 +23,7 @@ anvil_build_config() {
   install -m 0600 -- "$ANVIL_ROOT/scripts/memory.py" "$destination/scripts/memory.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/source_registry.py" "$destination/scripts/source_registry.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/runtime.py" "$destination/scripts/runtime.py"
+  install -m 0600 -- "$ANVIL_ROOT/scripts/runtime_state.py" "$destination/scripts/runtime_state.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/databricks.py" "$destination/scripts/databricks.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/databricks_finops.py" "$destination/scripts/databricks_finops.py"
   rm -rf -- "$destination/scripts/databricks_providers"
@@ -39,6 +40,7 @@ anvil_apply_config() {
   [[ -f "$ANVIL_CONFIG_DIR/opencode.jsonc" ]] || { anvil_error 'Anvil global config copy failed.'; return 1; }
   chmod 600 -- "$ANVIL_CONFIG_DIR/opencode.jsonc"
   chmod 700 -- "$ANVIL_CONFIG_DIR/scripts/memory.py" "$ANVIL_CONFIG_DIR/scripts/source_registry.py" "$ANVIL_CONFIG_DIR/scripts/runtime.py" \
+    "$ANVIL_CONFIG_DIR/scripts/runtime_state.py" \
     "$ANVIL_CONFIG_DIR/scripts/databricks.py" "$ANVIL_CONFIG_DIR/scripts/databricks_finops.py"
   find "$ANVIL_CONFIG_DIR/scripts/databricks_providers" -type f -exec chmod 600 -- {} +
 }

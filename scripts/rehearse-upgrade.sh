@@ -5,8 +5,8 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source "$ROOT/scripts/lib/common.sh"
 source "$ROOT/scripts/lib/install.sh"
 
-if [[ $# -ne 4 ]]; then
-  printf 'usage: rehearse-upgrade.sh CANDIDATE_BINARY EXACT_VERSION SOURCE_MAJOR TARGET_MAJOR\n' >&2
+if [[ $# -lt 4 || $# -gt 5 ]]; then
+  printf 'usage: rehearse-upgrade.sh CANDIDATE_BINARY EXACT_VERSION SOURCE_MAJOR TARGET_MAJOR [reuse-config]\n' >&2
   exit 2
 fi
 candidate="$1"
@@ -14,6 +14,7 @@ expected_version="${2#opencode }"
 expected_version="${expected_version#v}"
 source_major="$3"
 target_major="$4"
+reuse_config="${5:-no}"
 [[ "$source_major" == 1 || "$source_major" == 2 ]] || { anvil_error "Unsupported source OpenCode major: $source_major"; exit 2; }
 [[ "$target_major" == 1 || "$target_major" == 2 ]] || { anvil_error "Unsupported target OpenCode major: $target_major"; exit 2; }
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/anvil-upgrade-rehearsal.XXXXXX")"
@@ -68,15 +69,19 @@ fi
 
 rehearsal_env=(env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$test_home" \
   XDG_CONFIG_HOME="$test_config_home" XDG_DATA_HOME="$test_data_home" XDG_STATE_HOME="$test_state_home" \
-  TMPDIR="${TMPDIR:-/tmp}" LANG="${LANG:-C.UTF-8}" ANVIL_ROOT="$ROOT" \
+  TMPDIR="${TMPDIR:-/tmp}" LANG="${LANG:-C.UTF-8}" OPENCODE_DISABLE_AUTOUPDATE=1 ANVIL_ROOT="$ROOT" \
   ANVIL_TEST_MODE="${ANVIL_TEST_MODE:-0}" \
   ANVIL_TEST_FAIL_CANDIDATE_VALIDATION="${ANVIL_TEST_FAIL_CANDIDATE_VALIDATION:-0}" \
   ANVIL_TEST_FAIL_REHEARSAL="${ANVIL_TEST_FAIL_REHEARSAL:-0}")
-"${rehearsal_env[@]}" bash -c '
-  source "$ANVIL_ROOT/scripts/lib/common.sh"
-  source "$ANVIL_ROOT/scripts/lib/install.sh"
-  anvil_build_config "$1" "$2" yes "$3"
-' _ "$tmp_root/target-config" "$tmp_root/v1-config" "$target_major"
+if [[ "$reuse_config" == yes ]]; then
+  cp -a -- "$tmp_root/v1-config/." "$tmp_root/target-config/"
+else
+  "${rehearsal_env[@]}" bash -c '
+    source "$ANVIL_ROOT/scripts/lib/common.sh"
+    source "$ANVIL_ROOT/scripts/lib/install.sh"
+    anvil_build_config "$1" "$2" yes "$3"
+  ' _ "$tmp_root/target-config" "$tmp_root/v1-config" "$target_major"
+fi
 mkdir -p -- "$test_config_home/opencode"
 cp -a -- "$tmp_root/target-config/." "$test_config_home/opencode/"
 chmod 600 -- "$test_config_home/opencode/opencode.jsonc"

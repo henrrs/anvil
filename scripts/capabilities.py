@@ -34,7 +34,7 @@ def main() -> int:
     args = parser.parse_args()
     adapter = databricks_module()
     runtime_state = runtime.capabilities(args.binary, args.major)
-    databricks_state = adapter.status()
+    databricks_state = adapter.local_status()
     databricks_capabilities = adapter.capabilities(databricks_state)
     if args.format == "json":
         print(json.dumps({

@@ -1,6 +1,6 @@
 # Anvil version capability matrix
 
-Anvil's product version and OpenCode runtime generation are independent. Anvil 2.1 established OpenCode 1.x and 2.x adapters; Anvil 2.2 added optional Databricks execution to both; Anvil 2.3 adds provider independence without changing runtime requirements. See [runtime compatibility](../runtime-compatibility.md) for version floors and validation methods.
+Anvil's product version and OpenCode runtime generation are independent. Anvil 2.1 established OpenCode 1.x and 2.x adapters; Anvil 2.2 added optional Databricks execution to both; Anvil 2.3 adds provider independence without changing runtime requirements. Anvil 2.3.1 corrects lifecycle coupling while keeping the same runtime matrix. See [runtime compatibility](../runtime-compatibility.md) for version floors and validation methods.
 
 | Capability | Anvil V1 | Anvil 2.1 + OpenCode 1 | Anvil 2.1 + OpenCode 2 | Anvil 2.2 + OpenCode 1 | Anvil 2.2 + OpenCode 2 | Anvil 2.3 + OpenCode 1 | Anvil 2.3 + OpenCode 2 |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -26,3 +26,5 @@ Anvil's product version and OpenCode runtime generation are independent. Anvil 2
 The Databricks rows use shared provider/filesystem primitives and do not require OpenCode 2, MCP, or a model-specific feature. Databricks remains optional when providers or workspace access are unavailable. CLI setup is explicit; a blocked CLI can use SDK fallback where supported.
 
 See [V1 history](v1.md), [V2 release](v2.md), [Anvil 2.1 release](v2.1.md), [Anvil 2.2 release](v2.2.md), [Anvil 2.3 release](v2.3.md), [the changelog](../../CHANGELOG.md), [the 2.1-to-2.2 migration guide](../migrations/v2.1-to-v2.2.md), and [the 2.2-to-2.3 migration guide](../migrations/v2.2-to-v2.3.md).
+
+Anvil 2.3.1 keeps the capability matrix unchanged and separates Anvil upgrades from OpenCode runtime updates. See [Anvil 2.3.1 release notes](v2.3.1.md).

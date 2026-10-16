@@ -40,6 +40,41 @@ for folder in (root/"scripts",root/"tests"):
 PY
 pass 'Shell and Python syntax'
 
+python3 - "$ROOT" <<'PY' || fail 'runtime independence boundary or repository identifier hygiene'
+import re,subprocess,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+tracked=subprocess.run(["git","-C",str(root),"ls-files","-z"],capture_output=True,check=True).stdout.split(bytes([0]))
+for relative in filter(None,tracked):
+    path=root / relative.decode("utf-8",errors="strict")
+    try: text=path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError,OSError): continue
+    assert not re.search(r"\b[x][p]\b",text,re.IGNORECASE), f"retired standalone identifier in tracked file: {path.relative_to(root)}"
+
+makefile=(root/"Makefile").read_text(encoding="utf-8")
+upgrade=(root/"scripts/anvil_upgrade.sh").read_text(encoding="utf-8")
+assert "@bash scripts/anvil_upgrade.sh" in makefile, "make upgrade does not use the Anvil-only lifecycle"
+assert "@bash scripts/upgrade.sh --update-runtime" in makefile, "same-major runtime update target is missing"
+for forbidden in ("install-opencode.sh", "opencode_release.py", "opencode_v1_release.py", "latest-version"):
+    assert forbidden not in upgrade, f"Anvil-only upgrade imports runtime resolver/installer: {forbidden}"
+assert "--local" in (root/"scripts/doctor.sh").read_text(encoding="utf-8")
+assert "local_status()" in (root/"scripts/databricks.py").read_text(encoding="utf-8")
+print("OK local Anvil-upgrade dependency boundary and tracked-file hygiene")
+PY
+pass 'Anvil upgrade cannot call runtime release resolution and the retired identifier stays absent'
+
+python3 - "$ROOT" <<'PY' || fail 'external network guard fixture'
+import importlib.util,os,sys
+from pathlib import Path
+path=Path(sys.argv[1])/"tests/fixtures/network-denied/sitecustomize.py"
+spec=importlib.util.spec_from_file_location("anvil_network_guard_fixture",path)
+module=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+assert module._local("127.0.0.1") and module._local("::1")
+assert not module._local("api.github.com") and not module._local("203.0.113.1")
+PY
+pass 'Offline lifecycle guard blocks external endpoints and permits loopback fixtures'
+
 python3 - "$ROOT" <<'PY' || fail 'npm registry error diagnostics'
 import importlib.util,sys,urllib.error
 from pathlib import Path

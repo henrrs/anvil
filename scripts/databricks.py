@@ -958,6 +958,42 @@ def status() -> dict[str, Any]:
     return value
 
 
+def local_status() -> dict[str, Any]:
+    """Return installed providers and saved preferences without workspace calls."""
+    providers = provider_snapshot()
+    prefs = load_preferences()
+    selected = prefs.get("selected_profile")
+    value: dict[str, Any] = {
+        "cli_installed": bool(providers["cli"].get("installed")),
+        "cli_path": providers["cli"].get("executable"),
+        "cli_version": providers["cli"].get("version"),
+        "cli_supported": providers["cli"].get("status") == "READY",
+        "cli_path_visible": providers["cli"].get("path_visible", False),
+        "cli_failure": providers["cli"].get("failure"),
+        "cli_setup_failure": providers["cli"].get("setup_failure"),
+        "cli_provider_status": providers["cli"].get("status"),
+        "cli_absolute_usable": providers["cli"].get("absolute_usable", False),
+        "sdk_installed": providers["sdk"].get("status") == "READY",
+        "sdk_python": providers["sdk"].get("python"),
+        "sdk_version": providers["sdk"].get("version"),
+        "sdk_isolated": providers["sdk"].get("isolated", False),
+        "vscode": providers["vscode"], "connect": providers["connect"],
+        "sql_connector": providers["sql_connector"],
+        "minimum_cli_version": "1.0.0",
+        "profile_configured": bool(selected), "profile_valid": None,
+        "selected_profile": selected, "workspace_host": prefs.get("workspace_host"),
+        "identity_reachable": None, "running_all_purpose_compute": None,
+        "running_sql_warehouses": None, "system_catalog_reachable": None,
+        "system_schemas": [], "unavailable_system_schemas": [],
+        "limitation": "Local provider inventory only; authentication and workspace were not checked",
+        "auth_checked": False, "workspace_checked": False,
+    }
+    cap_map = resolver.resolve_local(providers)
+    value["resolved_capabilities"] = cap_map
+    value["overall"] = "NOT_CHECKED"
+    return value
+
+
 def status_text(value: dict[str, Any]) -> str:
     if not value["cli_installed"]:
         cli = "NO"
@@ -970,6 +1006,8 @@ def status_text(value: dict[str, Any]) -> str:
         profile_state = "valid"
     elif value["profile_valid"] is False:
         profile_state = "invalid"
+    elif value.get("auth_checked") is False:
+        profile_state = "not checked"
     else:
         profile_state = "not configured"
     def yes_no(item: Any) -> str:
@@ -1020,7 +1058,8 @@ def capabilities(value: dict[str, Any]) -> dict[str, Any]:
         item = cap_map.get(capability, {})
         provider = item.get("provider")
         return resolver.PROVIDER_LABELS.get(provider, provider) if provider else item.get("state", "UNAVAILABLE")
-    auth = "READY" if value.get("profile_valid") is True else "NOT_CONFIGURED"
+    auth = ("NOT_CHECKED" if value.get("auth_checked") is False else
+            "READY" if value.get("profile_valid") is True else "NOT_CONFIGURED")
     sql_available = selected("sql.execute") not in {"UNAVAILABLE", "ASSISTED"}
     system = "YES" if value.get("system_catalog_reachable") is True else "NO" if value.get("system_catalog_reachable") is False else "UNKNOWN"
     return {
@@ -1051,6 +1090,7 @@ def main() -> int:
     sub = parser.add_subparsers(dest="action", required=True)
     status_parser = sub.add_parser("status")
     status_parser.add_argument("--format", choices=("json", "text"), default="text")
+    status_parser.add_argument("--local", action="store_true", help="Inspect local providers and saved preferences without contacting Databricks")
     capabilities_parser = sub.add_parser("capabilities")
     capabilities_parser.add_argument("--format", choices=("json", "text"), default="text")
     sub.add_parser("setup")
@@ -1093,11 +1133,11 @@ def main() -> int:
             print(json.dumps(result, indent=2))
             return 0
         if args.action == "status":
-            value = status()
+            value = local_status() if args.local else status()
             print(json.dumps(value, indent=2) if args.format == "json" else status_text(value))
             return 0
         if args.action == "capabilities":
-            value = capabilities(status())
+            value = capabilities(local_status())
             if args.format == "json":
                 print(json.dumps(value, indent=2))
             else:

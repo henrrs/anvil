@@ -15,20 +15,22 @@ def main() -> int:
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         raise ValueError("VERSION must contain one SemVer version")
-    release_doc = f"docs/versions/v{version.rsplit('.', 1)[0]}.md"
+    patch_release_doc = f"docs/versions/v{version}.md"
+    release_doc = patch_release_doc if (ROOT / patch_release_doc).is_file() else f"docs/versions/v{version.rsplit('.', 1)[0]}.md"
     required = {
         "CHANGELOG.md": [f"## [{version}]"],
-        release_doc: [f"# Anvil {version}"],
+        release_doc: [f"# Anvil {version}", "make update-runtime", "exact validated", "Network required"],
         "docs/versions/README.md": ["Anvil 2.2 + OpenCode 1", "Anvil 2.2 + OpenCode 2", "Anvil 2.3 + OpenCode 1", "Anvil 2.3 + OpenCode 2", "Databricks live system catalog and FinOps", "Runtime-major migration command", "do not require OpenCode 2"],
         "docs/versions/v2.1.md": ["Runtime Independence", "make upgrade", "migrate-runtime", "make capabilities", "/distill", "stale"],
         "docs/migrations/v1-to-v2.md": ["make upgrade", "migrate-runtime", "rollback", "rehearsal"],
         "docs/migrations/v2-to-v2.1.md": ["make upgrade", "migrate-runtime", "OPENCODE_MAJOR", "rollback", "runtime policy"],
         "docs/migrations/v2.1-to-v2.2.md": ["make upgrade", "DRY_RUN=1", "Databricks", "rollback", "OpenCode major"],
         "docs/migrations/v2.2-to-v2.3.md": ["make databricks-setup", "DRY_RUN=1", "SDK fallback", "rollback", "OpenCode major"],
-        "docs/runtime-compatibility.md": ["1.18.18", "2.0.0", "opencode-v1", "opencode-v2", "offline profile fixture", "minimum supported CLI", "1.0.0"],
-        "docs/RELEASING.md": ["PATCH", "MINOR", "MAJOR", "make test", "offline", "runtime compatibility"],
+        "docs/migrations/v2.3-to-v2.3.1.md": ["make upgrade", "make update-runtime", "OpenCode release endpoint", "Network required NO", "rollback"],
+        "docs/runtime-compatibility.md": ["1.18.18", "2.0.0", "opencode-v1", "opencode-v2", "offline profile fixture", "minimum supported CLI", "1.0.0", "make update-runtime", "exact validated OpenCode executable"],
+        "docs/RELEASING.md": ["PATCH", "MINOR", "MAJOR", "make test", "offline", "runtime compatibility", "runtime independence"],
         "docs/opencode-compatibility.md": ["dist-tag", "migrate-v1", "npm", "OpenCode 1.x and 2.x", "local CLI fixtures"],
-        "docs/architecture.md": ["Databricks capability", "official CLI", "live workspace discovery"],
+        "docs/architecture.md": ["Databricks capability", "official CLI", "live workspace discovery", "make update-runtime", "Network required", "Anvil-scoped backup"],
         "docs/databricks/README.md": ["official Databricks CLI", "make databricks-setup", "OpenCode 2"],
         "docs/databricks/authentication.md": ["OAuth U2M", "0600", "secure storage", "make databricks-setup"],
         "docs/databricks/execution.md": ["Command Execution API", "Statement Execution API", "100-row cap", "approval"],

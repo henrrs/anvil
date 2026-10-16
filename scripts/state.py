@@ -40,6 +40,7 @@ def create_manifest(args: argparse.Namespace) -> None:
     checksums = hash_files(root)
     manifest = {
         "format_version": 1,
+        "scope": args.scope,
         "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "candidate_version": args.candidate_version,
         "previous": {
@@ -51,6 +52,8 @@ def create_manifest(args: argparse.Namespace) -> None:
             "data_present": args.data_present == "yes",
             "state_dir": args.state_dir or None,
             "state_present": args.state_present == "yes",
+            "runtime_state_file": args.runtime_state_file or None,
+            "runtime_state_present": args.runtime_state_present == "yes",
             "anvil_version": args.previous_anvil_version or None,
             "executable_path": args.executable_path or None,
             "executable_resolved": args.executable_resolved or None,
@@ -71,6 +74,7 @@ def create_manifest(args: argparse.Namespace) -> None:
             "inspect": "inspect.txt",
             "binary_copy": "previous-opencode-binary" if (root / "previous-opencode-binary").is_file() else None,
             "previous_installation": "previous-installation.json" if (root / "previous-installation.json").is_file() else None,
+            "previous_runtime_state": "previous-runtime.json" if (root / "previous-runtime.json").is_file() else None,
         },
         "checksums": checksums,
     }
@@ -131,6 +135,9 @@ def main() -> int:
     p_create.add_argument("--data-present", choices=("yes", "no"), default="no")
     p_create.add_argument("--state-dir", default="")
     p_create.add_argument("--state-present", choices=("yes", "no"), default="no")
+    p_create.add_argument("--scope", choices=("anvil", "runtime"), default="runtime")
+    p_create.add_argument("--runtime-state-file", default="")
+    p_create.add_argument("--runtime-state-present", choices=("yes", "no"), default="no")
     p_create.add_argument("--previous-anvil-version", default="")
     p_create.add_argument("--candidate-version", required=True)
     p_create.add_argument("--executable-path", default="")

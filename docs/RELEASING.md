@@ -1,6 +1,6 @@
 # Releasing Anvil
 
-Anvil uses Semantic Versioning. Anvil 2.0 was the runtime/configuration migration to OpenCode 2. Starting with Anvil 2.1, Anvil product versions and OpenCode runtime majors are independent; runtime-major migration is explicit. Anvil 2.3 adds Databricks provider independence while retaining the 2.2 feature contracts and both OpenCode runtime profiles.
+Anvil uses Semantic Versioning. Anvil 2.0 was the runtime/configuration migration to OpenCode 2. Starting with Anvil 2.1, Anvil product versions and OpenCode runtime majors are independent; runtime-major migration is explicit. Anvil 2.3 adds Databricks provider independence while retaining the 2.2 feature contracts and both OpenCode runtime profiles. Anvil 2.3.1 corrects runtime independence by removing OpenCode release-service availability from the Anvil upgrade path.
 
 ## Version bumps
 
@@ -13,7 +13,7 @@ Anvil uses Semantic Versioning. Anvil 2.0 was the runtime/configuration migratio
 
 1. Update `VERSION`.
 2. Add the release to `CHANGELOG.md`.
-3. Add or update `docs/versions/vN.md`, the capability matrix, and [runtime compatibility](runtime-compatibility.md).
+3. Add or update `docs/versions/vN.md`; a separately documented patch may use `docs/versions/vN.N.N.md`. Update the capability matrix and [runtime compatibility](runtime-compatibility.md).
 4. Add migration instructions when config, runtime policy, backup, rollback, or persistent data behavior changes.
 5. Update relevant ADRs when runtime adapters, capabilities, or lifecycle semantics change.
 6. Recheck current official OpenCode 1 and 2 compatibility and update `docs/opencode-compatibility.md`.
@@ -21,4 +21,4 @@ Anvil uses Semantic Versioning. Anvil 2.0 was the runtime/configuration migratio
 8. If a release claim requires live OpenCode or Databricks compatibility, run and record a separate authorized smoke check; never describe fixture validation as a live service test.
 9. Verify that the implementation, tests, compatibility document, changelog, version history, and capability matrix agree.
 
-The `make test` suite includes deterministic provider, install-double, PATH, SDK fallback, VS Code discovery, state-security, dry-run, version-documentation, harness, query-recipe, FinOps, runtime-independence, credential-boundary, and repository-hygiene checks. It rejects a `VERSION` without matching changelog, version, capability, compatibility, and migration documentation. It does not resolve external runtime releases or contact a Databricks workspace.
+The `make test` suite includes deterministic provider, install-double, PATH, SDK fallback, VS Code discovery, state-security, dry-run, version-documentation, harness, query-recipe, FinOps, runtime-independence, credential-boundary, and repository-hygiene checks. It denies external socket connections during local lifecycle tests while allowing loopback for isolated runtime fixtures. It rejects a `VERSION` without matching changelog, version, capability, compatibility, and migration documentation. It does not resolve external runtime releases or contact a Databricks workspace.

@@ -1,7 +1,7 @@
 # Anvil runtime compatibility
 
 **Checked:** 2026-10-16 (UTC)
-**Anvil release:** `2.3.0`
+**Anvil release:** `2.3.1`
 **Policy:** OpenCode 1.x and 2.x supported; default major `1`; automatic major upgrade disabled.
 
 | Anvil | OpenCode runtime | Minimum | 2.3 offline profile fixture | Adapter | Support |
@@ -9,7 +9,7 @@
 | 2.3.x | 1.x | 1.18.18 | 1.18.18 | `opencode-v1` | Supported |
 | 2.3.x | 2.x | 2.0.0 | 2.0.0 | `opencode-v2` | Supported |
 
-The 2.3 mandatory suite validates both adapter contracts using checked-in local CLI fixtures. It does not download or claim to smoke-test a live OpenCode release. The last recorded official candidate resolution in the preceding runtime release documentation was OpenCode 1 `1.19.3` and OpenCode 2 `2.0.31`; use the official release references below to revalidate live candidates before future releases.
+The 2.3.1 mandatory suite validates both adapter contracts using checked-in local CLI fixtures and denies external network access during core lifecycle tests. It does not download or claim to smoke-test a live OpenCode release. The last recorded official candidate resolution in the preceding runtime release documentation was OpenCode 1 `1.19.3` and OpenCode 2 `2.0.31`; use the official release references below to revalidate live candidates before future releases.
 
 ## Common and runtime-specific capabilities
 
@@ -40,11 +40,12 @@ The CLI provider uses `databricks auth profiles`, non-sensitive `databricks auth
 
 ## Lifecycle and migration
 
-- `make reforge` follows the first-install policy default and retains the detected runtime major when rebuilding.
-- `make upgrade` updates Anvil and preserves the installed OpenCode major.
-- `make migrate-runtime OPENCODE_MAJOR=N` is the explicit runtime-major change operation.
-- `make upgrade DRY_RUN=1` and runtime migration dry runs stage and rehearse without changing live user files.
-- `make rollback` restores the latest verified runtime/config/data/state snapshot. Anvil's current Markdown memory remains portable and is archived separately.
+- `make upgrade` updates Anvil only and preserves the exact validated OpenCode executable and version; it does not require network access.
+- `make update-runtime` explicitly resolves and installs a stable update within the current major.
+- `make migrate-runtime OPENCODE_MAJOR=N` explicitly changes runtime major after adapter rehearsal.
+- `make reforge` reuses an existing healthy runtime; a clean first installation may resolve and download the policy-selected runtime.
+- `make inspect`, `make doctor`, and `make capabilities` use local runtime and provider state. Authentication/workspace status is not checked by inventory commands.
+- `make rollback` follows the verified snapshot scope: Anvil-only snapshots preserve OpenCode exactly; runtime snapshots restore config/runtime/data/state. Anvil's current Markdown memory remains portable and is archived separately.
 
 OpenCode databases remain opaque files. Runtime-specific behavior is exercised using offline OpenCode CLI fixtures in `make test`; live candidate release and digest verification are part of installation/upgrade, not the mandatory test suite.
 

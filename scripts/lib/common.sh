@@ -57,11 +57,7 @@ anvil_remove_managed_tree() {
 }
 
 anvil_open_code_binary() {
-  if [[ -x "$ANVIL_INSTALLED_BINARY" ]]; then
-    printf '%s\n' "$ANVIL_INSTALLED_BINARY"
-  else
-    type -P opencode 2>/dev/null || true
-  fi
+  python3 "$ANVIL_ROOT/scripts/runtime_state.py" discover --format path 2>/dev/null || true
 }
 
 anvil_open_code_version() {
@@ -70,4 +66,12 @@ anvil_open_code_version() {
   if [[ -n "$bin" && -x "$bin" ]]; then
     "$bin" --version 2>/dev/null | head -n 1 || true
   fi
+}
+
+anvil_runtime_json() {
+  python3 "$ANVIL_ROOT/scripts/runtime_state.py" discover --format json
+}
+
+anvil_runtime_record() {
+  python3 "$ANVIL_ROOT/scripts/runtime_state.py" record --format json
 }

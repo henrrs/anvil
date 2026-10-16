@@ -72,11 +72,23 @@ def parse_version(value: str | None) -> tuple[int, int, int] | None:
 
 
 def inspect_binary(binary: str | None = None) -> tuple[str | None, str | None, int | None]:
-    selected = binary or shutil.which("opencode")
+    if binary:
+        selected = binary
+    else:
+        try:
+            from runtime_state import discover
+            result = discover()
+            runtime = result.get("runtime") or {}
+            selected = runtime.get("executable")
+        except (ImportError, OSError, ValueError, KeyError):
+            selected = shutil.which("opencode")
     if not selected:
         return None, None, None
     try:
-        result = subprocess.run([selected, "--version"], capture_output=True, text=True, timeout=10, check=True)
+        environment = os.environ.copy()
+        environment["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
+        result = subprocess.run([selected, "--version"], capture_output=True, text=True,
+                                timeout=10, check=True, env=environment)
     except (OSError, subprocess.SubprocessError):
         return selected, None, None
     output = (result.stdout or result.stderr).strip().splitlines()

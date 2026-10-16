@@ -93,9 +93,7 @@ def fixture(temp: pathlib.Path) -> dict[str, pathlib.Path]:
     fake_binary.write_text(
         "#!/usr/bin/env bash\n"
         "if [[ \"${1:-}\" == --version ]]; then printf 'opencode v1.19.0\\n'; "
-        "elif [[ \"${1:-}\" == debug && \"${2:-}\" == paths ]]; then printf 'config fixture\\ndata fixture\\n'; "
-        "elif [[ \"${1:-}\" == stats ]]; then printf 'Fixture native statistics\\n'; "
-        "else exit 0; fi\n",
+        f"else exec {shlex.quote(str(FIXTURES / 'bin' / 'opencode-v1'))} \"$@\"; fi\n",
         encoding="utf-8",
     )
     fake_binary.chmod(0o755)
@@ -146,9 +144,26 @@ def env_for(paths: dict[str, pathlib.Path], **extra: str) -> dict[str, str]:
         "TMPDIR": "/tmp",
         "LANG": "C.UTF-8",
         "ANVIL_DATABRICKS_CLI": "/nonexistent/anvil-test-databricks",
+        "ANVIL_VSCODE_CLI": "/nonexistent/anvil-test-code",
     }
     result.update(extra)
     return result
+
+
+def offline_env(paths: dict[str, pathlib.Path], temp: pathlib.Path, **extra: str) -> dict[str, str]:
+    log = temp / "network-attempts.log"
+    log.unlink(missing_ok=True)
+    prior_pythonpath = os.environ.get("PYTHONPATH", "")
+    guard = str(ROOT / "tests" / "fixtures" / "network-denied")
+    env = env_for(paths, PYTHONPATH=os.pathsep.join(part for part in (guard, prior_pythonpath) if part),
+                  ANVIL_NETWORK_GUARD_LOG=str(log), **extra)
+    return env
+
+
+def assert_no_external_network(temp: pathlib.Path) -> None:
+    log = temp / "network-attempts.log"
+    check(not log.exists() or not log.read_text(encoding="utf-8").strip(),
+          f"offline lifecycle attempted external network access: {log.read_text(encoding='utf-8') if log.exists() else ''}")
 
 
 def run(command: list[str], env: dict[str, str], *, cwd: pathlib.Path = ROOT, expected: int = 0) -> subprocess.CompletedProcess[str]:
@@ -218,7 +233,7 @@ def rehearsal_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
 def reforge_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
     paths = fixture(temp)
     paths["binary"].unlink()
-    env = env_for(paths,
+    env = offline_env(paths, temp,
         ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper), ANVIL_YES="1",
         PATH="/usr/bin:/bin",
     )
@@ -232,20 +247,201 @@ def reforge_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
     check(installation["anvil_version"] == (ROOT / "VERSION").read_text().strip() and installation["version"] == VERSION_V1, "reforge did not follow first-install runtime policy")
     check(installation["runtime_major"] == 1, "first-install reforge ignored the approved OpenCode 1 policy")
     check("Status: HEALTHY" in first.stdout and "Status: HEALTHY" in second.stdout, "reforge postflight doctor failed")
+    assert_no_external_network(temp)
     print("PASS first-install reforge follows the OpenCode 1 policy and remains repeatable")
 
 
 def reforge_preserves_v2_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
     paths = fixture(temp)
     use_v2_profile(paths, temp, wrapper)
-    env = env_for(paths, ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper), ANVIL_YES="1")
+    original_binary = file_hash(paths["binary"])
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper), ANVIL_YES="1")
     proc = run(["/usr/bin/make", "--no-print-directory", "reforge"], env)
     installation = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
     config = json.loads((paths["config"] / "opencode.jsonc").read_text(encoding="utf-8"))
     check(installation["runtime_major"] == 2 and installation["version"].startswith("2."), "reforge changed an existing OpenCode 2 runtime")
+    check(file_hash(paths["binary"]) == original_binary, "reforge changed the exact existing OpenCode 2 executable")
     check("agents" in config and "agent" not in config, "reforge did not retain the OpenCode 2 config adapter")
     check("Status: HEALTHY" in proc.stdout, "OpenCode 2 reforge postflight doctor failed")
+    assert_no_external_network(temp)
     print("PASS make reforge preserves the selected OpenCode 2 runtime profile")
+
+
+def local_inventory_and_external_runtime_test(temp: pathlib.Path) -> None:
+    paths = fixture(temp)
+    external_dir = paths["home"] / ".local" / "bin"
+    external_dir.mkdir(parents=True)
+    external_binary = external_dir / "opencode"
+    shutil.move(paths["binary"], external_binary)
+    paths["binary"] = external_binary
+    shutil.rmtree(paths["home"] / ".opencode")
+    run([sys.executable, str(ROOT / "scripts" / "runtime_state.py"), "record", "--binary", str(external_binary)],
+        env_for(paths))
+    env = offline_env(paths, temp, PATH="/usr/bin:/bin")
+
+    inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
+    check("OpenCode installed     True" in inspect.stdout and "OpenCode usable        True" in inspect.stdout,
+          "inspect confused an absolute executable outside PATH with an absent runtime")
+    check("PATH integration      NOT READY" in inspect.stdout, "inspect did not report PATH readiness separately")
+    for target in ("doctor", "capabilities", "stats"):
+        run(["/usr/bin/make", "--no-print-directory", target], env)
+    run(["/usr/bin/make", "--no-print-directory", "databricks-setup", "DRY_RUN=1"], env)
+    dry = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env)
+    check(str(external_binary) in dry.stdout and "Network required      NO" in dry.stdout,
+          "offline Anvil upgrade did not select the validated absolute runtime")
+    assert_no_external_network(temp)
+    print("PASS inspect, doctor, capabilities, stats, and Anvil dry-run are local; absolute runtime discovery survives PATH loss")
+
+
+def upgrade_external_runtime_is_offline_test(temp: pathlib.Path) -> None:
+    paths = fixture(temp)
+    external_dir = paths["home"] / ".local" / "bin"
+    external_dir.mkdir(parents=True)
+    external_binary = external_dir / "opencode"
+    shutil.move(paths["binary"], external_binary)
+    paths["binary"] = external_binary
+    shutil.rmtree(paths["home"] / ".opencode")
+    run([sys.executable, str(ROOT / "scripts" / "runtime_state.py"), "record", "--binary", str(external_binary)],
+        env_for(paths))
+    before_hash = file_hash(external_binary)
+    before_startup = (paths["home"] / ".bashrc").read_text(encoding="utf-8")
+    env = offline_env(paths, temp, PATH="/usr/bin:/bin", ANVIL_YES="1")
+    proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
+    installation = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
+    backup = pathlib.Path(installation["migration"]["backup"])
+    check(file_hash(external_binary) == before_hash, "Anvil upgrade changed an external OpenCode executable")
+    check(not (paths["home"] / ".opencode").exists(), "Anvil upgrade created a managed OpenCode runtime tree")
+    check((paths["home"] / ".bashrc").read_text(encoding="utf-8") == before_startup,
+          "Anvil upgrade edited shell startup PATH")
+    check(installation["binary"] == str(external_binary), "Anvil metadata did not retain the selected absolute executable")
+    runtime_state = json.loads((paths["anvil_data"] / "runtime.json").read_text(encoding="utf-8"))["runtime"]
+    check(runtime_state["executable"] == str(external_binary) and runtime_state["version"] == "1.19.0",
+          "validated runtime state did not record the selected absolute executable/version")
+    check(runtime_state["identity"]["sha256"] == hashlib.sha256(external_binary.read_bytes()).hexdigest(),
+          "runtime state did not retain a current executable identity hash")
+    check((paths["anvil_data"] / "runtime.json").stat().st_mode & 0o777 == 0o600,
+          "runtime state file is not private")
+    check(json.loads((backup / "manifest.json").read_text(encoding="utf-8"))["scope"] == "anvil",
+          "Anvil upgrade used a runtime-scoped backup")
+    check("OpenCode 1.19.0 was preserved exactly" in proc.stderr,
+          "Anvil upgrade did not report preservation of the exact runtime")
+    assert_no_external_network(temp)
+    print("PASS Anvil upgrade with an external PATH-hidden runtime is offline and changes no OpenCode or PATH files")
+
+
+def anvil_upgrade_rollback_test(temp: pathlib.Path) -> None:
+    paths = fixture(temp)
+    before = {
+        "config": tree_hash(paths["config"]), "binary": file_hash(paths["binary"]),
+        "data": tree_hash(paths["data_opencode"]), "state": tree_hash(paths["state_opencode"]),
+        "installation": file_hash(paths["anvil_data"] / "installation.json"),
+        "memory": tree_hash(paths["memory"]),
+    }
+    env = offline_env(paths, temp, ANVIL_YES="1", ANVIL_TEST_FAIL_AFTER_CONFIG="1")
+    proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env, expected=2)
+    after = {
+        "config": tree_hash(paths["config"]), "binary": file_hash(paths["binary"]),
+        "data": tree_hash(paths["data_opencode"]), "state": tree_hash(paths["state_opencode"]),
+        "installation": file_hash(paths["anvil_data"] / "installation.json"),
+        "memory": tree_hash(paths["memory"]),
+    }
+    check(after == before, "Anvil-only rollback did not restore metadata/config while preserving runtime and user state")
+    check("Automatic Anvil rollback completed" in proc.stderr, "Anvil-only failure did not report successful scoped rollback")
+    backups = list((paths["anvil_data"] / "backups").iterdir())
+    check(len(backups) == 1 and json.loads((backups[0] / "manifest.json").read_text(encoding="utf-8"))["scope"] == "anvil",
+          "failed Anvil upgrade did not retain its verified Anvil-only recovery snapshot")
+    assert_no_external_network(temp)
+    print("PASS Anvil-only post-mutation failure restores Anvil files without changing OpenCode runtime/data/state")
+
+
+def update_runtime_test(temp: pathlib.Path, wrapper_v1: pathlib.Path) -> None:
+    paths = fixture(temp)
+    staged_config = temp / "current-anvil-v1-config"
+    run(["bash", "-c", "source \"$ANVIL_ROOT/scripts/lib/common.sh\"; "
+         "source \"$ANVIL_ROOT/scripts/lib/install.sh\"; anvil_build_config \"$1\" \"$2\" yes 1",
+         "_", str(staged_config), str(paths["config"])],
+        env_for(paths, ANVIL_ROOT=str(ROOT)))
+    shutil.rmtree(paths["config"])
+    shutil.move(str(staged_config), paths["config"])
+    installation = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
+    installation.update({"anvil_version": "2.2.0", "version": "1.19.0", "runtime_major": 1,
+                         "binary": str(paths["binary"])})
+    write_json(paths["anvil_data"] / "installation.json", installation)
+    updated_candidate = temp / "opencode-v1-update-candidate"
+    updated_candidate.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"${1:-}\" == --version ]]; then printf 'opencode v1.20.0\\n'; "
+        f"else exec {shlex.quote(str(FIXTURES / 'bin' / 'opencode-v1'))} \"$@\"; fi\n",
+        encoding="utf-8",
+    )
+    updated_candidate.chmod(0o755)
+    before_config = tree_hash(paths["config"])
+    before_data = tree_hash(paths["data_opencode"])
+    before_state = tree_hash(paths["state_opencode"])
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(updated_candidate), ANVIL_YES="1")
+    proc = run(["/usr/bin/make", "--no-print-directory", "update-runtime"], env)
+    updated = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
+    check(updated["version"] == "1.20.0" and updated["runtime_major"] == 1,
+          "same-major runtime update did not install the validated candidate")
+    check(updated["anvil_version"] == "2.2.0", "runtime-only update advanced the installed Anvil release")
+    check(tree_hash(paths["config"]) == before_config, "same-major runtime update changed Anvil config")
+    check(tree_hash(paths["data_opencode"]) == before_data and tree_hash(paths["state_opencode"]) == before_state,
+          "same-major runtime update rewrote OpenCode data/state")
+    backup = pathlib.Path(updated["migration"]["backup"])
+    check(json.loads((backup / "manifest.json").read_text(encoding="utf-8"))["scope"] == "runtime",
+          "runtime update did not create a runtime-scoped snapshot")
+    check("Anvil 2.2.0 was preserved" in proc.stderr, "runtime update did not report Anvil release preservation")
+    assert_no_external_network(temp)
+    print("PASS make update-runtime changes OpenCode within the same major while preserving Anvil release/config")
+
+
+def release_403_boundary_test(temp: pathlib.Path) -> None:
+    paths = fixture(temp)
+    before_binary = file_hash(paths["binary"])
+    before_config = tree_hash(paths["config"])
+    before_data = tree_hash(paths["data_opencode"])
+    before_state = tree_hash(paths["state_opencode"])
+    before_installation = file_hash(paths["anvil_data"] / "installation.json")
+
+    env = offline_env(paths, temp, ANVIL_YES="1", ANVIL_NETWORK_GUARD_HTTP_403="1")
+    upgrade = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
+    assert_no_external_network(temp)
+    check(file_hash(paths["binary"]) == before_binary,
+          "make upgrade changed the exact runtime while a mocked release service returned HTTP 403")
+    check(tree_hash(paths["config"]) != before_config,
+          "make upgrade did not install Anvil changes while the mocked release service was unavailable")
+    check(tree_hash(paths["data_opencode"]) == before_data and tree_hash(paths["state_opencode"]) == before_state,
+          "make upgrade changed OpenCode user data/state during the HTTP 403 regression")
+    check("PRESERVE EXACT VERSION" in upgrade.stdout,
+          "Anvil upgrade plan omitted exact runtime preservation during the HTTP 403 regression")
+    check(file_hash(paths["anvil_data"] / "installation.json") != before_installation,
+          "HTTP 403 fixture did not exercise an Anvil upgrade independently first")
+
+    updated_anvil_binary = file_hash(paths["binary"])
+    updated_anvil_config = tree_hash(paths["config"])
+    updated_data = tree_hash(paths["data_opencode"])
+    updated_state = tree_hash(paths["state_opencode"])
+    updated_installation = file_hash(paths["anvil_data"] / "installation.json")
+    backups_before_runtime = sorted(path.name for path in (paths["anvil_data"] / "backups").glob("*"))
+    runtime_update = run(["/usr/bin/make", "--no-print-directory", "update-runtime"], env, expected=2)
+    check("HTTP 403" in runtime_update.stderr and "api.github.com" in runtime_update.stderr,
+          "explicit runtime update did not report the mocked GitHub HTTP 403 clearly")
+    check("remain unchanged" in runtime_update.stderr,
+          "explicit runtime update did not guarantee Anvil/runtime remain unchanged on lookup failure")
+    check(file_hash(paths["binary"]) == updated_anvil_binary and tree_hash(paths["config"]) == updated_anvil_config,
+          "failed runtime update changed the OpenCode executable or Anvil config")
+    check(tree_hash(paths["data_opencode"]) == updated_data and tree_hash(paths["state_opencode"]) == updated_state,
+          "failed runtime update changed OpenCode user data/state")
+    check(file_hash(paths["anvil_data"] / "installation.json") == updated_installation,
+          "failed runtime update changed Anvil installation metadata")
+    backups_after_runtime = sorted(path.name for path in (paths["anvil_data"] / "backups").glob("*"))
+    check(backups_after_runtime == backups_before_runtime,
+          "release lookup failure created an additional lifecycle backup despite no live mutation")
+    log = temp / "network-attempts.log"
+    attempts = log.read_text(encoding="utf-8").splitlines()
+    check(attempts == ["HTTP_403 https://api.github.com/repos/anomalyco/opencode/releases?per_page=100"],
+          f"HTTP 403 fixture did not isolate the expected runtime release request: {attempts!r}")
+    print("PASS mocked GitHub HTTP 403 cannot block make upgrade; update-runtime fails before mutation")
 
 
 def upgrade_test(
@@ -271,11 +467,13 @@ def upgrade_test(
         return env
 
     if external_binary:
-        doctor = run(["/usr/bin/make", "--no-print-directory", "doctor"], upgrade_env())
+        doctor_env = offline_env(paths, temp)
+        doctor_env["PATH"] = str(paths["binary"].parent) + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin")
+        doctor = run(["/usr/bin/make", "--no-print-directory", "doctor"], doctor_env)
         check("Status: UPGRADE AVAILABLE" in doctor.stdout, "doctor did not recognize an older Anvil install")
         check("make upgrade" in doctor.stderr, "doctor did not explain the Anvil product upgrade path")
-        stats = run(["/usr/bin/make", "--no-print-directory", "stats"], upgrade_env())
-        check("Fixture native statistics" in stats.stdout, "V1 native text stats were not forwarded")
+        stats = run(["/usr/bin/make", "--no-print-directory", "stats"], doctor_env)
+        check("Sessions" in stats.stdout and "Input" in stats.stdout, "V1 native text stats were not forwarded")
         check("ERROR" not in stats.stderr, "V1 stats should not report an error")
 
     original_config = tree_hash(paths["config"])
@@ -370,20 +568,26 @@ def upgrade_preserves_v1_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
     paths = fixture(temp)
     before_data = tree_hash(paths["data_opencode"])
     before_state = tree_hash(paths["state_opencode"])
-    env = env_for(paths, ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper), ANVIL_YES="1")
+    original_binary = file_hash(paths["binary"])
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper), ANVIL_YES="1")
     proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
     installed = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
     config = json.loads((paths["config"] / "opencode.jsonc").read_text(encoding="utf-8"))
-    check(installed["runtime_major"] == 1 and installed["version"].startswith("1."), "make upgrade changed OpenCode 1 major")
+    check(installed["runtime_major"] == 1 and installed["version"] == "1.19.0", "make upgrade changed the exact OpenCode 1 runtime version")
     check(installed["anvil_version"] == (ROOT / "VERSION").read_text().strip(), "make upgrade did not update the Anvil release independently")
     check(config.get("default_agent") == "anvil" and "agent" in config, "Anvil 2.3 V1 runtime config was not installed")
     check(config["provider"]["custom"]["api"] == "https://example.invalid/v1", "same-major Anvil upgrade lost V1 provider config")
     check(tree_hash(paths["data_opencode"]) == before_data and tree_hash(paths["state_opencode"]) == before_state, "make upgrade changed OpenCode data/state")
-    check("Target OpenCode major     1 (preserved)" in proc.stdout, "upgrade plan did not state that OpenCode major 1 is preserved")
+    check("Network required      NO" in proc.stdout and "PRESERVE EXACT VERSION" in proc.stdout, "upgrade plan did not state the offline exact-runtime invariant")
+    check(file_hash(paths["binary"]) == original_binary, "Anvil-only upgrade changed the OpenCode executable bytes")
+    backup = pathlib.Path(installed["migration"]["backup"])
+    manifest = json.loads((backup / "manifest.json").read_text(encoding="utf-8"))
+    check(manifest["scope"] == "anvil", "normal Anvil upgrade did not create an Anvil-scoped backup")
     check("Status: HEALTHY" in proc.stdout, "OpenCode 1 Anvil 2.3 doctor was not healthy")
     for section in ("Capabilities", "Stats", "Memory", "Knowledge", "Project overrides", "Version documentation"):
         check(section in proc.stdout, f"OpenCode 1 doctor omitted the {section} category")
     check("/distill               YES" in proc.stdout and "file-fallback" in proc.stdout, "OpenCode 1 doctor omitted core command or fallback capability status")
+    assert_no_external_network(temp)
     print("PASS make upgrade advances Anvil on OpenCode 1 without changing the runtime major")
 
 
@@ -392,7 +596,8 @@ def upgrade_preserves_v2_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
     use_v2_profile(paths, temp, wrapper)
     before_data = tree_hash(paths["data_opencode"])
     before_state = tree_hash(paths["state_opencode"])
-    env = env_for(paths, ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper), ANVIL_YES="1")
+    original_binary = file_hash(paths["binary"])
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper), ANVIL_YES="1")
     proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
     installed = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
     config = json.loads((paths["config"] / "opencode.jsonc").read_text(encoding="utf-8"))
@@ -400,11 +605,13 @@ def upgrade_preserves_v2_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
     check(installed["anvil_version"] == (ROOT / "VERSION").read_text().strip(), "make upgrade did not advance the Anvil release on OpenCode 2")
     check("agents" in config and "agent" not in config and "anvil-core" in str(config.get("plugins")), "OpenCode 2 profile was not retained by same-major upgrade")
     check(tree_hash(paths["data_opencode"]) == before_data and tree_hash(paths["state_opencode"]) == before_state, "OpenCode 2 upgrade changed opaque user data/state")
-    check("Target OpenCode major     2 (preserved)" in proc.stdout, "upgrade plan did not state that OpenCode major 2 is preserved")
+    check("Network required      NO" in proc.stdout and "PRESERVE EXACT VERSION" in proc.stdout, "upgrade plan did not state the offline exact-runtime invariant")
+    check(file_hash(paths["binary"]) == original_binary, "Anvil-only upgrade changed the OpenCode 2 executable bytes")
     check("Status: HEALTHY" in proc.stdout, "OpenCode 2 Anvil 2.3 doctor was not healthy")
     for section in ("Capabilities", "Stats", "Memory", "Knowledge", "Project overrides", "Version documentation"):
         check(section in proc.stdout, f"OpenCode 2 doctor omitted the {section} category")
     check("/distill               YES" in proc.stdout and "native-tool+file-fallback" in proc.stdout, "OpenCode 2 doctor omitted core command or native search capability status")
+    assert_no_external_network(temp)
     print("PASS make upgrade advances Anvil on OpenCode 2 without changing the runtime major")
 
 
@@ -419,7 +626,7 @@ def dry_run_test(temp: pathlib.Path, wrapper_v1: pathlib.Path, wrapper_v2: pathl
         (["upgrade", "DRY_RUN=1"], wrapper_v1),
         (["migrate-runtime", "OPENCODE_MAJOR=2", "DRY_RUN=1"], wrapper_v2),
     ):
-        env = env_for(paths, ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper), DRY_RUN="1")
+        env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper), DRY_RUN="1")
         proc = run(["/usr/bin/make", "--no-print-directory", *command], env)
         after = {
             "config": tree_hash(paths["config"]), "data": tree_hash(paths["data_opencode"]),
@@ -428,10 +635,15 @@ def dry_run_test(temp: pathlib.Path, wrapper_v1: pathlib.Path, wrapper_v2: pathl
         }
         check(after == before, f"dry-run {command[0]} changed live user state")
         check(not (paths["anvil_data"] / "backups").exists(), f"dry-run {command[0]} created a backup")
-        check("Dry run complete" in proc.stdout and "Candidate" in proc.stdout, f"dry-run {command[0]} did not report its staged plan")
-        check("Policy default major" in proc.stdout and "Current runtime capabilities" in proc.stdout, f"dry-run {command[0]} omitted runtime policy or current capabilities")
-        check("Target runtime profile capabilities" in proc.stdout and "search_backend" in proc.stdout, f"dry-run {command[0]} omitted target capability fallbacks")
-    print("PASS upgrade and explicit runtime migration dry-runs rehearse without live changes or backups")
+        if command[0] == "upgrade":
+            check("No changes performed" in proc.stdout and "Network required      NO" in proc.stdout and "PRESERVE EXACT VERSION" in proc.stdout,
+                  "Anvil dry-run omitted local exact-runtime plan")
+        else:
+            check("Dry run complete" in proc.stdout and "Candidate" in proc.stdout, f"dry-run {command[0]} did not report its staged plan")
+            check("Policy default major" in proc.stdout and "Current runtime capabilities" in proc.stdout, f"dry-run {command[0]} omitted runtime policy or current capabilities")
+            check("Target runtime profile capabilities" in proc.stdout and "search_backend" in proc.stdout, f"dry-run {command[0]} omitted target capability fallbacks")
+        assert_no_external_network(temp)
+    print("PASS Anvil upgrade dry-run is offline; explicit runtime migration dry-run preserves live state")
 
 
 def main() -> int:
@@ -488,6 +700,16 @@ def main() -> int:
         reforge_test(pathlib.Path(name), wrapper_v1)
     with tempfile.TemporaryDirectory(prefix="anvil-reforge-preserves-v2-", dir=TEST_ROOT) as name:
         reforge_preserves_v2_test(pathlib.Path(name), wrapper_v2)
+    with tempfile.TemporaryDirectory(prefix="anvil-local-inventory-", dir=TEST_ROOT) as name:
+        local_inventory_and_external_runtime_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-upgrade-external-runtime-", dir=TEST_ROOT) as name:
+        upgrade_external_runtime_is_offline_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-upgrade-rollback-scope-", dir=TEST_ROOT) as name:
+        anvil_upgrade_rollback_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-runtime-update-", dir=TEST_ROOT) as name:
+        update_runtime_test(pathlib.Path(name), wrapper_v1)
+    with tempfile.TemporaryDirectory(prefix="anvil-runtime-http-403-", dir=TEST_ROOT) as name:
+        release_403_boundary_test(pathlib.Path(name))
     with tempfile.TemporaryDirectory(prefix="anvil-upgrade-v1-preserves-runtime-", dir=TEST_ROOT) as name:
         upgrade_preserves_v1_test(pathlib.Path(name), wrapper_v1)
     with tempfile.TemporaryDirectory(prefix="anvil-upgrade-v2-preserves-runtime-", dir=TEST_ROOT) as name:

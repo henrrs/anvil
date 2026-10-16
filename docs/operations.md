@@ -2,7 +2,7 @@
 
 ## Inspect before changing state
 
-`make inspect` reports the OpenCode executable/version and installation paths, managed config/CLI paths, global agents, skills, plugins, MCPs and commands, safely detectable authentication/session presence, and current workspace overrides. It avoids printing credential values and does not change OpenCode state.
+`make inspect` reports local Anvil/OpenCode versions, the absolute executable, runtime adapter and compatibility, PATH readiness, local provider inventory, config paths, agents, skills, plugins, MCPs and commands, and current workspace overrides. It does not contact release services or a Databricks workspace.
 
 `make capabilities` answers which features are available on the detected runtime. `FORMAT=json make capabilities` emits machine-readable JSON. `make doctor` answers whether the installed Anvil/runtime combination is healthy.
 
@@ -15,9 +15,18 @@ make upgrade
 make doctor
 ```
 
-`make upgrade` updates Anvil and preserves the installed OpenCode major. It stages the latest stable candidate within that existing major, builds the matching runtime config, and rehearses against copies of config, OpenCode data/state, and Anvil Markdown memory under a temporary HOME/XDG tree. The candidate starts on copied state through its native stats command; Anvil validates its config, agent, commands and skills. Only after rehearsal succeeds does Anvil create and verify a complete backup, install the exact tested candidate, record migration metadata, and run postflight doctor. Failed postflight checks trigger rollback.
+`make upgrade` upgrades Anvil only and preserves the exact validated OpenCode executable and version. It uses local runtime discovery, builds the matching Anvil config, and rehearses with the local runtime against copied config, OpenCode data/state, and Anvil Markdown memory under a temporary HOME/XDG tree. It does not resolve a release, download or install OpenCode, edit `PATH`, or change OpenCode data/state. It creates an Anvil-scoped backup, applies Anvil files and metadata, and runs local doctor. Failed postflight checks restore Anvil config/metadata while leaving OpenCode untouched.
 
-`make upgrade DRY_RUN=1` performs candidate staging and isolated rehearsal, prints the target runtime profile and capability differences, then stops before a live backup or file change. Set `ANVIL_YES=1` only for reviewed non-interactive runs.
+`make upgrade DRY_RUN=1` is fully local and stops after rehearsal before a live backup or file change. It prints `Network required NO` and `PRESERVE EXACT VERSION`. Set `ANVIL_YES=1` only for reviewed non-interactive runs.
+
+## OpenCode runtime update
+
+```bash
+make update-runtime DRY_RUN=1
+make update-runtime
+```
+
+This explicit operation resolves and installs the latest stable supported OpenCode release within the current major. It rehearses against the current Anvil config and copied user state, backs up runtime/config/data/state, and updates the executable. It preserves the installed Anvil release and config. A release lookup or download failure leaves both products unchanged.
 
 ## Explicit runtime migration
 
@@ -32,7 +41,7 @@ Use `OPENCODE_MAJOR=1` for the reverse migration. The requested major must be su
 
 ## Reforge
 
-`make reforge` is the clean install/rebuild path for first install, explicit rebuild, or recovery from a corrupted managed setup. A first install follows `config/runtime-policy.json` (currently OpenCode 1). When a runtime already exists, reforge preserves its detected major. It stages and validates a candidate, creates a backup, applies the matching config adapter, installs the candidate, and runs doctor.
+`make reforge` rebuilds Anvil config using the exact existing healthy supported runtime and does not resolve or replace it. If OpenCode is genuinely absent, a first installation follows `config/runtime-policy.json` (currently OpenCode 1), and network access may be needed to resolve/install that runtime. An existing but unhealthy or unsupported executable is reported for explicit repair/update instead of silently replaced. Reforge creates an Anvil-only backup when reusing a runtime and a full runtime snapshot when provisioning one.
 
 Close OpenCode's TUI and background service before reforge, upgrade, or runtime migration. Anvil checks for an active same-user OpenCode process and aborts before copying if one is running, so the snapshot does not race a changing database.
 
@@ -40,13 +49,13 @@ OpenCode 1 stable candidates come from official GitHub releases and are checked 
 
 ## Doctor and stats
 
-`make doctor` checks Anvil release metadata, runtime support/profile, matching config adapter, agent policy, commands/skills, memory, knowledge access, source-registry validity/drift, migration metadata, and visible project overrides. It reports `HEALTHY`, `WARNING`, or `BROKEN` with exit codes `0`, `2`, or `1`. A supported older Anvil install is reported as `UPGRADE AVAILABLE` with exit code `0`.
+`make doctor` checks Anvil release metadata, local runtime support/profile, matching config adapter, agent policy, commands/skills, memory, knowledge access, source-registry validity/drift, migration metadata, local Databricks provider inventory, and visible project overrides. Databricks authentication, identity, compute, warehouses, and system catalog are reported as not checked. Doctor does not use OpenCode release services or contact a workspace. It reports `HEALTHY`, `WARNING`, or `BROKEN` with exit codes `0`, `2`, and `1`. A supported older Anvil install is reported as `UPGRADE AVAILABLE` with exit code `0`.
 
 `make stats` uses the detected runtime's native output. OpenCode 1 provides terminal text; OpenCode 2 provides structured JSON that Anvil formats. If stats are unavailable or fail, Anvil prints a notice and exits successfully without inventing token or cost values. No separate usage database is created.
 
 ## Backup and sensitive data
 
-Backups are stored under `$XDG_DATA_HOME/anvil/backups/<timestamp>/` with restrictive permissions. They include checksummed archives of global config, the `~/.opencode` managed installer directory, OpenCode data/state, inspection output, and installation metadata. OpenCode files remain opaque; Anvil does not print tokens, inspect undocumented SQLite tables, or modify their schemas. Provider/authentication/session state can be sensitive, so handle archives accordingly.
+Backups are stored under `$XDG_DATA_HOME/anvil/backups/<timestamp>/` with restrictive permissions. Each manifest records `anvil` or `runtime` scope. Anvil-scope snapshots contain managed config and Anvil runtime/installation metadata only. Runtime-scope snapshots also contain the `~/.opencode` installer directory, OpenCode data/state, inspection output, and executable backup. OpenCode files remain opaque; Anvil does not print tokens, inspect undocumented SQLite tables, or modify their schemas. Provider/authentication/session state can be sensitive, so handle runtime archives accordingly.
 
 The manifest records config/runtime/data/state paths, whether they existed, prior Anvil/OpenCode versions where available, candidate version, executable details, PATH update metadata, and archive checksums. Legacy installations without Anvil version metadata remain explicitly unversioned.
 
@@ -56,7 +65,7 @@ The manifest records config/runtime/data/state paths, whether they existed, prio
 make rollback
 ```
 
-Rollback selects the newest valid backup, verifies checksums, and confirms it belongs to the current home/XDG paths. It restores the saved config, installer directory/binary, OpenCode data, and state instead of attempting an in-place database downgrade.
+Rollback selects the newest valid backup, verifies checksums, and confirms it belongs to the current home/XDG paths. The snapshot scope determines what is restored: Anvil-only rollback restores Anvil config/metadata and preserves OpenCode executable/data/state; runtime rollback restores the saved config, installer directory/binary, OpenCode data, and state instead of attempting an in-place database downgrade.
 
 Before restoring, rollback archives current Anvil Markdown memory separately under `$XDG_DATA_HOME/anvil/memory-backups/` and leaves the live memory directory intact. Knowledge, source registry, and backup history remain under the Anvil data root.
 

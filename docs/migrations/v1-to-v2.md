@@ -1,6 +1,6 @@
 # Anvil V1 and OpenCode 1 runtime migration
 
-This guide covers Anvil V1 installations that use OpenCode 1. Current Anvil 2.x releases support OpenCode 1.x and 2.x; installing Anvil 2.2 does not require moving to OpenCode 2.
+This guide covers Anvil V1 installations that use OpenCode 1. Current Anvil 2.x releases support OpenCode 1.x and 2.x; upgrading Anvil does not require moving to OpenCode 2.
 
 ## Upgrade Anvil and keep OpenCode 1
 
@@ -13,7 +13,9 @@ make upgrade
 make doctor
 ```
 
-The upgrade rebuilds the global Anvil config using the OpenCode 1 adapter and updates the stable runtime candidate within 1.x. It preserves supported V1 provider settings, CLI/TUI preferences, Markdown memory, Anvil data, and opaque OpenCode data/state. The normal upgrade rehearsal, verified backup, doctor, and rollback safeguards still apply.
+The upgrade rebuilds the global Anvil config using the OpenCode 1 adapter and preserves the exact validated OpenCode executable/version. It uses local files only: no release lookup or runtime download is involved. Supported V1 provider settings, CLI/TUI preferences, Markdown memory, Anvil data, and opaque OpenCode data/state remain in place. `make rollback` restores the Anvil-scoped config/metadata snapshot and leaves the runtime untouched.
+
+To explicitly update OpenCode within 1.x, use `make update-runtime`. To change to OpenCode 2, use `make migrate-runtime OPENCODE_MAJOR=2`; this migration resolves the target runtime and builds the matching config adapter.
 
 ## Migrate the runtime to OpenCode 2
 
