@@ -3,14 +3,15 @@
 set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
-if [[ $# -ne 3 ]]; then
-  printf 'usage: validate-candidate.sh CANDIDATE CONFIG_DIR VERSION\n' >&2
+if [[ $# -lt 3 || $# -gt 4 ]]; then
+  printf 'usage: validate-candidate.sh CANDIDATE CONFIG_DIR VERSION [MAJOR]\n' >&2
   exit 2
 fi
 candidate="$1"
 config_source="$2"
 expected_version="${3#v}"
 expected_version="${expected_version#opencode }"
+runtime_major="${4:-${expected_version%%.*}}"
 temp_root="$(mktemp -d "${TMPDIR:-/tmp}/anvil-opencode-smoke.XXXXXX")"
 service_started=0
 service_pid=""
@@ -114,6 +115,37 @@ actual_version="$(normalize_version "$(env -i PATH="${PATH:-/usr/bin:/bin}" HOME
 if [[ "${ANVIL_TEST_MODE:-0}" == 1 && "${ANVIL_TEST_FAIL_CANDIDATE_VALIDATION:-0}" == 1 ]]; then
   printf 'ERROR injected candidate runtime validation failure.\n' >&2
   exit 1
+fi
+
+if [[ "$runtime_major" == 1 ]]; then
+  run_isolated() {
+    (cd -- "$ROOT" && env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$home" \
+      XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" XDG_STATE_HOME="$state_home" \
+      TMPDIR="${TMPDIR:-/tmp}" LANG="${LANG:-C.UTF-8}" OPENCODE_DISABLE_AUTOUPDATE=1 \
+      "$candidate" "$@")
+  }
+  run_isolated debug config > "$temp_root/config.json"
+  run_isolated debug skill > "$temp_root/skills.json"
+  python3 - "$temp_root" "$expected_version" <<'PY'
+import json,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+config=json.loads((root/"config.json").read_text(encoding="utf-8"))
+skills=json.loads((root/"skills.json").read_text(encoding="utf-8"))
+assert config.get("default_agent")=="anvil", "OpenCode 1 did not load the Anvil default agent"
+assert "model" not in config and "small_model" not in config, "Anvil pins a model"
+agent=config.get("agent",{}).get("anvil",{})
+assert agent.get("mode")=="primary", "OpenCode 1 did not load the Anvil primary agent"
+assert set(("remember","recall","distill")) <= set(config.get("command",{})), "Anvil Markdown commands were not loaded"
+permission=agent.get("permission",{})
+assert permission.get("*")=="deny" and permission.get("task")=="deny", "V1 deny-by-default/subagent policy did not load"
+items=skills if isinstance(skills,list) else skills.get("data",[])
+names={item.get("name") for item in items if isinstance(item,dict)}
+expected={"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion"}
+assert expected <= names, f"OpenCode 1 did not load all Anvil skills: {sorted(expected-names)}"
+print(f"OpenCode {sys.argv[2]}: V1 config, agent, commands and skills validated")
+PY
+  exit 0
 fi
 
 port="$(python3 - <<'PY'

@@ -22,7 +22,7 @@ This command is explicit authorization to create or update durable Anvil memory.
 9. Persist only through `memory.py write-json`, one atomic JSON memory at a time. Include `evidence` strings when multiple files or tests support the claim. Do not claim the write succeeded until the helper confirms it.
 10. After successful writes, record each local source using `source_registry.py record` with the exact JSON object returned by `inspect`, plus the final `memory_ids`. Include an empty list when the source yielded no durable claims. Never record a new hash until the source was fully reviewed.
 
-The installed helpers are under `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/scripts/`. Memory is Markdown under `${XDG_DATA_HOME:-$HOME/.local/share}/anvil/memory/`; the source registry is JSON under `${XDG_DATA_HOME:-$HOME/.local/share}/anvil/sources/`. Knowledge source files remain under the separate `anvil-knowledge` reference and are never rewritten by this command.
+The installed helpers are under `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/scripts/`. Memory is Markdown under `${XDG_DATA_HOME:-$HOME/.local/share}/anvil/memory/`; the source registry is JSON under `${XDG_DATA_HOME:-$HOME/.local/share}/anvil/sources/`. Knowledge source files remain under `${XDG_DATA_HOME:-$HOME/.local/share}/anvil/knowledge/`; OpenCode 2 exposes this path through the `anvil-knowledge` Reference, while OpenCode 1 uses ordinary file reads. Knowledge sources are never rewritten by this command.
 
 ## Result
 

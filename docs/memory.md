@@ -4,19 +4,19 @@
 
 Knowledge is the user-selected source material: architecture documents, policies, runbooks, standards, code, configuration, tests, or other explicitly named evidence. Memory is a compact derived claim that may help a future engineering decision. The knowledge source remains authoritative; memory carries a traceable summary. Current evidence appropriate to the question takes precedence over memory, and unsupported model assumptions come last.
 
-Anvil exposes a separate `$XDG_DATA_HOME/anvil/knowledge/` root as the native `anvil-knowledge` OpenCode Reference. Anvil does not synchronize or crawl knowledge directories. Users can place or link their own authorized materials there and name specific sources for `/distill`.
+Anvil keeps a separate `$XDG_DATA_HOME/anvil/knowledge/` root. OpenCode 2 exposes it as the native `anvil-knowledge` Reference; OpenCode 1 uses normal file reads for explicitly named or clearly relevant files. Anvil does not synchronize or crawl knowledge directories. Users can place or link their own authorized materials there and name specific sources for `/distill`.
 
 ## Storage and compatible format
 
 The memory source of truth is human-readable Markdown under `$XDG_DATA_HOME/anvil/memory/` (default `~/.local/share/anvil/memory/`). Existing V1 entries remain readable without migration or mass rewriting. Folder conventions are `company/`, `projects/`, `decisions/`, and `lessons/`; V1 types include `fact`, `decision`, `lesson`, and `project`.
 
-Entries use YAML frontmatter. V1 fields such as `id`, `type`, `scope`, `tags`, `source`, `confidence`, `created`, and `updated` remain supported. V2 treats `aliases`, `status`, and richer `source`/`evidence` metadata as optional. Useful status values are `sourced`, `corroborated`, `conflicted`, `historical`, and `uncertain`; missing fields are valid for older entries. Provenance may identify the source type, path/origin, section, line range, repository, commit, SHA-256, or explicit user-provided content when those details are actually available.
+Entries use YAML frontmatter. V1 fields such as `id`, `type`, `scope`, `tags`, `source`, `confidence`, `created`, and `updated` remain supported. Optional `aliases`, `status`, and richer `source`/`evidence` metadata remain valid. Useful status values are `sourced`, `corroborated`, `conflicted`, `historical`, and `uncertain`; missing fields are valid for older entries. Provenance may identify the source type, path/origin, section, line range, repository, commit, SHA-256, or explicit user-provided content when those details are actually available.
 
 Never persist actual credentials or secret values. A useful memory may describe a secret-handling policy without copying the secret itself.
 
 ## Retrieval
 
-`/recall` searches existing entries on request. The plugin tool `anvil_memory_search` permits bounded read-only retrieval in the normal agent workflow. Results are lexical, ranked from names, frontmatter, aliases and body, and limited to a small number of entries and excerpts. Unicode accents are normalized so a Portuguese query can match aliases on English entries. Search uses `rg` when present and falls back to Python when it is absent. Search does not rewrite memory.
+`/recall` searches existing entries on request. OpenCode 2's plugin tool `anvil_memory_search` permits bounded read-only retrieval in the normal agent workflow; OpenCode 1 uses the shared Python helper directly. Results are lexical, ranked from names, frontmatter, aliases and body, and limited to a small number of entries and excerpts. Unicode accents are normalized so a Portuguese query can match aliases on English entries. Search uses `rg` when present and falls back to Python when it is absent. If a registered source changes or goes missing, recall reports linked memories as potentially stale. Search does not rewrite memory.
 
 Memory is attributed context, not a source of truth. Verify consequential or version-sensitive claims against current source material. Preserve provenance and report conflicts rather than silently choosing one side.
 

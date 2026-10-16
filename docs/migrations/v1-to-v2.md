@@ -1,78 +1,57 @@
-# Anvil V1 to V2 migration
+# Anvil V1 and OpenCode 1 runtime migration
 
-## Prerequisites
+This guide covers Anvil V1 installations that use OpenCode 1. The current Anvil 2.1 release can run on supported OpenCode 1.x; installing Anvil 2.1 does not require moving to OpenCode 2.
 
-- Linux or macOS with Bash, Python 3.11+, `tar`, and network access to the official npm registry.
-- A supported Anvil V1 global config and matching OpenCode 1 executable. The executable can be under `~/.opencode/bin/opencode` or found on the current `PATH` (for example, a package-managed install).
-- A valid V1 Anvil global config and enough free disk space for a temporary copy of OpenCode data/state and a private backup.
-- Close OpenCode's TUI and background service before starting. Anvil checks for a running OpenCode process and stops before copying if it finds one.
+## Upgrade Anvil and keep OpenCode 1
 
-Read-only `make inspect` and `make doctor` can help identify the current setup. `make test` validates the current stable OpenCode 2 candidate in isolated directories.
-
-## What `make upgrade` does
-
-1. Confirms the current global config matches the V1 Anvil baseline (or a valid V2 config for a later V2 update) and an available OpenCode executable reports the matching generation. If OpenCode is on `PATH`, Anvil includes that executable in the verified rollback snapshot and leaves the external install untouched.
-2. Resolves the official npm `latest` tag once to an exact stable OpenCode 2 version, downloads its platform package, checks npm's SHA-512 integrity, and stages the exact executable.
-3. Builds the V2 config from repository templates, migrates supported V1 provider/model fields, and retains CLI/TUI preference files.
-4. Rehearses the candidate using a private temporary HOME/XDG environment. It copies the current global config, OpenCode data/state directories, and Anvil Markdown memory; applies V2 config there; starts OpenCode 2 against the copied state through native stats; and checks the candidate's actual agent, commands, skills, plugin, and knowledge Reference.
-5. Creates and verifies a restrictive, checksummed backup of global config, `~/.opencode`, OpenCode data, OpenCode state, previous installation metadata, executable version, and inspection output.
-6. Replaces the live config and executable with that same tested candidate, initializes the separate Anvil knowledge/source directories, writes migration metadata, and runs doctor.
-7. Automatically restores the verified snapshot if config replacement, installation, or postflight doctor fails.
-
-For automation, `ANVIL_YES=1 make upgrade` skips the single confirmation after the rehearsal. The upgrade still requires the same safety checks and backup.
-
-`make test` and `make upgrade` resolve the current stable candidate from the official npm registry. If the resolver reports an HTTP error, its message identifies the exact registry endpoint; check the machine's proxy/firewall access to `registry.npmjs.org` and retry. Anvil does not skip the published SHA-512 integrity check when the registry is unavailable.
-
-## OpenCode migration details
-
-The V2 candidate runs its normal runtime migration only against copied state during rehearsal. OpenCode databases and other state files are copied and archived as opaque files. Anvil does not query SQLite tables or try to downgrade a database schema.
-
-V1 provider definitions are converted to V2 `providers` with the documented `package`, `settings`, `headers`, `body`, and `modelID` forms where applicable. `cli.json`, `tui.json`, and `tui.jsonc` files are retained so OpenCode can perform its documented CLI preference migration on V2 terminal startup. The rehearsal tests native V2 startup and stats; it does not run an interactive TUI.
-
-## Data handling
-
-| Data | Upgrade behavior |
-|---|---|
-| OpenCode sessions/database | Copied to the rehearsal, retained in place for live migration, backed up opaquely |
-| Authentication | Copied as opaque state, never printed or used to make a model request during rehearsal |
-| Global OpenCode config | Converted to Anvil V2 and backed up in full |
-| CLI/TUI settings | Retained for OpenCode's native V2 preference migration |
-| Anvil commands and skills | Replaced with V2 Anvil commands/skills; the pre-upgrade config archive preserves the full V1 tree |
-| Anvil Markdown memory | Copied to rehearsal, left in place during upgrade, not rewritten |
-| Anvil knowledge | Separate from memory; its reference points to `$XDG_DATA_HOME/anvil/knowledge` |
-| OpenCode data/state | Backed up separately as opaque archives |
-| Backups | Stored under `$XDG_DATA_HOME/anvil/backups/<timestamp>/` with checksums and restrictive permissions |
-
-Custom provider definitions supported by V1 are migrated. Other user files placed inside the global OpenCode config tree may be replaced by the managed V2 Anvil tree; the full pre-upgrade tree is in the verified backup and can be restored with `make rollback`.
-
-## Post-upgrade checks
-
-`make upgrade` runs doctor after installation. Review:
+If the company-approved OpenCode 1 runtime should remain in place, upgrade only the Anvil product:
 
 ```bash
+make inspect
+make upgrade DRY_RUN=1
+make upgrade
+make doctor
+```
+
+The upgrade rebuilds the global Anvil config using the OpenCode 1 adapter and updates the stable runtime candidate within 1.x. It preserves supported V1 provider settings, CLI/TUI preferences, Markdown memory, Anvil data, and opaque OpenCode data/state. The normal upgrade rehearsal, verified backup, doctor, and rollback safeguards still apply.
+
+## Migrate the runtime to OpenCode 2
+
+If OpenCode 2 is explicitly approved, request a runtime migration:
+
+```bash
+make migrate-runtime OPENCODE_MAJOR=2 DRY_RUN=1
+make migrate-runtime OPENCODE_MAJOR=2
 make doctor
 make stats
 ```
 
-Doctor validates config and performs an isolated runtime smoke test without using the live OpenCode database. Stats reads OpenCode's native local usage data in standalone mode.
+The migration renders the native V2 config, maps supported V1 provider/model fields, retains CLI/TUI preference files, and stages one exact stable OpenCode 2 candidate from the official npm package. It verifies npm's SHA-512 integrity metadata before extraction. OpenCode 2 migration changes and plugins are based on the [official V2 V1 migration guide](https://dev.opencode.ai/v2/docs/migrate-v1/).
 
-## Rollback
+Before live changes, Anvil copies the config, OpenCode data/state, and Markdown memory into a private temporary HOME/XDG tree. The candidate runs native stats against copied state and Anvil checks the loaded V2 config, commands, skills, plugin, and Knowledge Reference. The rehearsal does not use provider credentials or make a model request. After rehearsal, Anvil creates and verifies a complete backup; postflight failure restores the prior V1 runtime and files.
 
-Run:
+Use `ANVIL_YES=1 make migrate-runtime OPENCODE_MAJOR=2` only for automation that has already reviewed the migration plan. `make rollback` restores the prior V1 config, runtime, data, and state without attempting an in-place database downgrade.
 
-```bash
-make rollback
-```
+## Compatibility and data handling
 
-Rollback restores the saved V1 config, installer tree/binary, OpenCode data, and OpenCode state. It does not attempt an in-place database downgrade. Current Anvil memory is archived before rollback and remains at `$XDG_DATA_HOME/anvil/memory/`.
+| Data | Anvil 2.1 on OpenCode 1 | Explicit migration to OpenCode 2 |
+|---|---|---|
+| OpenCode sessions/database | Left in place; backed up opaquely | Copied to rehearsal, left in place during migration, backed up opaquely |
+| Authentication | Not printed or used by rehearsal | Copied as opaque state; no provider request |
+| Global Anvil config | Rendered using singular V1 schema | Rendered using native V2 schema |
+| Provider definitions | Kept in V1 format | Supported provider/model fields mapped to V2 |
+| Commands and skills | Shared Markdown files | Shared Markdown files |
+| Memory and source registry | Same Markdown/JSON helpers | Same Markdown/JSON helpers |
+| Native memory search | Python file helper fallback | Bounded read-only Anvil plugin tool plus helper |
+| Knowledge files | Named files read directly | Native Reference plus direct file reads |
 
-If automatic rollback itself fails, the command reports the verified backup path. Keep the backup intact and inspect its manifest/checksums before any manual recovery.
+The managed global OpenCode config tree is replaced by Anvil's target profile. Other user files inside that tree are retained in the verified pre-migration backup and can be restored with rollback. Project-level, system, or organization-managed configuration is not deleted.
 
-## Failure behavior and known risks
+## Failure and rollback
 
-- A candidate/rehearsal failure aborts before live backup or mutation.
-- A backup creation or verification failure aborts before live mutation.
-- After the first live mutation, failures invoke rollback using the just-created verified snapshot.
-- A power loss, forced process termination, filesystem failure, or full disk can prevent both upgrade completion and automatic rollback. The backup remains the recovery source.
-- OpenCode data may contain credentials and session content. Backups are private to the user and should be handled accordingly.
-- System/organization/project settings and environment overrides can affect the effective OpenCode runtime outside Anvil's managed global config.
+- Candidate, profile-audit, or rehearsal failure stops before backup and live mutation.
+- Backup creation/verification failure stops before live mutation.
+- Failure after the first live change triggers rollback from the verified snapshot.
+- Power loss, disk exhaustion, or filesystem failure can interrupt both migration and automatic rollback; retain the backup directory for recovery.
+
+OpenCode databases are treated as opaque. Rehearsal starts the target runtime against copied state using its documented native stats path; it does not inspect SQLite tables or claim that every unexercised TUI/authentication flow was tested. For the current policy, version floor, and profile differences, see [runtime compatibility](../runtime-compatibility.md).

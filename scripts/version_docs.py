@@ -16,13 +16,17 @@ def main() -> int:
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         raise ValueError("VERSION must contain one SemVer version")
     major = version.split(".", 1)[0]
+    release_doc = f"docs/versions/v{version.rsplit('.', 1)[0]}.md"
     required = {
         "CHANGELOG.md": [f"## [{version}]"],
-        f"docs/versions/v{major}.md": [f"# Anvil {version}"],
-        "docs/versions/README.md": ["| Capability | V1 | V2 |", "make upgrade", "Migration rehearsal", "Memory search tool", "Knowledge References", "/distill", "make stats"],
-        "docs/migrations/v1-to-v2.md": ["make upgrade", "rollback", "rehearsal"],
-        "docs/RELEASING.md": ["PATCH", "MINOR", "MAJOR", "make test"],
-        "docs/opencode-compatibility.md": ["2.x.y", "dist-tag", "migrate-v1", "npm"],
+        release_doc: [f"# Anvil {version}"],
+        "docs/versions/README.md": ["| Capability | Anvil V1 | Anvil 2.x + OpenCode 1 | Anvil 2.x + OpenCode 2 |", "make upgrade", "source registry", "Native Reference", "/distill", "native stats", "Runtime-major migration command"],
+        "docs/versions/v2.1.md": ["Runtime Independence", "make upgrade", "migrate-runtime", "make capabilities", "/distill", "stale"],
+        "docs/migrations/v1-to-v2.md": ["make upgrade", "migrate-runtime", "rollback", "rehearsal"],
+        "docs/migrations/v2-to-v2.1.md": ["make upgrade", "migrate-runtime", "OPENCODE_MAJOR", "rollback", "runtime policy"],
+        "docs/runtime-compatibility.md": ["1.18.18", "opencode-v1", "opencode-v2", "tested candidate"],
+        "docs/RELEASING.md": ["PATCH", "MINOR", "MAJOR", "make test", "runtime compatibility"],
+        "docs/opencode-compatibility.md": ["2.x.y", "dist-tag", "migrate-v1", "npm", "OpenCode 1.x and 2.x"],
     }
     errors = []
     for relative, phrases in required.items():

@@ -8,6 +8,13 @@ source "$ROOT/scripts/lib/backup.sh"
 anvil_need python3 tar cp mv install chmod date
 
 ANVIL_VERSION="$(cat "$ROOT/VERSION")"
+operation="upgrade"
+if [[ "${1:-}" == --migrate-runtime ]]; then
+  operation="migrate-runtime"
+elif [[ $# -gt 0 ]]; then
+  anvil_error "Unknown upgrade operation: $1"
+  exit 2
+fi
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/anvil-upgrade.XXXXXX")"
 chmod 700 -- "$tmp_root"
 backup_dir=""
@@ -18,6 +25,7 @@ old_version=""
 old_binary=""
 old_anvil_version=""
 from_generation=0
+target_major=""
 
 cleanup_temp() {
   local base canonical
@@ -93,6 +101,28 @@ elif [[ "$from_generation" == 2 && "$old_major" != 2 ]]; then
   anvil_error "Anvil V2 config reports an OpenCode $old_major executable; refusing a mismatched update."
   exit 1
 fi
+if [[ "$old_major" != 1 && "$old_major" != 2 ]]; then
+  anvil_error "OpenCode $old_version is outside the supported 1.x/2.x runtime policy."
+  exit 1
+fi
+if [[ "$operation" == migrate-runtime ]]; then
+  target_major="${OPENCODE_MAJOR:-}"
+  if [[ "$target_major" != 1 && "$target_major" != 2 ]]; then
+    anvil_error 'Runtime migration requires OPENCODE_MAJOR=1 or OPENCODE_MAJOR=2.'
+    exit 2
+  fi
+  if [[ "$target_major" == "$old_major" ]]; then
+    anvil_error "OpenCode $old_major is already installed; use 'make upgrade' to update Anvil and that runtime."
+    exit 2
+  fi
+else
+  target_major="$old_major"
+fi
+if ! python3 "$ROOT/scripts/runtime.py" capabilities --major "$target_major" | python3 -c 'import json,sys; raise SystemExit(0 if json.load(sys.stdin)["runtime"]["supported"] else 1)'; then
+  anvil_error "OpenCode $target_major is not supported by this Anvil runtime policy."
+  exit 1
+fi
+policy_major="$(python3 "$ROOT/scripts/runtime.py" policy | python3 -c 'import json,sys; print(json.load(sys.stdin)["opencode"]["default_major"])')"
 
 old_anvil_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" "$from_generation" <<'PY'
 import json,sys
@@ -106,10 +136,27 @@ PY
 )"
 
 printf '%s\n' 'Anvil Upgrade' '─────────────'
-printf 'Current Anvil generation  V%d (%s)\n' "$from_generation" "$old_anvil_version"
+printf 'Anvil release             %s → %s\n' "${old_anvil_version:-unknown}" "$ANVIL_VERSION"
 printf 'Current OpenCode          %s\n' "$old_version"
 printf 'OpenCode executable       %s\n' "$old_binary"
+printf 'Target OpenCode major     %s (%s)\n' "$target_major" "$([[ "$old_major" == "$target_major" ]] && printf 'preserved' || printf 'explicit migration')"
 printf 'Managed configuration     %s\n' "$ANVIL_CONFIG_DIR"
+
+if [[ "${DRY_RUN:-0}" == 1 ]]; then
+  printf '\nAnvil Upgrade Plan\n────────────────────────────────\n'
+  printf 'Anvil                    %s → %s\n' "${old_anvil_version:-unknown}" "$ANVIL_VERSION"
+  printf 'OpenCode                 %s → OpenCode %s.x\n' "$old_version" "$target_major"
+  printf 'Current runtime major    %s\n' "$old_major"
+  printf 'Policy default major     %s\n' "$policy_major"
+  printf 'Major migration          %s\n' "$([[ "$old_major" == "$target_major" ]] && printf 'NO' || printf 'YES (explicit)')"
+  printf 'Runtime adapter          opencode-v%s → opencode-v%s\n' "$old_major" "$target_major"
+  printf 'Backup                   complete config/runtime/data/state snapshot before any live changes\n'
+  printf 'Rehearsal                isolated copy of config, data, state and Markdown memory\n'
+  printf '\nCurrent runtime capabilities\n'
+  python3 "$ROOT/scripts/runtime.py" capabilities --binary "$old_binary" --format text
+  printf '\nTarget runtime profile capabilities\n'
+  python3 "$ROOT/scripts/runtime.py" capabilities --major "$target_major" --format text
+fi
 
 release_json="$tmp_root/release.json"
 if [[ "${ANVIL_TEST_MODE:-0}" == 1 ]]; then
@@ -127,18 +174,30 @@ with open(sys.argv[1],"w",encoding="utf-8") as stream:
     json.dump({"version":sys.argv[2],"channel":"latest","published_at":None,"release_url":"isolated test candidate","asset":{"name":"fixture","integrity":"sha512-fixture"}},stream)
 PY
 else
-  bash "$ROOT/scripts/install-opencode.sh" resolve > "$release_json"
+  bash "$ROOT/scripts/install-opencode.sh" resolve "$target_major" > "$release_json"
   candidate_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["version"])' "$release_json")"
-  candidate="$(bash "$ROOT/scripts/install-opencode.sh" stage "$candidate_version" "$tmp_root/candidate")"
+  candidate="$(bash "$ROOT/scripts/install-opencode.sh" stage "$candidate_version" "$tmp_root/candidate" "$target_major")"
   cp -- "$tmp_root/candidate/release.json" "$release_json"
 fi
-[[ "$candidate_version" =~ ^2\.[0-9]+\.[0-9]+$ ]] || { anvil_error "Resolved candidate is not a stable OpenCode 2 version: $candidate_version"; exit 1; }
+[[ "$candidate_version" =~ ^${target_major}\.[0-9]+\.[0-9]+$ ]] || { anvil_error "Resolved candidate is not a stable OpenCode $target_major version: $candidate_version"; exit 1; }
 anvil_ok "Resolved and staged exact stable OpenCode $candidate_version"
 
 ready_config="$tmp_root/staged-config"
-anvil_build_config "$ready_config" "$ANVIL_CONFIG_DIR" yes
-python3 "$ROOT/scripts/configure.py" audit "$ready_config/opencode.jsonc"
-bash "$ROOT/scripts/rehearse-upgrade.sh" "$candidate" "$candidate_version"
+anvil_build_config "$ready_config" "$ANVIL_CONFIG_DIR" yes "$target_major"
+if [[ "$target_major" == 1 ]]; then
+  python3 "$ROOT/scripts/configure.py" audit-v1 "$ready_config/opencode.jsonc"
+else
+  python3 "$ROOT/scripts/configure.py" audit "$ready_config/opencode.jsonc"
+fi
+bash "$ROOT/scripts/rehearse-upgrade.sh" "$candidate" "$candidate_version" "$old_major" "$target_major"
+
+if [[ "${DRY_RUN:-0}" == 1 ]]; then
+  printf '\nCandidate                OpenCode %s\n' "$candidate_version"
+  printf 'Config                   %s runtime profile staged and audited\n' "opencode-v$target_major"
+  printf 'Migration rehearsal      passed against copied user state\n'
+  printf '\nDry run complete. No backup was created and no live files were changed.\n'
+  exit 0
+fi
 
 path_plan="$(python3 "$ROOT/scripts/path_edit.py" plan \
   --home "$ANVIL_HOME_DIR" --xdg-config-home "$ANVIL_CONFIG_HOME" \
@@ -149,8 +208,8 @@ if [[ "${ANVIL_YES:-0}" != 1 ]]; then
     anvil_error 'Upgrade needs one confirmation in an interactive terminal; set ANVIL_YES=1 only after reviewing the migration plan.'
     exit 2
   fi
-  printf '\nThe isolated migration rehearsal passed. make upgrade will replace the global config/runtime and preserve a complete snapshot before doing so.\n'
-  read -r -p 'Continue with Anvil upgrade? [y/N] ' answer
+  printf '\nThe isolated runtime rehearsal passed. This operation will apply the OpenCode %s Anvil profile and preserve a complete snapshot before changing live files.\n' "$target_major"
+  read -r -p 'Continue with Anvil operation? [y/N] ' answer
   [[ "$answer" == y || "$answer" == Y || "$answer" == yes || "$answer" == YES ]] || {
     anvil_log 'Upgrade cancelled; no live config, binary, OpenCode data or OpenCode state was changed.'
     exit 0
@@ -166,13 +225,13 @@ if [[ "${ANVIL_TEST_FAIL_AFTER_BACKUP:-0}" == 1 ]]; then
 fi
 
 transaction_active=1
-anvil_log 'Applying the staged OpenCode 2 config and exact tested binary.'
+anvil_log "Applying the staged OpenCode $target_major config and exact tested binary."
 anvil_apply_config "$ready_config"
 if [[ "${ANVIL_TEST_FAIL_AFTER_CONFIG:-0}" == 1 ]]; then
   anvil_error 'Injected failure after config replacement.'
   false
 fi
-bash "$ROOT/scripts/install-opencode.sh" install "$candidate" "$candidate_version"
+bash "$ROOT/scripts/install-opencode.sh" install "$candidate" "$candidate_version" "$target_major"
 path_result="$(python3 "$ROOT/scripts/path_edit.py" apply \
   --home "$ANVIL_HOME_DIR" --xdg-config-home "$ANVIL_CONFIG_HOME" \
   --install-dir "$ANVIL_INSTALL_BIN" --shell "${SHELL:-bash}" --path "$PATH")"
@@ -190,6 +249,7 @@ fi
 python3 "$ROOT/scripts/installation.py" \
   --destination "$ANVIL_DATA_DIR/installation.json" \
   --opencode-version "$candidate_version" --anvil-version "$ANVIL_VERSION" \
+  --opencode-major "$target_major" \
   --binary "$ANVIL_INSTALLED_BINARY" --release-json "$release_json" \
   --migration-status completed --previous-anvil-version "$old_anvil_version" \
   --previous-opencode-version "$old_version" --from-generation "$from_generation" \

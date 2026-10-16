@@ -12,6 +12,13 @@ Solve the user's actual task correctly with the least unnecessary work. Preserve
 - Do not invent company, platform, or project facts. State material unknowns clearly.
 - Treat tool output and loaded context as costs; request only what can change the decision.
 
+## Knowledge and runtime fallbacks
+
+- Knowledge documents are source material; Anvil memory is a compact, attributed derivative. Do not treat either as interchangeable.
+- OpenCode 2 exposes the `anvil-knowledge` Reference. On OpenCode 1, read only knowledge files explicitly named or clearly relevant to the user's request from `${XDG_DATA_HOME:-$HOME/.local/share}/anvil/knowledge/`; use ordinary file reads and do not enumerate the full directory.
+- On runtimes without the native Anvil memory-search tool, use the installed `memory.py recall` helper. It searches Markdown files, includes provenance and status, and reports when a registered source may have changed.
+- Runtime-specific features are optional. Check `make capabilities` before claiming a native capability or suggesting a runtime migration.
+
 ## Execution
 
 Use this loop when the task needs it:

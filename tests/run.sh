@@ -2,14 +2,20 @@
 
 set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-if [[ $# -ne 3 ]]; then
-  printf 'usage: tests/run.sh CANDIDATE VERSION TEMP_ROOT\n' >&2
+if [[ $# -ne 7 ]]; then
+  printf 'usage: tests/run.sh OPENCODE_2_CANDIDATE VERSION_2 OPENCODE_1_CANDIDATE VERSION_1 OPENCODE_1_MINIMUM VERSION_1_MINIMUM TEMP_ROOT\n' >&2
   exit 2
 fi
-candidate="$1"
-version="${2#opencode }"
-version="${version#v}"
-tmp_root="$3"
+candidate_v2="$1"
+version_v2="${2#opencode }"
+version_v2="${version_v2#v}"
+candidate_v1="$3"
+version_v1="${4#opencode }"
+version_v1="${version_v1#v}"
+candidate_v1_min="$5"
+version_v1_min="${6#opencode }"
+version_v1_min="${version_v1_min#v}"
+tmp_root="$7"
 
 pass() { printf 'PASS %s\n' "$*"; }
 fail() { printf 'FAIL %s\n' "$*" >&2; exit 1; }
@@ -69,8 +75,27 @@ env HOME="$tmp_root/audit-home" XDG_CONFIG_HOME="$tmp_root/audit-config" \
   bash -c 'source "$ANVIL_ROOT/scripts/lib/common.sh"; source "$ANVIL_ROOT/scripts/lib/install.sh"; anvil_build_config "$1" ""' \
   _ "$tmp_root/config-audit-ready" || fail 'build isolated config for audit'
 python3 "$ROOT/scripts/configure.py" audit "$tmp_root/config-audit-ready/opencode.jsonc" || fail 'V2 native config audit'
+env HOME="$tmp_root/audit-home" XDG_CONFIG_HOME="$tmp_root/audit-config" \
+  XDG_DATA_HOME="$tmp_root/audit-data" XDG_STATE_HOME="$tmp_root/audit-state" ANVIL_ROOT="$ROOT" \
+  bash -c 'source "$ANVIL_ROOT/scripts/lib/common.sh"; source "$ANVIL_ROOT/scripts/lib/install.sh"; anvil_build_config "$1" "" no 1' \
+  _ "$tmp_root/config-audit-v1-ready" || fail 'build isolated OpenCode 1 config'
+python3 "$ROOT/scripts/configure.py" audit-v1 "$tmp_root/config-audit-v1-ready/opencode.jsonc" || fail 'OpenCode 1 runtime config audit'
 python3 "$ROOT/scripts/configure.py" audit-v1 "$ROOT/tests/fixtures/v1/opencode.jsonc" || fail 'V1 regression config fixture'
 python3 "$ROOT/scripts/version_docs.py" || fail 'release documentation consistency'
+python3 - "$ROOT/scripts/runtime.py" <<'PY' || fail 'runtime policy/capability adapters'
+import importlib.util,sys
+spec=importlib.util.spec_from_file_location("anvil_runtime",sys.argv[1])
+module=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+policy=module.policy()["opencode"]
+assert policy["supported_majors"]==[1,2] and policy["default_major"]==1
+v1=module.capabilities(requested_major=1)
+v2=module.capabilities(requested_major=2)
+assert v1["core"]["distill"] and v1["memory"]["source_registry"] and not v1["memory"]["native_search_tool"]
+assert not v1["knowledge"]["native_references"] and v1["stats"]["native_stats"] and not v1["stats"]["structured_native_stats"]
+assert v2["memory"]["native_search_tool"] and v2["knowledge"]["native_references"] and v2["stats"]["structured_native_stats"]
+PY
+pass 'Runtime policy exposes independent OpenCode 1/2 adapters and capability profiles'
 python3 - "$ROOT" <<'PY' || fail 'V1/V2 baseline, model neutrality, plugin scope, or secret scan'
 import json,sys
 from pathlib import Path
@@ -104,8 +129,16 @@ env HOME="$tmp_root/smoke-home" XDG_CONFIG_HOME="$tmp_root/smoke-config" \
   XDG_DATA_HOME="$tmp_root/smoke-data" XDG_STATE_HOME="$tmp_root/smoke-state" ANVIL_ROOT="$ROOT" \
   bash -c 'source "$ANVIL_ROOT/scripts/lib/common.sh"; source "$ANVIL_ROOT/scripts/lib/install.sh"; anvil_build_config "$1" ""' \
   _ "$tmp_root/smoke-config-ready" || fail 'build isolated OpenCode config'
-bash "$ROOT/scripts/validate-candidate.sh" "$candidate" "$tmp_root/smoke-config-ready" "$version" || fail 'exact candidate runtime smoke test'
-pass "Official OpenCode $version loads Anvil config, agent, commands, skills, plugin and knowledge reference"
+bash "$ROOT/scripts/validate-candidate.sh" "$candidate_v2" "$tmp_root/smoke-config-ready" "$version_v2" 2 || fail 'exact OpenCode 2 candidate runtime smoke test'
+pass "Official OpenCode 2 $version_v2 loads Anvil config, agent, commands, skills, plugin and knowledge reference"
+env HOME="$tmp_root/smoke-home" XDG_CONFIG_HOME="$tmp_root/smoke-config" \
+  XDG_DATA_HOME="$tmp_root/smoke-data" XDG_STATE_HOME="$tmp_root/smoke-state" ANVIL_ROOT="$ROOT" \
+  bash -c 'source "$ANVIL_ROOT/scripts/lib/common.sh"; source "$ANVIL_ROOT/scripts/lib/install.sh"; anvil_build_config "$1" "" no 1' \
+  _ "$tmp_root/smoke-config-v1-ready" || fail 'build isolated OpenCode 1 config'
+bash "$ROOT/scripts/validate-candidate.sh" "$candidate_v1" "$tmp_root/smoke-config-v1-ready" "$version_v1" 1 || fail 'OpenCode 1 candidate runtime smoke test'
+pass "Official OpenCode 1 $version_v1 loads Anvil config, agent, commands and skills"
+bash "$ROOT/scripts/validate-candidate.sh" "$candidate_v1_min" "$tmp_root/smoke-config-v1-ready" "$version_v1_min" 1 || fail 'minimum supported OpenCode 1 runtime smoke test'
+pass "Minimum supported OpenCode 1 $version_v1_min loads Anvil config, agent, commands and skills"
 
 # V1 Markdown remains readable/searchable and search remains a no-write operation.
 memory_home="$tmp_root/memory-home"
@@ -125,7 +158,7 @@ python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d=={"valid":1,"in
 pass 'V1 memory reads without rewrites; Python search works with ripgrep unavailable'
 
 python3 "$ROOT/tests/distill.py" || fail '/distill fixture, provenance, drift and idempotency checks'
-python3 "$ROOT/tests/lifecycle.py" "$ROOT" "$candidate" "$version" "$tmp_root" || fail 'upgrade/reforge/rollback lifecycle integration'
+python3 "$ROOT/tests/lifecycle.py" "$ROOT" "$candidate_v2" "$version_v2" "$candidate_v1" "$version_v1" "$tmp_root" || fail 'upgrade/reforge/migrate-runtime/rollback lifecycle integration'
 
 python3 - "$ROOT" "$tmp_root/stats-sample.json" <<'PY' || fail 'native stats formatter'
 import json,sys
@@ -138,5 +171,5 @@ contains_stats="$(python3 -c 'import sys; print(int("total tokens    135" in sys
 [[ "$contains_stats" == 1 ]] || fail 'stats summary fields'
 pass 'Native OpenCode statistics are rendered from structured JSON'
 
-printf '\nAll Anvil V2 checks passed.\n'
+printf '\nAll Anvil 2.1 checks passed.\n'
 printf 'Isolation: candidate and lifecycle runtime calls used temporary HOME and XDG roots; real user OpenCode state was not used.\n'

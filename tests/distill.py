@@ -117,9 +117,13 @@ def source_idempotency() -> None:
         source.write_text(source.read_text(encoding="utf-8") + "\nChanged wording.\n", encoding="utf-8")
         changed = json.loads(call([sys.executable, str(registry), "inspect", str(source)], env).stdout)
         assert changed["registry_status"] == "changed"
+        recalled = call([sys.executable, str(memory), "recall", "retentativas"], search_env)
+        assert "potentially stale" in recalled.stdout.lower(), "recall did not surface changed registered-source freshness"
+        tool_result = json.loads(call([sys.executable, str(memory), "tool-search", "retentativas"], env).stdout)
+        assert tool_result["results"][0]["potentially_stale"] is True
         changed_plan = json.loads(call([sys.executable, str(registry), "plan"], env, input_text=json.dumps([changed])).stdout)
         assert changed_plan["action"] == "distill"
-        print("PASS source registry provenance, hash drift detection, multilingual alias search, and unchanged-source idempotence")
+        print("PASS source registry provenance, stale-source recall, multilingual alias search, and unchanged-source idempotence")
 
 
 def main() -> int:

@@ -25,10 +25,6 @@ printf 'Global config          %s\n' "$ANVIL_CONFIG_DIR"
 printf 'CLI config             %s\n' "$ANVIL_CLI_CONFIG"
 printf 'Data directory         %s\n' "$ANVIL_DATA_HOME/opencode"
 printf 'State directory        %s\n' "$ANVIL_STATE_DIR"
-if [[ -n "$binary" && -x "$binary" ]]; then
-  printf '\nOpenCode-reported paths (read-only CLI):\n'
-  "$binary" debug paths 2>/dev/null || printf '  unavailable from this version\n'
-fi
 printf '\n'
 python3 "$ROOT/scripts/inspect_data.py" \
   --home "$ANVIL_HOME_DIR" --config "$ANVIL_CONFIG_DIR" \

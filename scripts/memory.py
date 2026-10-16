@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -172,7 +173,29 @@ def scored_matches(root: Path, query: str) -> list[tuple[int, dict[str, Any]]]:
     return matches
 
 
-def show_matches(matches: list[tuple[int, dict[str, Any]]], limit: int) -> None:
+def stale_memory_ids() -> set[str]:
+    stale: set[str] = set()
+    registry = data_root() / "sources"
+    if not registry.is_dir():
+        return stale
+    for manifest_path in registry.glob("*.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict) or not isinstance(manifest.get("memory_ids"), list):
+                continue
+            source_path = manifest.get("absolute_path")
+            if not isinstance(source_path, str) or not source_path:
+                continue
+            path = Path(source_path)
+            digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() and not path.is_symlink() else None
+            if digest != manifest.get("sha256"):
+                stale.update(item for item in manifest["memory_ids"] if isinstance(item, str))
+        except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
+            continue
+    return stale
+
+
+def show_matches(matches: list[tuple[int, dict[str, Any]]], limit: int, stale_ids: set[str] | None = None) -> None:
     if not matches:
         print("No relevant Anvil memory found.")
         return
@@ -183,9 +206,15 @@ def show_matches(matches: list[tuple[int, dict[str, Any]]], limit: int) -> None:
             body = body[:417].rstrip() + "..."
         print(f"[{item.get('id', 'unknown')}] {item.get('type', '?')} / {item.get('scope', '?')} (match {score})")
         print(f"  status: {item.get('status', 'unspecified')}; confidence: {item.get('confidence', 'unspecified')}; source: {source.get('type', 'unspecified')}")
-        for key in ("path", "url", "commit", "note"):
+        if item.get("id") in (stale_ids or set()):
+            print("  freshness: potentially stale; a registered source changed or is missing")
+        if item.get("aliases"):
+            print(f"  aliases: {', '.join(item['aliases'][:5])}")
+        for key in ("path", "url", "commit", "section", "sha256", "note"):
             if source.get(key):
                 print(f"  {key}: {source[key]}")
+        if item.get("evidence"):
+            print(f"  evidence: {'; '.join(item['evidence'][:3])}")
         print(f"  file: {item['path']}")
         print(f"  {body}")
 
@@ -393,6 +422,7 @@ def main() -> int:
             return 0
         limit = max(1, min(args.limit, 5))
         matches = scored_matches(root, query)
+        stale_ids = stale_memory_ids()
         results = []
         for score, item in matches:
             if args.scope and item.get("scope") != args.scope:
@@ -402,6 +432,7 @@ def main() -> int:
             results.append({
                 "id": item.get("id"), "type": item.get("type"), "scope": item.get("scope"),
                 "status": item.get("status"), "confidence": item.get("confidence"),
+                "potentially_stale": item.get("id") in stale_ids,
                 "source": {key: source[key] for key in ("type", "path", "url", "commit", "section", "sha256") if source.get(key)},
                 "relevance": score, "excerpt": excerpt[:240], "path": item.get("path"),
             })
@@ -412,7 +443,7 @@ def main() -> int:
     if args.action in ("search", "recall"):
         query = " ".join(args.query).strip()
         matches = scored_matches(root, query)
-        show_matches(matches, 10 if args.action == "search" else max(1, min(args.limit, 10)))
+        show_matches(matches, 10 if args.action == "search" else max(1, min(args.limit, 10)), stale_memory_ids())
         return 0 if matches else 1
     try:
         raw = json.load(sys.stdin)

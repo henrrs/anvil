@@ -13,18 +13,14 @@ if [[ -z "$binary" || ! -x "$binary" ]]; then
   anvil_warn "OpenCode is not installed, so there are no native stats to show. Run 'make reforge' for a first Anvil installation."
   exit 0
 fi
-version="$("$binary" --version 2>/dev/null | head -n 1)"
-version="${version#opencode }"
-version="${version#v}"
-[[ "$version" =~ ^2\.[0-9]+\.[0-9]+$ ]] || {
-  next_step="make reforge"
-  if [[ "$version" =~ ^1\.[0-9]+\.[0-9]+$ ]] && \
-     python3 "$ROOT/scripts/configure.py" audit-v1 "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
-    next_step="make upgrade"
-  fi
-  anvil_warn "Native Anvil stats require OpenCode 2; found ${version:-unknown}. No stats are available yet. Run '$next_step' to install or migrate Anvil."
+capabilities="$(python3 "$ROOT/scripts/runtime.py" capabilities --binary "$binary")"
+structured_stats="$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["stats"]["structured_native_stats"]))' <<<"$capabilities")"
+native_stats="$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["stats"]["native_stats"]))' <<<"$capabilities")"
+version="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["runtime"]["version"] or "unknown")' <<<"$capabilities")"
+if [[ "$native_stats" != True ]]; then
+  anvil_warn "Native stats are unavailable on OpenCode $version; no token or cost values were inferred."
   exit 0
-}
+fi
 
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/anvil-stats.XXXXXX")"
 chmod 700 -- "$tmp_root"
@@ -36,9 +32,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"$binary" stats --standalone --days "$days" --models --cost --json > "$tmp_root/stats.json"
-if [[ "${ANVIL_STATS_JSON:-0}" == 1 ]]; then
-  python3 "$ROOT/scripts/stats.py" --days "$days" --json < "$tmp_root/stats.json"
+if [[ "$structured_stats" == True ]]; then
+  if ! "$binary" stats --standalone --days "$days" --models --cost --json > "$tmp_root/stats.json" 2>"$tmp_root/stats.stderr"; then
+    anvil_warn "OpenCode $version could not provide structured stats; no data was changed."
+    exit 0
+  fi
+  if [[ "${ANVIL_STATS_JSON:-0}" == 1 ]]; then
+    python3 "$ROOT/scripts/stats.py" --days "$days" --json < "$tmp_root/stats.json"
+  else
+    python3 "$ROOT/scripts/stats.py" --days "$days" < "$tmp_root/stats.json"
+  fi
 else
-  python3 "$ROOT/scripts/stats.py" --days "$days" < "$tmp_root/stats.json"
+  # OpenCode 1 exposes native terminal stats, but not the structured JSON
+  # interface Anvil uses for its normalized report.
+  if ! "$binary" stats --days "$days" > "$tmp_root/stats.txt" 2>"$tmp_root/stats.stderr"; then
+    anvil_warn "OpenCode $version could not provide its native stats report; no values were inferred."
+    exit 0
+  fi
+  cat -- "$tmp_root/stats.txt"
 fi

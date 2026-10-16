@@ -19,7 +19,7 @@ from pathlib import Path
 
 REGISTRY = "https://registry.npmjs.org"
 PACKAGE = "@opencode/cli"
-USER_AGENT = "Anvil/2.0.0 (official OpenCode release resolver)"
+USER_AGENT = "Anvil/2.1.0 (official OpenCode release resolver)"
 
 
 def open_url(request: urllib.request.Request, timeout: int):

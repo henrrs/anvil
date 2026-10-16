@@ -9,15 +9,19 @@
 make reforge
 make doctor
 
-# Existing Anvil V1 installation
+# Upgrade Anvil while keeping the installed OpenCode major
 make test
+make upgrade DRY_RUN=1
 make upgrade
-make doctor
+
+# Explicitly migrate runtime major when approved
+make migrate-runtime OPENCODE_MAJOR=2 DRY_RUN=1
+make migrate-runtime OPENCODE_MAJOR=2
 ```
 
-Use `make inspect` to review the current setup before either flow. Use `make rollback` to restore the latest verified runtime snapshot. `make stats` displays OpenCode's native usage report after OpenCode 2 is installed; before that, it prints the appropriate setup or migration command without failing.
+Use `make inspect` to review the current setup before changing it. Use `make capabilities` to see the features and fallbacks available with the detected runtime; `FORMAT=json make capabilities` prints machine-readable output. Use `make rollback` to restore the latest verified runtime snapshot. `make upgrade` upgrades Anvil without changing the OpenCode major. Runtime-major changes require the explicit `make migrate-runtime OPENCODE_MAJOR=N` command.
 
-Anvil is a lean, model-agnostic harness and lifecycle layer for OpenCode. OpenCode remains responsible for models, providers, authentication, sessions, tools, and execution. Anvil supplies a focused behavioral environment: compact instructions, one primary agent, a small set of skills, explicit file memory, evidence-driven workflows, and safe upgrade and recovery operations.
+Anvil is a lean, model-agnostic harness and lifecycle layer for OpenCode 1.x and 2.x. Anvil's release version is independent from the OpenCode major. OpenCode remains responsible for models, providers, authentication, sessions, tools, and execution. Anvil supplies a focused behavioral environment: compact instructions, one primary agent, a small set of skills, explicit file memory, evidence-driven workflows, and safe upgrade and recovery operations.
 
 ## Why Anvil?
 
@@ -38,15 +42,17 @@ Luna / Terra / Sol / Astra / Sonnet / other models
 
 ## Install and upgrade
 
-Prerequisites: Linux or macOS, Bash, Python 3.11+, `tar`, and internet access to the official npm registry. Anvil resolves the current stable OpenCode 2 release when needed, stages one exact candidate, and verifies the published SHA-512 integrity metadata. Windows users can run Anvil under WSL.
+Prerequisites: Linux or macOS, Bash, Python 3.11+, `tar`, and access to the official OpenCode release source for the selected runtime. OpenCode 1 candidates come from official GitHub release artifacts with published SHA-256 digests. OpenCode 2 candidates come from the official npm package with published SHA-512 integrity metadata. Windows users can run Anvil under WSL.
 
-`make inspect` reads the current OpenCode setup without changing it. `make test` checks the V2 config, memory behavior, upgrade lifecycle, rollback and failure recovery in isolated temporary environments, and smoke-tests the exact official stable candidate.
+`make inspect` reads the current OpenCode setup without changing it. `make test` validates both runtime profiles, memory behavior, lifecycle, rollback and failure recovery in isolated temporary environments, and smoke-tests official stable candidates.
 
-For a first installation, run `make reforge`, then `make doctor`. Anvil's OpenCode commands and native stats become available after this installs OpenCode 2 and the V2 config. `make inspect` and `make test` can run before installation.
+For a first installation, run `make reforge`, then `make doctor`. The checked-in runtime policy supports OpenCode 1.x and 2.x and defaults to OpenCode 1.x; an existing supported runtime major is preserved during a reforge. Set `default_major` in `config/runtime-policy.json` only when a different runtime is approved for new installations. `make inspect`, `make capabilities`, and the Anvil memory helpers can be used without OpenCode 2.
 
-`make upgrade` is the normal path for an existing Anvil V1 installation. It rehearses migration using copied config, OpenCode data/state, and Anvil memory under a temporary HOME/XDG tree. Only after rehearsal succeeds does it create and verify a complete backup, install that exact tested candidate, and run post-upgrade doctor. Failed postflight checks trigger automatic rollback.
+`make upgrade` upgrades Anvil and keeps the installed OpenCode major. It rehearses the target config/runtime using copied config, OpenCode data/state, and Anvil memory under a temporary HOME/XDG tree. `make upgrade DRY_RUN=1` stages and rehearses the change, reports the candidate and target adapter, and stops before creating a live backup or changing user files. A normal upgrade creates and verifies a complete backup before installing the exact rehearsed candidate. Failed postflight checks trigger automatic rollback.
 
-`make reforge` remains the clean install and rebuild path. It is also suitable for first installation or recovery from a corrupted managed setup. Anvil installs OpenCode under `~/.opencode/bin` and updates a supported shell startup file if necessary.
+Use `make migrate-runtime OPENCODE_MAJOR=2` only when a move to OpenCode 2 is explicitly approved. The command requires the requested major, rehearses against copied user state, backs up the current runtime/config/data/state, and rolls back on a post-mutation failure. `make migrate-runtime OPENCODE_MAJOR=1` provides the reverse migration path when OpenCode 1 is approved and supported.
+
+`make reforge` remains the clean install and rebuild path. It follows the approved runtime policy for first installation and preserves the detected OpenCode major for rebuilds. Anvil installs a managed OpenCode candidate under `~/.opencode/bin` and updates a supported shell startup file if necessary.
 
 Backups live under `$XDG_DATA_HOME/anvil/backups/` (default `~/.local/share/anvil/backups/`). They use restrictive permissions and include checksums plus the prior config, installer runtime, OpenCode data and state, and install metadata. OpenCode databases are treated as opaque files; Anvil does not edit undocumented schemas. Backups may contain sensitive session or authentication state.
 
@@ -60,7 +66,7 @@ Anvil keeps Markdown memory under `$XDG_DATA_HOME/anvil/memory/`. Existing V1 en
 
 Persistent writes require explicit `/remember`, `/distill`, or direct user intent. Knowledge documents remain the source material; memory contains compact derived claims. The `anvil-knowledge` OpenCode Reference points to the separate `$XDG_DATA_HOME/anvil/knowledge/` directory.
 
-Anvil's local `anvil-core` OpenCode 2 plugin exposes one bounded, read-only `anvil_memory_search` tool. It does not rewrite prompts, route models, or write memories.
+On OpenCode 2, Anvil's local `anvil-core` plugin exposes one bounded, read-only `anvil_memory_search` tool. OpenCode 1 uses the same Python lexical search helper through the `/recall` and memory skill workflow. Neither adapter rewrites prompts, routes models, or writes memories implicitly. Native `anvil-knowledge` References are available on OpenCode 2; OpenCode 1 accesses explicitly named knowledge files through normal file reads.
 
 ## Models, agents, and skills
 
@@ -70,8 +76,8 @@ Anvil configures one model-neutral `anvil` primary agent. No model is pinned; se
 
 `make rollback` restores the latest verified pre-upgrade/rebuild OpenCode config, executable, data, and state snapshot. Current Anvil Markdown memory is archived separately before rollback and remains portable. Rollback restores the original runtime snapshot rather than trying to downgrade a migrated database.
 
-`make doctor` checks the V2 config and agent policy, commands and skills, plugin files, memory, knowledge reference, source registry, migration metadata, and visible workspace overrides. It reports `HEALTHY`, `WARNING`, or `BROKEN`; exit codes are `0`, `2`, and `1` respectively. A supported V1 setup is reported as `UPGRADE REQUIRED` with exit code `0`. Workspace, system, or organization-managed configuration can still affect effective behavior.
+`make doctor` checks the selected config adapter and agent policy, commands and skills, runtime support, memory, knowledge access, source registry, migration metadata, and visible workspace overrides. It reports `HEALTHY`, `WARNING`, or `BROKEN`; exit codes are `0`, `2`, and `1` respectively. A supported installation on an older Anvil release is reported as `UPGRADE AVAILABLE` with exit code `0`. `make stats` uses OpenCode 2's structured JSON report or OpenCode 1's native text report; unavailable metrics are reported without invented values.
 
 ## Version history
 
-See [the V1/V2 capability matrix](docs/versions/README.md), [V1 history](docs/versions/v1.md), [V2 release notes](docs/versions/v2.md), [V1-to-V2 migration guide](docs/migrations/v1-to-v2.md), [memory behavior](docs/memory.md), and [OpenCode compatibility](docs/opencode-compatibility.md).
+See the [runtime capability matrix](docs/versions/README.md), [V1 history](docs/versions/v1.md), [V2 release notes](docs/versions/v2.md), [Anvil 2.1 release notes](docs/versions/v2.1.md), [runtime compatibility](docs/runtime-compatibility.md), [V1-to-V2 migration guide](docs/migrations/v1-to-v2.md), [Anvil 2.0-to-2.1 migration guide](docs/migrations/v2-to-v2.1.md), [memory behavior](docs/memory.md), and [OpenCode compatibility](docs/opencode-compatibility.md).

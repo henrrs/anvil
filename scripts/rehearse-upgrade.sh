@@ -5,13 +5,17 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source "$ROOT/scripts/lib/common.sh"
 source "$ROOT/scripts/lib/install.sh"
 
-if [[ $# -ne 2 ]]; then
-  printf 'usage: rehearse-upgrade.sh CANDIDATE_BINARY EXACT_VERSION\n' >&2
+if [[ $# -ne 4 ]]; then
+  printf 'usage: rehearse-upgrade.sh CANDIDATE_BINARY EXACT_VERSION SOURCE_MAJOR TARGET_MAJOR\n' >&2
   exit 2
 fi
 candidate="$1"
 expected_version="${2#opencode }"
 expected_version="${expected_version#v}"
+source_major="$3"
+target_major="$4"
+[[ "$source_major" == 1 || "$source_major" == 2 ]] || { anvil_error "Unsupported source OpenCode major: $source_major"; exit 2; }
+[[ "$target_major" == 1 || "$target_major" == 2 ]] || { anvil_error "Unsupported target OpenCode major: $target_major"; exit 2; }
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/anvil-upgrade-rehearsal.XXXXXX")"
 chmod 700 -- "$tmp_root"
 cleanup() {
@@ -28,8 +32,8 @@ actual_version="$(env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$tmp_root/version-h
   XDG_STATE_HOME="$tmp_root/version-state" "$candidate" --version 2>/dev/null | head -n 1)"
 actual_version="${actual_version#opencode }"
 actual_version="${actual_version#v}"
-[[ "$actual_version" == "$expected_version" && "$actual_version" =~ ^2\.[0-9]+\.[0-9]+$ ]] || {
-  anvil_error "Rehearsal requires the exact staged OpenCode 2 candidate; got ${actual_version:-unknown}."
+[[ "$actual_version" == "$expected_version" && "${actual_version%%.*}" == "$target_major" && ( "$target_major" == 1 || "$target_major" == 2 ) ]] || {
+  anvil_error "Rehearsal requires the exact staged OpenCode $target_major candidate; got ${actual_version:-unknown}."
   exit 1
 }
 
@@ -43,6 +47,11 @@ if [[ -d "$ANVIL_CONFIG_DIR" ]]; then
 else
   anvil_error 'No global OpenCode config exists to rehearse.'
   exit 1
+fi
+if [[ "$source_major" == 1 ]]; then
+  python3 "$ROOT/scripts/configure.py" audit-v1 "$tmp_root/v1-config/opencode.jsonc"
+else
+  python3 "$ROOT/scripts/configure.py" audit "$tmp_root/v1-config/opencode.jsonc"
 fi
 if [[ -d "$ANVIL_DATA_HOME/opencode" ]]; then
   mkdir -p -- "$test_data_home/opencode"
@@ -66,24 +75,28 @@ rehearsal_env=(env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$test_home" \
 "${rehearsal_env[@]}" bash -c '
   source "$ANVIL_ROOT/scripts/lib/common.sh"
   source "$ANVIL_ROOT/scripts/lib/install.sh"
-  anvil_build_config "$1" "$2" yes
-' _ "$tmp_root/v2-config" "$tmp_root/v1-config"
+  anvil_build_config "$1" "$2" yes "$3"
+' _ "$tmp_root/target-config" "$tmp_root/v1-config" "$target_major"
 mkdir -p -- "$test_config_home/opencode"
-cp -a -- "$tmp_root/v2-config/." "$test_config_home/opencode/"
+cp -a -- "$tmp_root/target-config/." "$test_config_home/opencode/"
 chmod 600 -- "$test_config_home/opencode/opencode.jsonc"
-python3 "$ROOT/scripts/configure.py" audit "$test_config_home/opencode/opencode.jsonc"
+if [[ "$target_major" == 1 ]]; then
+  python3 "$ROOT/scripts/configure.py" audit-v1 "$test_config_home/opencode/opencode.jsonc"
+else
+  python3 "$ROOT/scripts/configure.py" audit "$test_config_home/opencode/opencode.jsonc"
+fi
 
 mkdir -p -- "$test_home/.opencode/bin"
 install -m 0755 -- "$candidate" "$test_home/.opencode/bin/opencode"
 test_binary="$test_home/.opencode/bin/opencode"
 "${rehearsal_env[@]}" python3 "$ROOT/scripts/memory.py" init >/dev/null
-python3 - "$test_data_home/anvil/installation.json" "$expected_version" "$(cat "$ROOT/VERSION")" <<'PY'
+python3 - "$test_data_home/anvil/installation.json" "$expected_version" "$(cat "$ROOT/VERSION")" "$target_major" <<'PY'
 import json,sys
 from datetime import datetime,timezone
 record={
   "version": sys.argv[2],
   "anvil_version": sys.argv[3],
-  "generation": 2,
+  "runtime_major": int(sys.argv[4]),
   "migration": {"status":"rehearsal","from_anvil":"V1 fixture/state"},
   "installed_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
 }
@@ -97,19 +110,31 @@ if [[ "${ANVIL_TEST_FAIL_REHEARSAL:-0}" == 1 ]]; then
   exit 1
 fi
 
-# Native stats starts OpenCode 2 in standalone mode and exercises its normal
-# state migration against only the copied V1 data/state files.
-"${rehearsal_env[@]}" "$test_binary" stats --standalone --days 30 --models --cost --json > "$tmp_root/rehearsal-stats.json"
-python3 - "$tmp_root/rehearsal-stats.json" "$expected_version" <<'PY'
+if [[ "$target_major" == 2 ]]; then
+  # Native stats starts OpenCode 2 against copied user state.
+  "${rehearsal_env[@]}" "$test_binary" stats --standalone --days 30 --models --cost --json > "$tmp_root/rehearsal-stats.json"
+  python3 - "$tmp_root/rehearsal-stats.json" "$expected_version" <<'PY'
 import json,sys
 data=json.load(open(sys.argv[1],encoding="utf-8"))
 assert isinstance(data,dict) and isinstance(data.get("range"),dict) and isinstance(data.get("tokens"),dict)
 print(f"OpenCode {sys.argv[2]} read the copied state through native stats")
 PY
+else
+  # OpenCode 1 exposes native text stats. Starting that command against the
+  # copied data/state exercises the V1 reader without touching the live DB.
+  "${rehearsal_env[@]}" "$test_binary" stats --days 30 > "$tmp_root/rehearsal-stats.txt"
+  python3 - "$tmp_root/rehearsal-stats.txt" "$expected_version" <<'PY'
+import sys
+from pathlib import Path
+text=Path(sys.argv[1]).read_text(encoding="utf-8")
+assert "Sessions" in text and "Input" in text, "OpenCode 1 did not return its native stats summary"
+print(f"OpenCode {sys.argv[2]} read the copied state through native text stats")
+PY
+fi
 
-# The CLI smoke exercises actual V2 loading of commands, skills, plugin and reference.
+# Smoke-test the selected runtime adapter with the copied config.
 "${rehearsal_env[@]}" bash "$ROOT/scripts/validate-candidate.sh" \
-  "$test_binary" "$test_config_home/opencode" "$expected_version"
+  "$test_binary" "$test_config_home/opencode" "$expected_version" "$target_major"
 "${rehearsal_env[@]}" env PATH="$test_home/.opencode/bin:${PATH:-/usr/bin:/bin}" \
-  bash "$ROOT/scripts/doctor.sh"
+  ANVIL_SKIP_RUNTIME_PROBE=1 bash "$ROOT/scripts/doctor.sh"
 anvil_ok 'Migration rehearsal passed; the staged runtime/config and copied OpenCode data/state remained isolated.'

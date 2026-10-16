@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and audit Anvil's native OpenCode 2 configuration."""
+"""Render and audit Anvil's OpenCode runtime configurations."""
 
 from __future__ import annotations
 
@@ -172,6 +172,51 @@ def _move_provider(raw: Any) -> Any:
     return result
 
 
+def _old_model(raw: Any) -> Any:
+    if not isinstance(raw, dict):
+        return raw
+    model = dict(raw)
+    if "modelID" in model and "id" not in model:
+        model["id"] = model.pop("modelID")
+    settings = model.pop("settings", None)
+    if isinstance(settings, dict):
+        model["options"] = {**settings, **(model.get("options") if isinstance(model.get("options"), dict) else {})}
+    variants = model.get("variants")
+    if isinstance(variants, list):
+        model["variants"] = {
+            item["id"]: item.get("settings", {})
+            for item in variants if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+    return model
+
+
+def _old_provider(raw: Any) -> Any:
+    if not isinstance(raw, dict):
+        return raw
+    provider = dict(raw)
+    result: dict[str, Any] = {}
+    for key in ("name", "env", "headers", "body", "models", "options", "whitelist", "blacklist"):
+        if key in provider:
+            result[key] = provider[key]
+    package = provider.get("package")
+    if isinstance(package, str):
+        result["npm"] = package.removeprefix("aisdk:")
+    settings = provider.get("settings", {})
+    if isinstance(settings, dict):
+        settings = dict(settings)
+        if "baseURL" in settings:
+            result["api"] = settings.pop("baseURL")
+        if settings:
+            result["options"] = {**settings, **(result.get("options") if isinstance(result.get("options"), dict) else {})}
+    if isinstance(provider.get("models"), dict):
+        result["models"] = {model_id: _old_model(model) for model_id, model in provider["models"].items()}
+    known = {"name", "env", "headers", "body", "models", "options", "whitelist", "blacklist", "package", "settings"}
+    extra = {key: value for key, value in provider.items() if key not in known}
+    if extra:
+        result.setdefault("options", {}).update(extra)
+    return result
+
+
 def old_providers(config_dir: Path) -> dict[str, Any]:
     providers: dict[str, Any] = {}
     for name in ("config.json", "opencode.json", "opencode.jsonc"):
@@ -196,16 +241,34 @@ def old_providers(config_dir: Path) -> dict[str, Any]:
     return providers
 
 
-def build(source: Path, destination: Path, prior_config_dir: Path | None, preserve_cli: bool) -> None:
-    data = parse_jsonc((source / "opencode.jsonc").read_text(encoding="utf-8"), str(source / "opencode.jsonc"))
+def new_providers(config_dir: Path) -> dict[str, Any]:
+    providers: dict[str, Any] = {}
+    for name in ("config.json", "opencode.json", "opencode.jsonc"):
+        path = config_dir / name
+        if not path.is_file():
+            continue
+        data = _read_config(path)
+        if isinstance(data.get("provider"), dict):
+            providers.update(data["provider"])
+        if isinstance(data.get("providers"), dict):
+            providers.update({key: _old_provider(value) for key, value in data["providers"].items()})
+    return providers
+
+
+def build(source: Path, destination: Path, prior_config_dir: Path | None, preserve_cli: bool, major: int) -> None:
+    if major not in (1, 2):
+        raise ValueError("runtime major must be 1 or 2")
+    template = source / ("opencode.jsonc" if major == 2 else "runtimes/opencode-v1.jsonc")
+    data = parse_jsonc(template.read_text(encoding="utf-8"), str(template))
     if not isinstance(data, dict):
-        raise ValueError("Anvil OpenCode config must be a JSON object")
-    knowledge = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "anvil" / "knowledge"
-    data["references"]["anvil-knowledge"]["path"] = str(knowledge)
+        raise ValueError(f"Anvil OpenCode {major} config must be a JSON object")
     if prior_config_dir is not None:
-        providers = old_providers(prior_config_dir)
+        providers = old_providers(prior_config_dir) if major == 2 else new_providers(prior_config_dir)
         if providers:
-            data["providers"] = providers
+            data["providers" if major == 2 else "provider"] = providers
+    if major == 2:
+        knowledge = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "anvil" / "knowledge"
+        data["references"]["anvil-knowledge"]["path"] = str(knowledge)
     destination.mkdir(parents=True, exist_ok=True)
     if preserve_cli and prior_config_dir is not None:
         for name in ("cli.json", "tui.json", "tui.jsonc"):
@@ -342,6 +405,7 @@ def main() -> int:
     p_build.add_argument("--destination", type=Path, required=True)
     p_build.add_argument("--prior-config-dir", type=Path)
     p_build.add_argument("--preserve-cli", action="store_true")
+    p_build.add_argument("--major", type=int, choices=(1, 2), default=2)
     p_audit = sub.add_parser("audit")
     p_audit.add_argument("config", type=Path)
     p_v1 = sub.add_parser("audit-v1")
@@ -349,7 +413,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.action == "build":
-            build(args.source, args.destination, args.prior_config_dir, args.preserve_cli)
+            build(args.source, args.destination, args.prior_config_dir, args.preserve_cli, args.major)
             return 0
         errors = _audit_v1(args.config) if args.action == "audit-v1" else audit(args.config)
         for error in errors:

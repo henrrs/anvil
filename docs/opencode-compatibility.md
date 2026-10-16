@@ -1,49 +1,49 @@
 # OpenCode compatibility
 
-**Checked:** 2026-10-13 (UTC)
+**checked_at:** 2026-10-16 (UTC)
+**Anvil version:** `2.1.0`
+**Supported runtime majors:** OpenCode 1.x and 2.x
+**Default major for a first installation:** OpenCode 1.x
+**Automatic major upgrade:** disabled.
 
-**Anvil version described:** `2.0.0`.
+Anvil version and OpenCode runtime major are independent. Current tested candidates and capability differences are maintained in [runtime compatibility](runtime-compatibility.md). On the check date, OpenCode 1's latest stable release was `1.19.3`, and the configured compatibility floor was tested at `1.18.18`. The official OpenCode 2 `@opencode/cli` npm `latest` dist-tag resolved to `2.0.31`.
 
-**Selected stable candidate at check time:** `2.0.28`, published 2026-10-13 08:16 UTC.
+## Runtime-specific behavior
 
-**Release channel:** npm's official `latest` dist-tag for `@opencode/cli`. The V2 resolver requires an exact `2.x.y` version and does not select a beta, RC, or preview package.
+- OpenCode 1 uses singular `agent`, `permission`, and `plugin` config keys. Anvil keeps global plugins empty and supplies the shared commands, skills, explicit Markdown memory, source registry, and `/distill`. Its native stats command emits terminal text; memory search and knowledge use file-based helpers/reads.
+- OpenCode 2 uses plural `agents` and `plugins`, ordered permissions, native local plugins, References, native compaction/output settings, and structured `stats --json`. Anvil's local `anvil-core` plugin exposes only bounded, read-only Markdown search; it does not route models or rewrite prompts.
+- Commands and skills are Markdown files shared between profiles. OpenCode 1 and 2 discover the same global `commands/` and `skills/` trees.
+- OpenCode owns authentication, session/database schemas, and runtime state. Anvil copies these paths opaquely during rehearsal and backup, and never edits undocumented database tables.
 
-The installer queries the official npm package metadata at execution time, selects the current `latest` dist-tag once, verifies that the CLI declares the host's native optional package, downloads that exact package, and verifies its published SHA-512 SRI value. `make upgrade` and `make reforge` then smoke-test and install the same staged executable. The patch version above is a dated compatibility observation, not a version pinned in source.
+## Distribution and version selection
 
-## Verified behavior
+The OpenCode 1 resolver selects the latest stable `1.x.y` GitHub release and matching platform artifact. It requires an official asset digest and verifies the downloaded archive with SHA-256 before extracting the executable.
 
-- **Distribution:** OpenCode 2's official `@opencode/cli` package declares platform-specific CLI packages. The resolver selects the Linux or macOS x64/arm64 artifact and the suitable Linux musl/baseline package. It extracts only `package/bin/opencode` from the integrity-verified tarball.
-- **Global paths:** The V2 candidate's `opencode debug paths` reports XDG-based config, data, cache, and state paths. The managed config remains `$XDG_CONFIG_HOME/opencode`; OpenCode data and state remain in `$XDG_DATA_HOME/opencode` and `$XDG_STATE_HOME/opencode`. Anvil memory, knowledge, registry, and backups remain separately under `$XDG_DATA_HOME/anvil`.
-- **Config and migration:** V2 uses native plural `agents` and `plugins` keys, `providers`, `references`, and ordered agent `permissions`. The V1-to-V2 guide documents provider field mappings and config migration. The V2 runtime uses the same global config directory. Existing V1 `tui.json` preferences are retained for the documented native migration to `cli.json` on V2 terminal startup.
-- **Agents:** V2 agent definitions use `mode`, `disabled`, `model`, `prompt`, and other V2 fields. Anvil disables the four standard built-ins and defines one model-neutral `anvil` primary. Hidden maintenance agents are left to OpenCode.
-- **Permissions:** V2 permissions are ordered `{action, resource, effect}` objects; later matching rules override earlier ones. Anvil starts with a deny-all rule, allows the normal coding tools and its one memory tool, denies `subagent`, prompts for sensitive `.env` reads and destructive Git operations, and allowlists only the five Anvil skills.
-- **Skills and commands:** V2 discovers global skills under the OpenCode config directory's `skills/<id>/SKILL.md` path and global Markdown commands under `commands/`. The actual candidate API smoke test waits for lazy registry initialization and checks all five skills and `/remember`, `/recall`, and `/distill`.
-- **Plugins:** V2 loads local plugin directories configured in `plugins`. The V2 plugin API uses `Plugin.define` from `@opencode/plugin` and supports `ctx.tool.transform`; the candidate smoke test verifies `anvil-core` is active. The plugin is limited to bounded read-only Markdown search.
-- **References:** Native configuration maps an alias to `{path, description}`. Anvil points `anvil-knowledge` at an absolute path under its separate XDG data root; the smoke test checks the alias is registered.
-- **Compaction and output:** V2 supports native `compaction.auto`, `compaction.keep.tokens`, and `compaction.buffer`, plus `tool_output.max_lines` and `max_bytes`. Anvil uses these native V2 controls and `watcher.ignore`.
-- **Stats:** V2 supports `opencode stats --standalone --days N --models --cost --json`. `make stats` formats that JSON and creates no separate telemetry store.
-- **State migration:** OpenCode owns session, authentication, and database schemas. Upgrade copies data/state into a private rehearsal environment and starts the V2 runtime through native stats; Anvil never reads or edits undocumented SQLite tables. Backups retain OpenCode data/state as opaque archives.
+The OpenCode 2 resolver selects the official npm `latest` dist-tag for `@opencode/cli`, requires an exact stable `2.x.y`, verifies the host optional package and SHA-512 SRI metadata, and extracts only the executable from the verified tarball.
 
-The migration design is based on the official V2 documentation and the candidate's actual runtime behavior. The rehearsal does not open an interactive TUI or make a provider/model request; it therefore does not claim to verify terminal rendering or authentication against a live provider.
+The resolved patch versions are compatibility observations and are not pinned in Anvil source. Network errors identify the official endpoint; a missing or invalid digest stops the operation rather than silently substituting another binary.
 
-## Official sources
+## Lifecycle
 
-- [OpenCode CLI package](https://www.npmjs.com/package/@opencode/cli) and [npm package metadata](https://registry.npmjs.org/@opencode%2fcli)
-- [Install OpenCode](https://opencode.ai/install)
-- [Migrate from V1](https://dev.opencode.ai/v2/docs/migrate-v1/)
-- [Configuration](https://dev.opencode.ai/v2/docs/config/)
-- [Agents](https://dev.opencode.ai/v2/docs/agents/)
-- [Permissions](https://dev.opencode.ai/v2/docs/permissions/)
-- [Skills](https://dev.opencode.ai/v2/docs/skills/)
-- [Commands](https://dev.opencode.ai/v2/docs/commands/)
-- [Plugins](https://dev.opencode.ai/v2/docs/plugins/)
-- [Build a V2 plugin](https://dev.opencode.ai/v2/docs/build/plugins/)
-- [References](https://dev.opencode.ai/v2/docs/references/)
-- [CLI configuration](https://dev.opencode.ai/v2/docs/cli-config/)
-- [Compaction](https://dev.opencode.ai/v2/docs/compaction/)
-- [CLI and stats](https://dev.opencode.ai/v2/docs/cli/commands/)
-- [V2 API schema](https://dev.opencode.ai/v2/docs/api)
+- `make reforge` follows the first-install policy default or preserves the installed OpenCode major when rebuilding.
+- `make upgrade` updates Anvil and the selected runtime within that same major. It never changes OpenCode major implicitly.
+- `make migrate-runtime OPENCODE_MAJOR=N` is the explicit major migration path. It rehearses the target profile with copied state, verifies a full backup, performs postflight doctor, and rolls back on failure.
+- `make upgrade DRY_RUN=1` stages and rehearses without creating a live backup or changing user files.
 
-## Revalidation checklist
+OpenCode 1 and 2 have different configuration and capability models. See [the official V2 V1 migration guide](https://dev.opencode.ai/v2/docs/migrate-v1/) for V2 field and plugin changes. Anvil runtime migration details are in [the 2.0-to-2.1 guide](migrations/v2-to-v2.1.md).
 
-Before a future Anvil release, check the official npm `latest` tag, package optional dependencies and integrity metadata; platform artifact naming; XDG path behavior; V1 config/provider migration; V2 agent and permission schema; skills, commands, local plugin, References, compaction, CLI settings, stats, and opaque data/state migration. Run `make test` against the exact current stable candidate and update this dated record.
+## Official references
+
+- [OpenCode 1 releases](https://github.com/anomalyco/opencode/releases)
+- [OpenCode 1.18.18 release](https://github.com/anomalyco/opencode/releases/tag/v1.18.18)
+- [OpenCode 1 configuration and CLI docs](https://opencode.ai/docs/)
+- [OpenCode 1 skills](https://opencode.ai/docs/skills/)
+- [OpenCode 1 commands](https://opencode.ai/docs/commands/)
+- [OpenCode 2 configuration](https://dev.opencode.ai/v2/docs/config/)
+- [OpenCode 2 skills](https://dev.opencode.ai/v2/docs/skills/)
+- [OpenCode 2 plugins](https://dev.opencode.ai/v2/docs/plugins/)
+- [OpenCode 2 References](https://dev.opencode.ai/v2/docs/references/)
+- [OpenCode 2 CLI stats](https://dev.opencode.ai/v2/docs/cli/commands/)
+- [Official OpenCode 2 npm package](https://www.npmjs.com/package/@opencode/cli)
+
+Before the next Anvil release, recheck the stable `dist-tag`, official assets and digests, minimum supported versions, config schema, agent permissions, command/skill discovery, plugin API, References, stats, state paths, and runtime migration behavior. `make test` resolves and smoke-tests exact candidates from both supported runtime majors plus the OpenCode 1 compatibility floor.

@@ -76,10 +76,6 @@ PY
 
   bash "$ANVIL_ROOT/scripts/inspect.sh" > "$backup_dir/inspect.txt"
   chmod 600 -- "$backup_dir/inspect.txt"
-  if [[ -n "$executable" && -x "$executable" ]]; then
-    "$executable" debug paths > "$backup_dir/opencode-paths.txt" 2>/dev/null || true
-    [[ ! -f "$backup_dir/opencode-paths.txt" ]] || chmod 600 -- "$backup_dir/opencode-paths.txt"
-  fi
 
   path_file="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("file", ""))' "$path_plan_json")"
   path_line="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("line", ""))' "$path_plan_json")"

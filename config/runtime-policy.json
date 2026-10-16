@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "opencode": {
+    "supported_majors": [1, 2],
+    "default_major": 1,
+    "allow_automatic_major_upgrade": false,
+    "minimum_versions": {
+      "1": "1.18.18",
+      "2": "2.0.0"
+    }
+  }
+}

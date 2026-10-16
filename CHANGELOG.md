@@ -2,6 +2,31 @@
 
 Release notes for user-visible Anvil changes. See [version history](docs/versions/README.md) and [release discipline](docs/RELEASING.md).
 
+## [2.1.0] - 2026-10-16
+
+### Added
+
+- OpenCode 1 and 2 runtime adapters with a checked-in runtime policy and machine-readable capabilities.
+- `make capabilities`, `make migrate-runtime OPENCODE_MAJOR=N`, and rehearsed `DRY_RUN=1` support for product upgrades and explicit runtime migration.
+- OpenCode 1 config generation, stable release resolution, SHA-256 artifact verification, native text stats, and file-based search/knowledge fallbacks.
+- Recall freshness warnings for memories linked to changed or missing registered sources.
+
+### Changed
+
+- `make upgrade` now upgrades Anvil while preserving the installed OpenCode major. `make reforge` follows the approved policy on first install and preserves an existing runtime major when rebuilding.
+- Runtime profile rendering, compatibility checks, capabilities, stats, and doctor behavior now use the central runtime adapter.
+
+### Fixed
+
+- Anvil's product release is no longer coupled to OpenCode 2. The complete Anvil 2.1 command, skill, Markdown memory, `/distill`, and source-registry workflow is available on supported OpenCode 1.x and 2.x runtimes, with native-only features gated by capability.
+- `make stats` uses OpenCode 1's native text report and continues to return a non-error notice when stats cannot be obtained.
+- OpenCode major migration can no longer occur implicitly during `make upgrade`.
+
+### Preserved
+
+- One model-agnostic primary agent, no model pinning, no default MCP servers, Markdown memory, and explicit-only persistent memory writes.
+- OpenCode data and state remain opaque files in rehearsal, backup, and rollback.
+
 ## [0.1.0] - 2026-10-12 (V1 repository baseline; no release tag recorded)
 
 This entry records the implemented V1 repository baseline from the initial Anvil history, not a separately verified public release.

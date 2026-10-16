@@ -39,6 +39,7 @@ candidate_version=""
 previous_anvil_version=""
 previous_opencode_version=""
 from_generation=0
+target_major=""
 
 if [[ -f "$ANVIL_DATA_DIR/installation.json" ]]; then
   IFS=$'\t' read -r previous_anvil_version previous_opencode_version < <(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
@@ -87,6 +88,24 @@ printf 'Global config: %s\n' "$ANVIL_CONFIG_DIR"
 printf 'Installer dir: %s\n' "$ANVIL_INSTALL_ROOT"
 bash "$ROOT/scripts/inspect.sh"
 
+# Rebuild the currently selected OpenCode generation when one exists. A first
+# install follows the separately configured Anvil runtime policy.
+active_binary="$(anvil_open_code_binary || true)"
+if [[ -n "$active_binary" && -x "$active_binary" ]]; then
+  active_version="$(python3 "$ROOT/scripts/runtime.py" capabilities --binary "$active_binary" | python3 -c 'import json,sys; print(json.load(sys.stdin)["runtime"]["major"] or "")')"
+  if [[ -n "$active_version" ]]; then
+    target_major="$active_version"
+  fi
+fi
+if [[ -z "$target_major" ]]; then
+  target_major="$(python3 "$ROOT/scripts/runtime.py" policy | python3 -c 'import json,sys; print(json.load(sys.stdin)["opencode"]["default_major"])')"
+fi
+if ! python3 "$ROOT/scripts/runtime.py" capabilities --major "$target_major" | python3 -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d["runtime"]["supported"] else 1)'; then
+  anvil_error "OpenCode major $target_major is not supported by this Anvil runtime policy."
+  exit 1
+fi
+anvil_log "Runtime policy selected OpenCode $target_major; reforge preserves the current major unless no runtime is installed."
+
 release_json="$tmp_root/release.json"
 if [[ "${ANVIL_TEST_MODE:-0}" == 1 ]]; then
   candidate="${ANVIL_TEST_CANDIDATE_BINARY:-}"
@@ -105,19 +124,23 @@ PY
 else
   anvil_need python3
   resolved="$tmp_root/resolved.json"
-  bash "$ROOT/scripts/install-opencode.sh" resolve > "$resolved"
+  bash "$ROOT/scripts/install-opencode.sh" resolve "$target_major" > "$resolved"
   candidate_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["version"])' "$resolved")"
-  candidate="$(bash "$ROOT/scripts/install-opencode.sh" stage "$candidate_version" "$tmp_root/candidate")"
+  candidate="$(bash "$ROOT/scripts/install-opencode.sh" stage "$candidate_version" "$tmp_root/candidate" "$target_major")"
   cp -- "$tmp_root/candidate/release.json" "$release_json"
 fi
 
-[[ "$candidate_version" =~ ^2\.[0-9]+\.[0-9]+$ ]] || { anvil_error "Invalid stable OpenCode 2 version: $candidate_version"; exit 1; }
+[[ "$candidate_version" =~ ^${target_major}\.[0-9]+\.[0-9]+$ ]] || { anvil_error "Invalid stable OpenCode $target_major version: $candidate_version"; exit 1; }
 anvil_ok "Staged official OpenCode $candidate_version"
 
 ready_config="$tmp_root/global-config"
-anvil_build_config "$ready_config" "$ANVIL_CONFIG_DIR"
-python3 "$ROOT/scripts/configure.py" audit "$ready_config/opencode.jsonc"
-bash "$ROOT/scripts/validate-candidate.sh" "$candidate" "$ready_config" "$candidate_version"
+anvil_build_config "$ready_config" "$ANVIL_CONFIG_DIR" no "$target_major"
+if [[ "$target_major" == 1 ]]; then
+  python3 "$ROOT/scripts/configure.py" audit-v1 "$ready_config/opencode.jsonc"
+else
+  python3 "$ROOT/scripts/configure.py" audit "$ready_config/opencode.jsonc"
+fi
+bash "$ROOT/scripts/validate-candidate.sh" "$candidate" "$ready_config" "$candidate_version" "$target_major"
 
 path_plan="$(python3 "$ROOT/scripts/path_edit.py" plan \
   --home "$ANVIL_HOME_DIR" --xdg-config-home "$ANVIL_CONFIG_HOME" \
@@ -146,7 +169,7 @@ if [[ "${ANVIL_TEST_MODE:-0}" == 1 && "${ANVIL_TEST_FAIL_AFTER_CONFIG:-0}" == 1 
   false
 fi
 
-bash "$ROOT/scripts/install-opencode.sh" install "$candidate" "$candidate_version"
+bash "$ROOT/scripts/install-opencode.sh" install "$candidate" "$candidate_version" "$target_major"
 path_result="$(python3 "$ROOT/scripts/path_edit.py" apply \
   --home "$ANVIL_HOME_DIR" --xdg-config-home "$ANVIL_CONFIG_HOME" \
   --install-dir "$ANVIL_INSTALL_BIN" --shell "${SHELL:-bash}" --path "$PATH")"
@@ -156,6 +179,7 @@ XDG_DATA_HOME="$ANVIL_DATA_HOME" python3 "$ANVIL_CONFIG_DIR/scripts/memory.py" i
 python3 "$ROOT/scripts/installation.py" \
   --destination "$ANVIL_DATA_DIR/installation.json" \
   --opencode-version "$candidate_version" --anvil-version "$ANVIL_VERSION" \
+  --opencode-major "$target_major" \
   --binary "$ANVIL_INSTALLED_BINARY" --release-json "$release_json" \
   --migration-status reforge --previous-anvil-version "$previous_anvil_version" \
   --previous-opencode-version "$previous_opencode_version" --from-generation "$from_generation" \
