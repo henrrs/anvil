@@ -1,0 +1,1 @@
+{"statement_id":"statement-sample","status":{"state":"SUCCEEDED"},"manifest":{"schema":{"columns":[{"name":"database"},{"name":"tableName"},{"name":"isTemporary"}]}},"result":{"data_array":[["billing","list_prices",false],["billing","usage",false]],"truncated":false}}

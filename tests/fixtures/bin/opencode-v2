@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+FIXTURE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+export ANVIL_FIXTURE_VERSION=2.0.0
+exec python3 "$FIXTURE_DIR/opencode" "$@"

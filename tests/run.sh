@@ -98,6 +98,17 @@ assert v2["memory"]["native_search_tool"] and v2["knowledge"]["native_references
 assert v2["runtime_features"]["native_plugins"] and v2["runtime_features"]["anvil_core_plugin"]
 PY
 pass 'Runtime policy exposes independent OpenCode 1/2 adapters and capability profiles'
+python3 "$ROOT/tests/databricks.py" || fail 'Databricks offline integration and FinOps scenarios'
+pass 'Databricks profiles, bounded execution, no-mutation policy, and FinOps evidence scenarios'
+env ANVIL_DATABRICKS_CLI=/nonexistent/anvil-test-databricks \
+  make --no-print-directory FORMAT=json capabilities > "$tmp_root/capabilities.json" || fail 'combined JSON capabilities'
+python3 - "$tmp_root/capabilities.json" <<'PY' || fail 'capabilities output is not one valid runtime/Databricks JSON document'
+import json,sys
+data=json.load(open(sys.argv[1],encoding="utf-8"))
+assert set(data) >= {"runtime","databricks","databricks_capabilities"}
+assert data["databricks"]["cli_installed"] is False
+PY
+pass 'make capabilities emits one combined machine-readable JSON document'
 python3 - "$ROOT" <<'PY' || fail 'V1/V2 baseline, model neutrality, plugin scope, or secret scan'
 import json,sys
 from pathlib import Path
@@ -124,23 +135,23 @@ for path in root.rglob("*"):
 PY
 pass 'V1 invariants, V2 model-neutral config, single plugin/tool scope, and secret scan'
 
-# Construct the native config with a temporary data root, then load the exact
-# official OpenCode candidate under a clean HOME/XDG environment.
+# Construct the native config with a temporary data root, then load the local
+# OpenCode contract fixture under a clean HOME/XDG environment.
 mkdir -p -- "$tmp_root/smoke-home" "$tmp_root/smoke-config" "$tmp_root/smoke-data" "$tmp_root/smoke-state"
 env HOME="$tmp_root/smoke-home" XDG_CONFIG_HOME="$tmp_root/smoke-config" \
   XDG_DATA_HOME="$tmp_root/smoke-data" XDG_STATE_HOME="$tmp_root/smoke-state" ANVIL_ROOT="$ROOT" \
   bash -c 'source "$ANVIL_ROOT/scripts/lib/common.sh"; source "$ANVIL_ROOT/scripts/lib/install.sh"; anvil_build_config "$1" ""' \
   _ "$tmp_root/smoke-config-ready" || fail 'build isolated OpenCode config'
 bash "$ROOT/scripts/validate-candidate.sh" "$candidate_v2" "$tmp_root/smoke-config-ready" "$version_v2" 2 || fail 'exact OpenCode 2 candidate runtime smoke test'
-pass "Official OpenCode 2 $version_v2 loads Anvil config, agent, commands, skills, plugin and knowledge reference"
+pass "Offline OpenCode 2 profile fixture $version_v2 loads Anvil config, agent, commands, skills, plugin and knowledge reference"
 env HOME="$tmp_root/smoke-home" XDG_CONFIG_HOME="$tmp_root/smoke-config" \
   XDG_DATA_HOME="$tmp_root/smoke-data" XDG_STATE_HOME="$tmp_root/smoke-state" ANVIL_ROOT="$ROOT" \
   bash -c 'source "$ANVIL_ROOT/scripts/lib/common.sh"; source "$ANVIL_ROOT/scripts/lib/install.sh"; anvil_build_config "$1" "" no 1' \
   _ "$tmp_root/smoke-config-v1-ready" || fail 'build isolated OpenCode 1 config'
 bash "$ROOT/scripts/validate-candidate.sh" "$candidate_v1" "$tmp_root/smoke-config-v1-ready" "$version_v1" 1 || fail 'OpenCode 1 candidate runtime smoke test'
-pass "Official OpenCode 1 $version_v1 loads Anvil config, agent, commands and skills"
+pass "Offline OpenCode 1 profile fixture $version_v1 loads Anvil config, agent, commands and skills"
 bash "$ROOT/scripts/validate-candidate.sh" "$candidate_v1_min" "$tmp_root/smoke-config-v1-ready" "$version_v1_min" 1 || fail 'minimum supported OpenCode 1 runtime smoke test'
-pass "Minimum supported OpenCode 1 $version_v1_min loads Anvil config, agent, commands and skills"
+pass "OpenCode 1 compatibility floor profile fixture $version_v1_min loads Anvil config, agent, commands and skills"
 
 # V1 Markdown remains readable/searchable and search remains a no-write operation.
 memory_home="$tmp_root/memory-home"
@@ -173,5 +184,5 @@ contains_stats="$(python3 -c 'import sys; print(int("total tokens    135" in sys
 [[ "$contains_stats" == 1 ]] || fail 'stats summary fields'
 pass 'Native OpenCode statistics are rendered from structured JSON'
 
-printf '\nAll Anvil 2.1 checks passed.\n'
-printf 'Isolation: candidate and lifecycle runtime calls used temporary HOME and XDG roots; real user OpenCode state was not used.\n'
+printf '\nAll Anvil 2.2 offline checks passed.\n'
+printf 'Isolation: runtime and lifecycle fixture calls used temporary HOME and XDG roots; no external runtime, Databricks, or model service was used.\n'

@@ -1,0 +1,1 @@
+{"warehouses":[{"id":"warehouse-a","name":"analytics-warehouse","state":"RUNNING","warehouse_type":"PRO","cluster_size":"Small","min_num_clusters":1,"max_num_clusters":3,"auto_stop_mins":15},{"id":"warehouse-stopped","name":"stopped-warehouse","state":"STOPPED","warehouse_type":"CLASSIC","cluster_size":"Medium","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":30}]}

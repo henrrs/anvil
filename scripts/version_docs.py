@@ -15,18 +15,26 @@ def main() -> int:
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         raise ValueError("VERSION must contain one SemVer version")
-    major = version.split(".", 1)[0]
     release_doc = f"docs/versions/v{version.rsplit('.', 1)[0]}.md"
     required = {
         "CHANGELOG.md": [f"## [{version}]"],
         release_doc: [f"# Anvil {version}"],
-        "docs/versions/README.md": ["| Capability | Anvil V1 | Anvil 2.x + OpenCode 1 | Anvil 2.x + OpenCode 2 |", "make upgrade", "source registry", "Native Reference", "/distill", "native stats", "Runtime-major migration command"],
+        "docs/versions/README.md": ["Anvil 2.2 + OpenCode 1", "Anvil 2.2 + OpenCode 2", "Databricks live system catalog and FinOps", "Runtime-major migration command", "do not require OpenCode 2"],
         "docs/versions/v2.1.md": ["Runtime Independence", "make upgrade", "migrate-runtime", "make capabilities", "/distill", "stale"],
         "docs/migrations/v1-to-v2.md": ["make upgrade", "migrate-runtime", "rollback", "rehearsal"],
         "docs/migrations/v2-to-v2.1.md": ["make upgrade", "migrate-runtime", "OPENCODE_MAJOR", "rollback", "runtime policy"],
-        "docs/runtime-compatibility.md": ["1.18.18", "opencode-v1", "opencode-v2", "tested candidate"],
-        "docs/RELEASING.md": ["PATCH", "MINOR", "MAJOR", "make test", "runtime compatibility"],
-        "docs/opencode-compatibility.md": ["2.x.y", "dist-tag", "migrate-v1", "npm", "OpenCode 1.x and 2.x"],
+        "docs/migrations/v2.1-to-v2.2.md": ["make upgrade", "DRY_RUN=1", "Databricks", "rollback", "OpenCode major"],
+        "docs/runtime-compatibility.md": ["1.18.18", "2.0.0", "opencode-v1", "opencode-v2", "offline profile fixture", "minimum supported CLI", "1.0.0"],
+        "docs/RELEASING.md": ["PATCH", "MINOR", "MAJOR", "make test", "offline", "runtime compatibility"],
+        "docs/opencode-compatibility.md": ["dist-tag", "migrate-v1", "npm", "OpenCode 1.x and 2.x", "local CLI fixtures"],
+        "docs/architecture.md": ["Databricks capability", "official CLI", "live workspace discovery"],
+        "docs/databricks/README.md": ["official Databricks CLI", "make databricks-setup", "OpenCode 2"],
+        "docs/databricks/authentication.md": ["OAuth U2M", "0600", "secure storage", "make databricks-setup"],
+        "docs/databricks/execution.md": ["Command Execution API", "Statement Execution API", "100-row cap", "approval"],
+        "docs/databricks/system-tables.md": ["2026-10-16", "SHOW SCHEMAS", "live schema", "read-only"],
+        "docs/databricks/finops.md": ["Evidence Confidence Score", "shared all-purpose", "not a total cloud bill"],
+        "docs/databricks/security.md": ["token", "system-table", "silently", "credential"],
+        "docs/databricks/testing.md": ["offline", "tests/fixtures/bin/databricks", "does not resolve or download OpenCode"],
     }
     errors = []
     for relative, phrases in required.items():

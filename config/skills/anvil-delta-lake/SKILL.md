@@ -1,6 +1,6 @@
 ---
 name: anvil-delta-lake
-description: Work on Delta Lake tables, MERGE, transaction behavior, concurrency, schema evolution, CDF, layout, clustering, file operations, or retention. Use when Delta semantics or runtime-specific table behavior can affect correctness or performance.
+description: Use when Delta Lake table semantics affect correctness or performance, including MERGE, transactions, concurrency, schema evolution, CDF, layout, clustering, file operations, or retention. Do not use for generic Spark tuning or source-ingestion design unless Delta behavior is part of the issue.
 ---
 
 # Delta Lake workflow

@@ -1,52 +1,67 @@
 # Anvil runtime compatibility
 
 **Checked:** 2026-10-16 (UTC)
-**Anvil release:** `2.1.0`
+**Anvil release:** `2.2.0`
 **Policy:** OpenCode 1.x and 2.x supported; default major `1`; automatic major upgrade disabled.
 
-| Anvil | OpenCode runtime | Minimum | Tested candidate | Profile | Support |
+| Anvil | OpenCode runtime | Minimum | 2.2 offline profile fixture | Adapter | Support |
 |---|---|---:|---:|---|---|
-| 2.1.x | 1.x | 1.18.18 | 1.18.18 and 1.19.3 | `opencode-v1` | Supported |
-| 2.1.x | 2.x | 2.0.0 | 2.0.31 | `opencode-v2` | Supported |
+| 2.2.x | 1.x | 1.18.18 | 1.18.18 | `opencode-v1` | Supported |
+| 2.2.x | 2.x | 2.0.0 | 2.0.0 | `opencode-v2` | Supported |
 
-The tested candidates are the official stable releases resolved on the check date. They are observations, not versions pinned by Anvil. OpenCode 1 candidates are resolved from official GitHub release metadata and verified against the asset's published SHA-256 digest. OpenCode 2 candidates are resolved from the official `@opencode/cli` npm `latest` dist-tag and checked against the package's SHA-512 integrity metadata.
+The 2.2 mandatory suite validates both adapter contracts using checked-in local CLI fixtures. It does not download or claim to smoke-test a live OpenCode release. The last recorded official candidate resolution in the preceding runtime release documentation was OpenCode 1 `1.19.3` and OpenCode 2 `2.0.31`; use the official release references below to revalidate live candidates before future releases.
 
-## Capability differences
+## Common and runtime-specific capabilities
 
-Both profiles support the common Anvil agent, Markdown commands and skills, file memory, `/remember`, `/recall`, `/distill`, source registry, source freshness warnings, and explicit source reconciliation.
+Both profiles provide the single Anvil agent, Markdown commands and skills, file memory, `/remember`, `/recall`, `/distill`, source registry, explicit reconciliation, and Databricks capability through common shell/filesystem/CLI primitives. Databricks does not require an OpenCode plugin, MCP, or a V2-only permission/tool API.
 
-OpenCode 1 uses its singular `agent`/`permission` config shape. It has no Anvil native plugin tool or native References, so memory search uses the installed Python helper and named knowledge documents are read directly. Its native stats command produces terminal text. OpenCode 2 uses plural `agents`/`plugins`, ordered permissions, the local `anvil-core` read-only search tool, the `anvil-knowledge` Reference, and structured stats JSON.
+OpenCode 1 uses its singular `agent`/`permission` config shape. It has no Anvil native memory-search tool or native Knowledge Reference, so shared Python file search and named-file reads are used. Its native stats command produces terminal text. OpenCode 2 uses plural `agents`/`plugins`, ordered permissions, the local read-only `anvil-core` search tool, `anvil-knowledge` Reference, and structured stats JSON. Shared commands, skills, memory, and Databricks integration remain the same.
 
-The adapters deliberately share the same Anvil commands, skills, memory schema and source registry. Runtime-specific behavior is exposed through `scripts/runtime.py`; callers should check a capability rather than infer that every Anvil release requires the runtime with the same major number.
+Runtime behavior is exposed through `scripts/runtime.py`. `make capabilities` combines runtime capability data with the current non-secret Databricks CLI/profile/compute state. `FORMAT=json make capabilities` emits one JSON object with `runtime`, `databricks`, and `databricks_capabilities` keys.
+
+## Databricks CLI compatibility
+
+**Documentation checked:** 2026-10-16 (UTC)
+**Minimum supported CLI:** `1.0.0`
+**Validated CLI range:** the offline CLI fixture exercised the `1.0.0` minimum boundary; no real CLI version was exercised by the mandatory suite. There is no upper version pin.
+
+Anvil requires the official `databricks` CLI at version 1.0.0 or newer. This minimum ensures the modern profile/auth commands and the documented secure local token-storage behavior are available. Anvil never installs over an existing CLI. If it is absent or too old, the setup path points to the [official CLI installation guide](https://docs.databricks.com/aws/en/dev-tools/cli/install).
+
+The adapter uses `databricks auth profiles`, non-sensitive `databricks auth describe`, `databricks current-user me`, supported cluster and warehouse list commands, and REST API requests through `databricks api`. Authentication profiles belong to the CLI. Anvil stores only a selected profile, workspace host, schema version, and verification timestamp.
+
+## Databricks integration limits
+
+- Remote Python uses the Command Execution API on a running classic all-purpose cluster. It does not start stopped compute; serverless/job clusters are not selected for this path.
+- SQL uses Statement Execution on a running SQL warehouse, with inline JSON results bounded to 100 rows and 1 MB. Multiple running resources require a user choice.
+- System-table status probing uses a running warehouse only when exactly one is available. It does not start a warehouse or choose among several.
+- Workspace grants, cloud/region, table state, preview enrollment, catalog enablement, delivery latency, and configured retention determine live table access. The checked-in snapshot is dated guidance, not a runtime guarantee.
+- The offline fixtures verify CLI/API contracts and error handling; no Databricks workspace was contacted for Anvil 2.2 validation.
 
 ## Lifecycle and migration
 
-- `make reforge` follows the configured default major on first installation and retains the detected OpenCode major when rebuilding an existing runtime.
-- `make upgrade` upgrades Anvil and the current runtime release within its existing major. It does not perform an OpenCode major migration.
-- `make migrate-runtime OPENCODE_MAJOR=N` is the explicit runtime-major migration operation. It stages a candidate, renders its profile, rehearses against copied config/data/state/memory, verifies a complete backup, applies the migration, runs doctor, and rolls back on postflight failure.
-- `make upgrade DRY_RUN=1` and `make migrate-runtime OPENCODE_MAJOR=N DRY_RUN=1` stage and rehearse without creating a live backup or changing user files.
+- `make reforge` follows the first-install policy default and retains the detected runtime major when rebuilding.
+- `make upgrade` updates Anvil and preserves the installed OpenCode major.
+- `make migrate-runtime OPENCODE_MAJOR=N` is the explicit runtime-major change operation.
+- `make upgrade DRY_RUN=1` and runtime migration dry runs stage and rehearse without changing live user files.
+- `make rollback` restores the latest verified runtime/config/data/state snapshot. Anvil's current Markdown memory remains portable and is archived separately.
 
-OpenCode session/database files remain opaque. The rehearsal starts the target runtime against copies through its native stats command and verifies config, commands and skills. It does not inspect undocumented SQLite schemas or authenticate against a provider.
-
-## Known limitations
-
-- OpenCode 1 does not receive the V2 native memory-search plugin or native knowledge Reference; the Anvil helper/direct-file fallbacks are used.
-- Native OpenCode 1 stats are text and cannot be normalized into all fields from the OpenCode 2 JSON report.
-- Download/install operations depend on access to `api.github.com` and official GitHub release assets for OpenCode 1, or `registry.npmjs.org` for OpenCode 2. The verified candidate is not silently replaced by a different artifact if a network or digest check fails.
-- External system, organization and project configuration may still affect behavior. `make doctor` reports visible project overrides but does not modify them.
+OpenCode databases remain opaque files. Runtime-specific behavior is exercised using offline OpenCode CLI fixtures in `make test`; live candidate release and digest verification are part of installation/upgrade, not the mandatory test suite.
 
 ## Official sources
 
-- [OpenCode 1.18.18 release](https://github.com/anomalyco/opencode/releases/tag/v1.18.18)
-- [OpenCode 1 release list](https://github.com/anomalyco/opencode/releases)
 - [OpenCode 1 documentation](https://opencode.ai/docs/)
 - [OpenCode 1 skills](https://opencode.ai/docs/skills/)
-- [OpenCode 1 commands](https://opencode.ai/docs/commands/)
-- [OpenCode 2 migration from V1](https://dev.opencode.ai/v2/docs/migrate-v1/)
 - [OpenCode 2 configuration](https://dev.opencode.ai/v2/docs/config/)
-- [OpenCode 2 plugins](https://dev.opencode.ai/v2/docs/plugins/)
-- [OpenCode 2 References](https://dev.opencode.ai/v2/docs/references/)
-- [OpenCode 2 CLI stats](https://dev.opencode.ai/v2/docs/cli/commands/)
+- [OpenCode 2 agents](https://dev.opencode.ai/v2/docs/agents/)
+- [OpenCode skills](https://opencode.ai/docs/skills/)
+- [OpenCode 1 releases](https://github.com/anomalyco/opencode/releases)
 - [Official OpenCode 2 npm package](https://www.npmjs.com/package/@opencode/cli)
+- [Databricks CLI installation](https://docs.databricks.com/aws/en/dev-tools/cli/install)
+- [Databricks CLI authentication commands](https://docs.databricks.com/aws/en/dev-tools/cli/reference/auth-commands)
+- [OAuth U2M authentication](https://docs.databricks.com/aws/en/dev-tools/auth/oauth-u2m)
+- [Databricks unified authentication](https://docs.databricks.com/aws/en/dev-tools/auth/unified-auth)
+- [Command Execution API](https://docs.databricks.com/api/command-execution/v2/command-execution)
+- [Statement Execution API](https://docs.databricks.com/api/statement-execution/v1/statement-execution)
+- [Databricks system tables](https://docs.databricks.com/aws/en/admin/system-tables)
 
-Revalidate both stable release sources, digests, config schemas, command/skill discovery, plugin and Reference capabilities, stats, data/state paths, and migration behavior before a later Anvil release.
+Recheck official runtime releases, configuration schemas, CLI auth behavior, APIs, and system-table documentation before each release that changes these integration contracts.

@@ -1,0 +1,1 @@
+{"sample_count":12500,"telemetry_coverage":0.96,"cpu_avg_pct":24.8,"cpu_p50_pct":21.1,"cpu_p95_pct":43.2,"cpu_max_pct":71.0,"cpu_wait_p95_pct":4.1,"memory_avg_pct":31.2,"memory_p95_pct":48.7,"memory_max_pct":66.0,"worker_count_p95":2,"max_workers":5}

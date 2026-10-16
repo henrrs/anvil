@@ -1,0 +1,8 @@
+Host: https://workspace-b.example.invalid
+User: sample-user-b@example.invalid
+Authenticated with: oauth-u2m
+-----
+Current configuration:
+  ✓ host: https://workspace-b.example.invalid
+  ✓ profile: sample-profile-b
+  ✓ auth_type: oauth-u2m

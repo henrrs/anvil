@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Offline fixture for the Databricks CLI commands Anvil consumes."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[3]
+FIXTURES = ROOT / "tests" / "fixtures" / "databricks"
+args = sys.argv[1:]
+scenario = os.environ.get("ANVIL_DATABRICKS_SCENARIO", "valid")
+state_path = Path(os.environ.get("ANVIL_DATABRICKS_FIXTURE_STATE", "/tmp/anvil-databricks-fixture-state"))
+log_path = os.environ.get("ANVIL_DATABRICKS_CALL_LOG")
+
+
+def fixture(relative: str):
+    return json.loads((FIXTURES / relative).read_text(encoding="utf-8"))
+
+
+def count(key: str) -> int:
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    state[key] = int(state.get(key, 0)) + 1
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    return state[key]
+
+
+def update_state(key: str, value) -> None:
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    state[key] = value
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def read_state(key: str, default=None):
+    try:
+        return json.loads(state_path.read_text(encoding="utf-8")).get(key, default)
+    except (OSError, ValueError):
+        return default
+
+
+def record(method: str, endpoint: str, body: dict | None = None) -> None:
+    if not log_path:
+        return
+    log = Path(log_path)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    row = {"method": method, "endpoint": endpoint}
+    if body:
+        row["body_keys"] = sorted(body)
+        row["warehouse_id"] = body.get("warehouse_id")
+        row["row_limit"] = body.get("row_limit")
+        row["byte_limit"] = body.get("byte_limit")
+        row["disposition"] = body.get("disposition")
+        row["command_present"] = "command" in body
+    with log.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(row) + "\n")
+
+
+def output(value) -> None:
+    if isinstance(value, str):
+        print(value)
+    else:
+        print(json.dumps(value))
+
+
+if args == ["-v"] or args == ["version"]:
+    print("Databricks CLI v" + os.environ.get("ANVIL_DATABRICKS_CLI_VERSION", "1.0.0"))
+    raise SystemExit(0)
+
+if args[:2] == ["auth", "profiles"]:
+    if scenario == "multiple_profiles":
+        print((FIXTURES / "auth" / "profiles-multiple.txt").read_text(encoding="utf-8"), end="")
+    elif scenario == "invalid_profile":
+        print((FIXTURES / "auth" / "profiles-invalid.txt").read_text(encoding="utf-8"), end="")
+    else:
+        print((FIXTURES / "auth" / "profiles-valid.txt").read_text(encoding="utf-8"), end="")
+    raise SystemExit(0)
+
+if args[:2] == ["auth", "describe"]:
+    profile = args[args.index("--profile") + 1] if "--profile" in args else "sample-profile"
+    describe = FIXTURES / "auth" / ("describe-b.txt" if profile == "sample-profile-b" else "describe.txt")
+    print(describe.read_text(encoding="utf-8"), end="")
+    raise SystemExit(0)
+
+if args[:3] == ["current-user", "me", "--output"]:
+    output(fixture("auth/current-user.json"))
+    raise SystemExit(0)
+
+if args[:2] == ["clusters", "list"]:
+    name = "multiple.json" if scenario == "multiple_clusters" else "stopped.json" if scenario == "stopped_cluster" else "single.json"
+    output(fixture(f"clusters/{name}"))
+    raise SystemExit(0)
+
+if args[:2] == ["warehouses", "list"]:
+    name = "multiple.json" if scenario == "multiple_warehouses" else "stopped.json" if scenario == "stopped_warehouse" else "single.json"
+    output(fixture(f"warehouses/{name}"))
+    raise SystemExit(0)
+
+if args and args[0] == "api" and len(args) >= 3:
+    method, endpoint = args[1], args[2]
+    body = None
+    if "--json" in args:
+        raw = args[args.index("--json") + 1]
+        if raw.startswith("@"):
+            body = json.loads(Path(raw[1:]).read_text(encoding="utf-8"))
+        else:
+            body = json.loads(raw)
+    clean_endpoint = endpoint.split("?", 1)[0]
+    record(method.upper(), clean_endpoint, body)
+    if scenario == "permission_denied" and clean_endpoint.startswith("/api/2.0/sql/statements"):
+        print((FIXTURES / "api" / "permission-denied.json").read_text(encoding="utf-8"), file=sys.stderr)
+        raise SystemExit(1)
+    if clean_endpoint == "/api/1.2/contexts/create":
+        output(fixture("api/context-created.json"))
+    elif clean_endpoint == "/api/1.2/contexts/status":
+        output(fixture("api/context-running.json"))
+    elif clean_endpoint == "/api/1.2/commands/execute":
+        output({"id": "command-sample"})
+    elif clean_endpoint == "/api/1.2/commands/status":
+        if scenario == "command_failure":
+            output(fixture("api/command-failed.json"))
+        elif scenario == "command_timeout":
+            output(fixture("api/command-running.json"))
+        elif count("command-status") == 1:
+            output(fixture("api/command-running.json"))
+        else:
+            output(fixture("api/command-succeeded.json"))
+    elif clean_endpoint == "/api/1.2/commands/cancel" or clean_endpoint == "/api/1.2/contexts/destroy":
+        output({})
+    elif clean_endpoint == "/api/2.0/sql/statements" and method == "post":
+        if body and isinstance(body.get("statement"), str):
+            update_state("last-statement", body["statement"])
+        if scenario == "sql_failure":
+            output(fixture("api/statement-failed.json"))
+        else:
+            output(fixture("api/statement-pending.json"))
+    elif clean_endpoint == "/api/2.0/sql/statements/statement-sample" and method == "get":
+        if scenario == "sql_failure":
+            output(fixture("api/statement-failed.json"))
+        elif scenario == "sql_timeout":
+            output(fixture("api/statement-running.json"))
+        elif count("sql-status") == 1:
+            output(fixture("api/statement-running.json"))
+        elif str(read_state("last-statement", "")).upper().startswith("SHOW TABLES IN SYSTEM.BILLING"):
+            output(fixture("api/statement-tables.json"))
+        else:
+            output(fixture("api/statement-succeeded.json"))
+    elif clean_endpoint == "/api/2.0/sql/statements/statement-sample/cancel":
+        output({})
+    else:
+        print("fixture endpoint not found", file=sys.stderr)
+        raise SystemExit(2)
+    raise SystemExit(0)
+
+print("fixture command not supported", file=sys.stderr)
+raise SystemExit(2)

@@ -145,6 +145,7 @@ def env_for(paths: dict[str, pathlib.Path], **extra: str) -> dict[str, str]:
         "SHELL": "/bin/bash",
         "TMPDIR": "/tmp",
         "LANG": "C.UTF-8",
+        "ANVIL_DATABRICKS_CLI": "/nonexistent/anvil-test-databricks",
     }
     result.update(extra)
     return result
@@ -375,11 +376,11 @@ def upgrade_preserves_v1_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
     config = json.loads((paths["config"] / "opencode.jsonc").read_text(encoding="utf-8"))
     check(installed["runtime_major"] == 1 and installed["version"].startswith("1."), "make upgrade changed OpenCode 1 major")
     check(installed["anvil_version"] == (ROOT / "VERSION").read_text().strip(), "make upgrade did not update the Anvil release independently")
-    check(config.get("default_agent") == "anvil" and "agent" in config, "Anvil 2.1 V1 runtime config was not installed")
+    check(config.get("default_agent") == "anvil" and "agent" in config, "Anvil 2.2 V1 runtime config was not installed")
     check(config["provider"]["custom"]["api"] == "https://example.invalid/v1", "same-major Anvil upgrade lost V1 provider config")
     check(tree_hash(paths["data_opencode"]) == before_data and tree_hash(paths["state_opencode"]) == before_state, "make upgrade changed OpenCode data/state")
     check("Target OpenCode major     1 (preserved)" in proc.stdout, "upgrade plan did not state that OpenCode major 1 is preserved")
-    check("Status: HEALTHY" in proc.stdout, "OpenCode 1 Anvil 2.1 doctor was not healthy")
+    check("Status: HEALTHY" in proc.stdout, "OpenCode 1 Anvil 2.2 doctor was not healthy")
     for section in ("Capabilities", "Stats", "Memory", "Knowledge", "Project overrides", "Version documentation"):
         check(section in proc.stdout, f"OpenCode 1 doctor omitted the {section} category")
     check("/distill               YES" in proc.stdout and "file-fallback" in proc.stdout, "OpenCode 1 doctor omitted core command or fallback capability status")
@@ -400,7 +401,7 @@ def upgrade_preserves_v2_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
     check("agents" in config and "agent" not in config and "anvil-core" in str(config.get("plugins")), "OpenCode 2 profile was not retained by same-major upgrade")
     check(tree_hash(paths["data_opencode"]) == before_data and tree_hash(paths["state_opencode"]) == before_state, "OpenCode 2 upgrade changed opaque user data/state")
     check("Target OpenCode major     2 (preserved)" in proc.stdout, "upgrade plan did not state that OpenCode major 2 is preserved")
-    check("Status: HEALTHY" in proc.stdout, "OpenCode 2 Anvil 2.1 doctor was not healthy")
+    check("Status: HEALTHY" in proc.stdout, "OpenCode 2 Anvil 2.2 doctor was not healthy")
     for section in ("Capabilities", "Stats", "Memory", "Knowledge", "Project overrides", "Version documentation"):
         check(section in proc.stdout, f"OpenCode 2 doctor omitted the {section} category")
     check("/distill               YES" in proc.stdout and "native-tool+file-fallback" in proc.stdout, "OpenCode 2 doctor omitted core command or native search capability status")

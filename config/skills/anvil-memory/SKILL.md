@@ -1,6 +1,6 @@
 ---
 name: anvil-memory
-description: Search or explicitly update Anvil's local, provenance-aware Markdown memory for company facts, project conventions, decisions, constraints, and verified lessons. Use when prior durable context could change the answer, or when the user invokes /remember or explicitly asks to remember information.
+description: Use when prior durable context could change the answer, or when the user invokes /remember or explicitly asks to retain information in Anvil's provenance-aware Markdown memory. Do not use memory as a substitute for inspectable current repository or external source evidence.
 ---
 
 # Anvil memory workflow

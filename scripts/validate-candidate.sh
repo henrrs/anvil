@@ -26,9 +26,9 @@ cleanup_temp() {
       env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$home" XDG_CONFIG_HOME="$config_home" \
         XDG_DATA_HOME="$data_home" XDG_STATE_HOME="$state_home" \
         OPENCODE_DISABLE_AUTOUPDATE=1 "$candidate" service stop >/dev/null 2>&1 || true
-      python3 - "$candidate" "$home" "$config_home" "$data_home" "$state_home" <<'PY'
+      python3 - "$home" "$config_home" "$data_home" "$state_home" <<'PY'
 import os, signal, sys, time
-candidate, home, config, data, state = map(os.path.realpath, sys.argv[1:])
+home, config, data, state = map(os.path.realpath, sys.argv[1:])
 if not os.path.isdir("/proc"):
     raise SystemExit(0)
 
@@ -40,8 +40,6 @@ def matching():
         root = os.path.join("/proc", name)
         try:
             if os.stat(root).st_uid != os.geteuid():
-                continue
-            if os.path.realpath(os.path.join(root, "exe")) != candidate:
                 continue
             env = {}
             with open(os.path.join(root, "environ"), "rb") as stream:

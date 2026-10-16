@@ -18,13 +18,19 @@ OpenCode 2 uses plural `agents` and `plugins` fields and ordered permissions. It
 
 ## Capabilities and progressive enhancement
 
-Callers use the central capability record rather than treating every Anvil release as one OpenCode generation. OpenCode 2 adds the local `anvil-core` plugin, native `anvil-knowledge` Reference, ordered permissions, bounded tool output, and structured stats JSON. OpenCode 1 uses its native config, commands/skills, and text stats; shared Python memory search and direct reads of explicitly named knowledge files provide the fallbacks.
+Callers use the central capability record rather than treating every Anvil release as one OpenCode generation. OpenCode 2 adds the local `anvil-core` plugin, native `anvil-knowledge` Reference, ordered permissions, bounded tool output, and structured stats JSON. OpenCode 1 uses its native config, commands/skills, and text stats; shared Python memory search and direct reads of explicitly named knowledge files provide the fallbacks. `scripts/capabilities.py` combines those runtime capabilities with live Databricks CLI/profile/resource status in one text or JSON result.
 
 The V2 plugin uses the OpenCode 2 API to register only bounded, read-only `anvil_memory_search`. It does not add context hooks, prompt mutation, model routing, retries, memory writes, or custom compaction. Capabilities are visible through `make capabilities` and `make doctor`.
 
 ## Skills and commands
 
 Five native lazy skills cover memory, Spark performance, Delta Lake, Databricks, and data ingestion. Native Markdown commands provide `/remember`, `/recall`, and `/distill`, all assigned to the Anvil agent. Persistent memory writes require explicit `/remember`, `/distill`, or direct user intent.
+
+## Databricks capability
+
+Anvil 2.2's optional Databricks integration uses the official CLI as the shared authentication and REST transport surface. The installed stdlib adapter in the managed OpenCode config centralizes profile checks, resource discovery, bounded API requests, SQL/Python execution, and error handling. Anvil preferences under `$XDG_CONFIG_HOME/anvil/databricks.json` contain only the selected profile and workspace host; credentials remain in Databricks CLI storage. The integration works above either OpenCode runtime profile and has no plugin, MCP, SDK, or model dependency.
+
+The Databricks skill references a dated official system-table snapshot, focused schema notes, and query recipes. Live workspace discovery takes precedence for a task. SQL recipes aggregate and bound operational data before it enters model context. Remote execution requires a clear user request; compute and workload mutations are not exposed by the adapter, and stopped compute is never started automatically. FinOps output distinguishes measured usage identifiers, list-price estimates, and approximate shared-compute allocation, with a deterministic evidence-quality score.
 
 ## Upgrade lifecycle
 

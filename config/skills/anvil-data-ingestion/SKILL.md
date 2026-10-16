@@ -1,6 +1,6 @@
 ---
 name: anvil-data-ingestion
-description: Design or debug ingestion from JDBC/ODBC and other source systems, including partitioning, source pressure, retries, idempotency, bulk reads, Arrow paths, distributed ingestion, and checkpoint recovery.
+description: Use when designing or debugging ingestion from JDBC/ODBC and other source systems, including partitioning, source pressure, retries, idempotency, bulk reads, Arrow paths, distributed ingestion, or checkpoint recovery. Do not use for Spark execution tuning or Delta transaction semantics unless ingestion behavior depends on them.
 ---
 
 # Ingestion reasoning

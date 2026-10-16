@@ -1,0 +1,3 @@
+Name              Host                                 Valid
+sample-profile-a  https://workspace-a.example.invalid  YES
+sample-profile-b  https://workspace-b.example.invalid  YES

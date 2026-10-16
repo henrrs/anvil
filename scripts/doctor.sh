@@ -29,6 +29,8 @@ PY
 fi
 
 printf '%s\n' 'Anvil Doctor' '────────────'
+databricks_status="$(python3 "$ROOT/scripts/databricks.py" status --format text 2>/dev/null || true)"
+printf '%s\n' "$databricks_status"
 printf 'Anvil version          %s' "$expected_anvil"
 if [[ "$recorded_anvil" == "$expected_anvil" ]]; then
   printf ' (installed)\n'

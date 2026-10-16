@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
-.PHONY: help inspect test reforge upgrade migrate-runtime doctor capabilities stats rollback
+.PHONY: help inspect test reforge upgrade migrate-runtime doctor capabilities stats databricks-setup rollback
 
 VERSION := $(shell cat VERSION 2>/dev/null || printf 'unknown')
 
@@ -10,13 +10,14 @@ help:
 	  'Anvil $(VERSION)' \
 	  '' \
 	  'make inspect    Inspect the current OpenCode environment. No changes.' \
-	  'make test       Validate OpenCode 1 and 2 profiles in isolated environments.' \
+	  'make test       Run the offline OpenCode 1/2 and Databricks contract suite.' \
 	  'make reforge    Rebuild Anvil using the current runtime policy/major.' \
 	  'make upgrade    Upgrade Anvil and preserve the installed OpenCode major.' \
 	  'make migrate-runtime OPENCODE_MAJOR=2  Explicitly migrate runtime major.' \
 	  'make doctor     Check Anvil, runtime, memory, knowledge and project state.' \
 	  'make capabilities  Show features available on the detected runtime.' \
 	  'make stats      Show native stats, or an honest runtime fallback.' \
+	  'make databricks-setup  Configure the optional Databricks CLI profile.' \
 	  'make rollback   Restore the latest complete pre-upgrade/rebuild snapshot.' \
 	  '' \
 	  'upgrade never changes OpenCode major; use migrate-runtime OPENCODE_MAJOR=N for an explicit runtime migration.' \
@@ -43,10 +44,13 @@ doctor:
 	@bash scripts/doctor.sh
 
 capabilities:
-	@python3 scripts/runtime.py capabilities --format "$(if $(FORMAT),$(FORMAT),text)"
+	@python3 scripts/capabilities.py --format "$(if $(FORMAT),$(FORMAT),text)"
 
 stats:
 	@bash scripts/stats.sh
+
+databricks-setup:
+	@python3 scripts/databricks.py setup
 
 rollback:
 	@bash scripts/rollback.sh

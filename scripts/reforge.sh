@@ -205,3 +205,4 @@ if [[ "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("added",
 elif [[ "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("manual_required",False))' "$path_result")" == True ]]; then
   anvil_warn "Could not safely edit $(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("file", "the shell startup file"))' "$path_result"). Add $ANVIL_INSTALL_BIN to PATH manually."
 fi
+anvil_offer_databricks_setup

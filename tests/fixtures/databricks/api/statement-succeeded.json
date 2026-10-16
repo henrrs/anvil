@@ -1,0 +1,1 @@
+{"statement_id":"statement-sample","status":{"state":"SUCCEEDED"},"manifest":{"schema":{"columns":[{"name":"schema_name","type_text":"STRING"}]}},"result":{"data_array":[["access"],["billing"],["compute"],["lakeflow"],["query"]],"truncated":false}}

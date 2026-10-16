@@ -1,6 +1,6 @@
 # Anvil V1 and OpenCode 1 runtime migration
 
-This guide covers Anvil V1 installations that use OpenCode 1. The current Anvil 2.1 release can run on supported OpenCode 1.x; installing Anvil 2.1 does not require moving to OpenCode 2.
+This guide covers Anvil V1 installations that use OpenCode 1. Current Anvil 2.x releases support OpenCode 1.x and 2.x; installing Anvil 2.2 does not require moving to OpenCode 2.
 
 ## Upgrade Anvil and keep OpenCode 1
 
@@ -34,7 +34,7 @@ Use `ANVIL_YES=1 make migrate-runtime OPENCODE_MAJOR=2` only for automation that
 
 ## Compatibility and data handling
 
-| Data | Anvil 2.1 on OpenCode 1 | Explicit migration to OpenCode 2 |
+| Data | Anvil 2.x on OpenCode 1 | Explicit migration to OpenCode 2 |
 |---|---|---|
 | OpenCode sessions/database | Left in place; backed up opaquely | Copied to rehearsal, left in place during migration, backed up opaquely |
 | Authentication | Not printed or used by rehearsal | Copied as opaque state; no provider request |

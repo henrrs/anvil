@@ -1,6 +1,6 @@
 ---
 name: anvil-spark-performance
-description: Diagnose Spark job performance using plans, stages, task distributions, shuffle, skew, spill, AQE, and executor/runtime evidence. Use when a Spark workload is slow, unstable, resource-heavy, or needs a performance review.
+description: Use when a Spark workload is slow, unstable, resource-heavy, or needs performance review using plans, stages, task distributions, shuffle, skew, spill, AQE, and executor/runtime evidence. Do not use for Delta transaction correctness or source-ingestion design unless Spark execution performance is the question.
 ---
 
 # Spark performance diagnosis

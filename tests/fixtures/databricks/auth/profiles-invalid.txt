@@ -1,0 +1,2 @@
+Name            Host                                 Valid
+sample-profile  https://workspace-a.example.invalid  NO

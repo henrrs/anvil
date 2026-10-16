@@ -4,6 +4,8 @@
 >
 > **Better harness. Better execution.**
 
+Anvil 2.2's release theme is **Execution Intelligence**: forge more intelligence from every token.
+
 ```bash
 # First installation
 make reforge
@@ -21,7 +23,7 @@ make migrate-runtime OPENCODE_MAJOR=2
 
 Use `make inspect` to review the current setup before changing it. Use `make capabilities` to see the features and fallbacks available with the detected runtime; `FORMAT=json make capabilities` prints machine-readable output. Use `make rollback` to restore the latest verified runtime snapshot. `make upgrade` upgrades Anvil without changing the OpenCode major. Runtime-major changes require the explicit `make migrate-runtime OPENCODE_MAJOR=N` command.
 
-Anvil is a lean, model-agnostic harness and lifecycle layer for OpenCode 1.x and 2.x. Anvil's release version is independent from the OpenCode major. OpenCode remains responsible for models, providers, authentication, sessions, tools, and execution. Anvil supplies a focused behavioral environment: compact instructions, one primary agent, a small set of skills, explicit file memory, evidence-driven workflows, and safe upgrade and recovery operations.
+Anvil is a lean, model-agnostic harness and lifecycle layer for OpenCode 1.x and 2.x. Anvil's release version is independent from the OpenCode major. OpenCode owns model/provider authentication, sessions, its native tools, and runtime state. Anvil supplies a focused behavioral environment: compact instructions, one primary agent, a small set of skills, explicit file memory, evidence-driven workflows, safe upgrade and recovery operations, and an optional CLI-backed Databricks capability.
 
 ## Why Anvil?
 
@@ -42,9 +44,9 @@ Luna / Terra / Sol / Astra / Sonnet / other models
 
 ## Install and upgrade
 
-Prerequisites: Linux or macOS, Bash, Python 3.11+, `tar`, and access to the official OpenCode release source for the selected runtime. OpenCode 1 candidates come from official GitHub release artifacts with published SHA-256 digests. OpenCode 2 candidates come from the official npm package with published SHA-512 integrity metadata. Windows users can run Anvil under WSL.
+Prerequisites: Linux or macOS, Bash, Python 3.11+, `tar`, and access to the official OpenCode release source when installing or upgrading the managed runtime. OpenCode 1 candidates come from official GitHub release artifacts with published SHA-256 digests. OpenCode 2 candidates come from the official npm package with published SHA-512 integrity metadata. Windows users can run Anvil under WSL. Databricks is optional and does not affect the rest of Anvil.
 
-`make inspect` reads the current OpenCode setup without changing it. `make test` validates both runtime profiles, memory behavior, lifecycle, rollback and failure recovery in isolated temporary environments, and smoke-tests official stable candidates.
+`make inspect` reads the current OpenCode setup without changing it. `make test` validates both runtime profiles, memory behavior, lifecycle, rollback, failure recovery, and Databricks contracts with local fixtures. It makes no external OpenCode, Databricks, or model calls.
 
 For a first installation, run `make reforge`, then `make doctor`. The checked-in runtime policy supports OpenCode 1.x and 2.x and defaults to OpenCode 1.x; an existing supported runtime major is preserved during a reforge. Set `default_major` in `config/runtime-policy.json` only when a different runtime is approved for new installations. `make inspect`, `make capabilities`, and the Anvil memory helpers can be used without OpenCode 2.
 
@@ -53,6 +55,12 @@ For a first installation, run `make reforge`, then `make doctor`. The checked-in
 Use `make migrate-runtime OPENCODE_MAJOR=2` only when a move to OpenCode 2 is explicitly approved. The command requires the requested major, rehearses against copied user state, backs up the current runtime/config/data/state, and rolls back on a post-mutation failure. `make migrate-runtime OPENCODE_MAJOR=1` provides the reverse migration path when OpenCode 1 is approved and supported.
 
 `make reforge` remains the clean install and rebuild path. It follows the approved runtime policy for first installation and preserves the detected OpenCode major for rebuilds. Anvil installs a managed OpenCode candidate under `~/.opencode/bin` and updates a supported shell startup file if necessary.
+
+## Databricks
+
+Anvil 2.2 adds an optional Databricks capability through the official Databricks CLI and its REST API commands. The minimum supported CLI is 1.0.0; Anvil does not replace an existing CLI installation. Run `make databricks-setup` to select a default CLI profile and authenticate with the Databricks CLI. The selected profile persists across sessions in a private Anvil preferences file; credentials remain in the CLI's secure storage. `make doctor` reports CLI, profile, compute, warehouse, and system-catalog status without making Anvil installation depend on Databricks access.
+
+The `anvil-databricks` skill discovers classic all-purpose compute for requested Python execution and SQL warehouses for requested SQL. It asks which resource to use when several are available, never starts or reconfigures compute, bounds returned SQL results, and checks live system-table schemas before relying on the dated reference snapshot. FinOps recipes return filtered aggregates and distinguish Databricks usage or list-cost estimates from a complete cloud bill. See [Databricks setup and capability docs](docs/databricks/README.md).
 
 Backups live under `$XDG_DATA_HOME/anvil/backups/` (default `~/.local/share/anvil/backups/`). They use restrictive permissions and include checksums plus the prior config, installer runtime, OpenCode data and state, and install metadata. OpenCode databases are treated as opaque files; Anvil does not edit undocumented schemas. Backups may contain sensitive session or authentication state.
 
@@ -80,4 +88,4 @@ Anvil configures one model-neutral `anvil` primary agent. No model is pinned; se
 
 ## Version history
 
-See the [runtime capability matrix](docs/versions/README.md), [V1 history](docs/versions/v1.md), [V2 release notes](docs/versions/v2.md), [Anvil 2.1 release notes](docs/versions/v2.1.md), [runtime compatibility](docs/runtime-compatibility.md), [V1-to-V2 migration guide](docs/migrations/v1-to-v2.md), [Anvil 2.0-to-2.1 migration guide](docs/migrations/v2-to-v2.1.md), [memory behavior](docs/memory.md), and [OpenCode compatibility](docs/opencode-compatibility.md).
+See the [runtime capability matrix](docs/versions/README.md), [V1 history](docs/versions/v1.md), [V2 release notes](docs/versions/v2.md), [Anvil 2.1 release notes](docs/versions/v2.1.md), [Anvil 2.2 release notes](docs/versions/v2.2.md), [runtime compatibility](docs/runtime-compatibility.md), [V1-to-V2 migration guide](docs/migrations/v1-to-v2.md), [Anvil 2.0-to-2.1 migration guide](docs/migrations/v2-to-v2.1.md), [Anvil 2.1-to-2.2 migration guide](docs/migrations/v2.1-to-v2.2.md), [memory behavior](docs/memory.md), and [OpenCode compatibility](docs/opencode-compatibility.md).

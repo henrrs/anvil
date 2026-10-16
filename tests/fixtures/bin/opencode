@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Small offline OpenCode CLI contract fixture for both Anvil runtime profiles."""
+
+from __future__ import annotations
+
+import http.server
+import json
+import os
+import re
+import sys
+import threading
+import urllib.request
+from pathlib import Path
+from urllib.parse import urlsplit
+
+
+args = sys.argv[1:]
+version = os.environ.get("ANVIL_FIXTURE_VERSION", "1.18.18")
+major = 1 if version.startswith("1.") else 2
+config_dir = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "opencode"
+config_path = config_dir / "opencode.jsonc"
+server_record = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "anvil-fixture-server.json"
+
+
+def load_config():
+    try:
+        return json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def skills():
+    result = []
+    root = config_dir / "skills"
+    if root.is_dir():
+        for path in sorted(root.glob("*/SKILL.md")):
+            content = path.read_text(encoding="utf-8")
+            match = re.search(r"(?m)^name:\s*([A-Za-z0-9_-]+)\s*$", content)
+            if match:
+                result.append({"name": match.group(1), "id": match.group(1)})
+    return result
+
+
+def commands():
+    root = config_dir / "commands"
+    return [{"name": path.stem, "id": path.stem} for path in sorted(root.glob("*.md"))] if root.is_dir() else []
+
+
+def output(value):
+    print(json.dumps(value))
+
+
+def api_server():
+    plugin = [{"id": "anvil-core", "state": {"status": "active"}}] if (config_dir / "plugins/anvil-core/index.ts").is_file() else []
+    references = [{"name": "anvil-knowledge", "path": "fixture-knowledge"}] if load_config().get("references") else []
+    mapping = {
+        "/api/command": {"data": commands()},
+        "/api/skill": {"data": [{"id": item["id"]} for item in skills()]},
+        "/api/plugin": {"data": plugin},
+        "/api/reference": {"data": references},
+    }
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            value = mapping.get(urlsplit(self.path).path, {"data": []})
+            data = json.dumps(value).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_POST(self):
+            if urlsplit(self.path).path != "/__anvil_fixture_shutdown":
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            threading.Thread(target=server.shutdown, daemon=True).start()
+
+        def log_message(self, _format, *_args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", int(args[args.index("--port") + 1])), Handler)
+    server_record.parent.mkdir(parents=True, exist_ok=True)
+    server_record.write_text(json.dumps({"port": server.server_port}), encoding="utf-8")
+    server.serve_forever()
+    server_record.unlink(missing_ok=True)
+
+
+if args == ["--version"]:
+    print(f"opencode v{version}")
+elif args[:2] == ["debug", "paths"]:
+    print(f"config {config_dir}")
+    print(f"data {Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share')) / 'opencode'}")
+    print(f"state {Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'opencode'}")
+elif args[:2] == ["debug", "config"]:
+    config = load_config()
+    if major == 1:
+        config["command"] = {item["name"]: {} for item in commands()}
+        output(config)
+    else:
+        output([{"type": "document", "info": config}])
+elif args[:2] == ["debug", "skill"]:
+    output(skills())
+elif args and args[0] == "stats":
+    if "--json" in args:
+        output({"range": {"from": 0, "to": 0}, "sessions": 0, "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}}, "cost": 0})
+    else:
+        print("Sessions 0\nInput 0\nOutput 0\nCost 0")
+elif args and args[0] == "serve":
+    api_server()
+elif args[:2] == ["service", "stop"]:
+    try:
+        port = json.loads(server_record.read_text(encoding="utf-8"))["port"]
+        request = urllib.request.Request(f"http://127.0.0.1:{port}/__anvil_fixture_shutdown", method="POST")
+        with urllib.request.urlopen(request, timeout=2):
+            pass
+    except (OSError, ValueError, KeyError):
+        pass
+    server_record.unlink(missing_ok=True)
+elif args and args[0] == "api" and len(args) >= 4:
+    base = args[args.index("--server") + 1]
+    method = args[-2]
+    path = args[-1]
+    request = urllib.request.Request(base.rstrip("/") + path, method=method)
+    with urllib.request.urlopen(request, timeout=3) as response:
+        sys.stdout.write(response.read().decode("utf-8"))
+else:
+    raise SystemExit(0)

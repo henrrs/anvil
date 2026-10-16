@@ -1,0 +1,1 @@
+{"rows":[{"schema":"access","tables":["audit","table_lineage"]},{"schema":"billing","tables":["usage","list_prices"]},{"schema":"compute","tables":["clusters","node_timeline","warehouses","warehouse_events"]},{"schema":"lakeflow","tables":["jobs","job_run_timeline"]},{"schema":"query","tables":["history"]}]}

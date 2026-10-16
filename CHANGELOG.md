@@ -2,6 +2,30 @@
 
 Release notes for user-visible Anvil changes. See [version history](docs/versions/README.md) and [release discipline](docs/RELEASING.md).
 
+## [2.2.0] - 2026-10-16
+
+### Added
+
+- Optional, runtime-independent Databricks capability through the official CLI and REST APIs, including cross-session profile selection, Python Command Execution, bounded SQL Statement Execution, live system-catalog discovery, and setup/doctor/capabilities integration.
+- Dated system-table catalog snapshot, focused references, seven aggregate query recipes, and deterministic FinOps analysis with an Evidence Confidence Score.
+- Offline Databricks CLI and OpenCode runtime fixtures. `make test` no longer resolves or downloads external runtime candidates.
+
+### Changed
+
+- Condensed the global harness and clarified execution evidence, recovery, validation, scope, Databricks mutation, secret, and FinOps guardrails.
+- Skill descriptions now explain when each skill should and should not be used.
+- `make capabilities` reports runtime and live Databricks state in one text or JSON document.
+
+### Preserved
+
+- One model-neutral primary agent, explicit-only durable memory, no default MCP requirement, and support for OpenCode 1.x and 2.x without implicit major migration.
+- Databricks credentials remain under CLI-managed authentication; Anvil stores only the selected profile and workspace host.
+
+### Limitations
+
+- Mandatory validation is fully offline and does not claim a live Databricks or OpenCode service connection was tested.
+- Databricks requires CLI 1.0.0 or newer, valid workspace permissions, a running classic all-purpose cluster for remote Python, and a running SQL warehouse for SQL execution.
+
 ## [2.1.0] - 2026-10-16
 
 ### Added
