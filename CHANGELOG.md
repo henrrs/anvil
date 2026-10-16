@@ -2,6 +2,36 @@
 
 Release notes for user-visible Anvil changes. See [version history](docs/versions/README.md) and [release discipline](docs/RELEASING.md).
 
+## [2.5.0] - 2026-10-16
+
+### Added
+
+- Anvil-owned Databricks config at `${XDG_CONFIG_HOME:-$HOME/.config}/anvil/databricks/databrickscfg` with predictable `anvil-dev`, `anvil-staging`, and `anvil-prod` profiles.
+- Clean-slate workspace onboarding, cloud/topology-based authentication selection, Azure CLI session reuse, Azure local interactive login, and remote Azure device-code authentication.
+- Atomic config activation, restrictive permissions, a validated `RESET=1` flow with a private rollback copy, and profile ownership metadata without credential values.
+- Isolation of inherited `DATABRICKS_*` overrides from Anvil CLI/SDK child processes and separate doctor reporting for external profiles.
+
+### Changed
+
+- Databricks setup no longer adopts or repairs arbitrary user profiles. Old selected external profiles are ignored; their saved workspace host may be offered for explicit confirmation when creating an Anvil profile.
+- Authentication selection happens only after workspace, cloud, topology and Anvil profile preparation. The same Anvil config/profile is used by the CLI and SDK.
+- Doctor and capabilities identify Anvil configuration separately from external profiles; external profiles are counted for diagnostics but are never used.
+
+### Fixed
+
+- An expired external U2M profile no longer forces Anvil into repeated browser reauthentication.
+- Remote/hybrid Azure sessions no longer default to Databricks loopback OAuth when Azure CLI device code is available.
+- External token/host/profile environment variables cannot silently override Anvil child operations or appear in diagnostics.
+
+### Preserved
+
+- CLI/SDK capability routing and specialized SQL Connector, Databricks Connect, and VS Code-assisted paths.
+- OpenCode 1 and 2 compatibility, safe runtime upgrade behavior, offline tests, no MCP requirement, and secret-free Anvil state.
+
+### Release choice and validation
+
+This is a MINOR release: it changes Databricks onboarding compatibly while preserving the command surface and provider state format. Mandatory tests use local CLI, Azure CLI, SDK, and runtime fakes; no live Databricks workspace or cloud login was used.
+
 ## [2.4.0] - 2026-10-16
 
 ### Added

@@ -12,28 +12,33 @@ def detect_topology(*, environ: Mapping[str, str] | None = None, tty: bool | Non
     env = dict(os.environ if environ is None else environ)
     interactive = bool(os.isatty(0)) if tty is None else tty
     path = str(Path(cwd or os.getcwd()).expanduser())
-    vscode = any(env.get(key) for key in (
-        "TERM_PROGRAM", "VSCODE_PID", "VSCODE_IPC_HOOK_CLI", "VSCODE_AGENT_FOLDER", "VSCODE_REMOTE",
-    )) or "vscode-server" in path.casefold() or ".vscode-server" in path.casefold()
-    remote_markers = any(env.get(key) for key in (
-        "VSCODE_REMOTE", "VSCODE_AGENT_FOLDER", "SSH_CONNECTION", "SSH_TTY",
-        "REMOTE_CONTAINERS", "CODESPACES", "CONTAINER",
-    )) or "vscode-server" in path.casefold() or ".vscode-server" in path.casefold()
-    if vscode and remote_markers:
+    vscode_path = "vscode-server" in path.casefold() or ".vscode-server" in path.casefold()
+    vscode = (str(env.get("TERM_PROGRAM", "")).casefold() == "vscode"
+              or any(env.get(key) for key in ("VSCODE_PID", "VSCODE_IPC_HOOK_CLI", "VSCODE_AGENT_FOLDER", "VSCODE_REMOTE"))
+              or vscode_path)
+    vscode_remote = bool(env.get("VSCODE_REMOTE") or env.get("VSCODE_AGENT_FOLDER") or vscode_path)
+    ssh = bool(env.get("SSH_CONNECTION") or env.get("SSH_TTY"))
+    container = bool(env.get("REMOTE_CONTAINERS") or env.get("CODESPACES") or env.get("CONTAINER"))
+    wsl = bool(env.get("WSL_DISTRO_NAME") or env.get("WSL_INTEROP"))
+    if vscode_remote:
         kind = "vscode_remote"
-    elif env.get("SSH_CONNECTION") or env.get("SSH_TTY"):
-        kind = "ssh"
-    elif env.get("REMOTE_CONTAINERS") or env.get("CODESPACES") or env.get("CONTAINER"):
+    elif container and (ssh or wsl):
+        kind = "unknown_hybrid"
+    elif container:
         kind = "container"
+    elif ssh and wsl:
+        kind = "unknown_hybrid"
+    elif ssh:
+        kind = "ssh"
     elif env.get("CI") or not interactive:
         kind = "headless"
+    elif wsl:
+        kind = "wsl"
     elif vscode:
         kind = "vscode_local"
-    elif env.get("WSL_DISTRO_NAME") or env.get("WSL_INTEROP"):
-        kind = "wsl"
     else:
         kind = "local"
-    return {"kind": kind, "remote": kind in {"vscode_remote", "ssh", "container", "headless"},
+    return {"kind": kind, "remote": kind in {"vscode_remote", "ssh", "container", "headless", "unknown_hybrid"},
             "interactive": interactive, "vscode_detected": vscode}
 
 

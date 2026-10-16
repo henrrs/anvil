@@ -20,6 +20,7 @@ help:
 	  'make stats      Show native stats, or an honest runtime fallback.' \
 	  'make databricks-setup  Configure Databricks; attempts safe CLI install, then SDK fallback.' \
 	  '  DRY_RUN=1            Preview providers and auth without changes or network access.' \
+	  '  RESET=1              Replace only Anvil-owned Databricks config after validation.' \
 	  '  OUTPUT=json          Emit structured machine-readable setup results.' \
 	  '  VERBOSE=1            Include provider diagnostics in human output.' \
 	  'make rollback   Restore the latest complete pre-upgrade/rebuild snapshot.' \
@@ -58,7 +59,7 @@ stats:
 	@bash scripts/stats.sh
 
 databricks-setup:
-	@python3 scripts/databricks.py setup --format "$(if $(OUTPUT),$(OUTPUT),text)" $(if $(filter 1 true yes,$(VERBOSE)),--verbose,) $(if $(filter 1 true yes,$(DRY_RUN)),--dry-run,)
+	@python3 scripts/databricks.py setup --format "$(if $(OUTPUT),$(OUTPUT),text)" $(if $(filter 1 true yes,$(VERBOSE)),--verbose,) $(if $(filter 1 true yes,$(DRY_RUN)),--dry-run,) $(if $(filter 1 true yes,$(RESET)),--reset,)
 
 rollback:
 	@bash scripts/rollback.sh

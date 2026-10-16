@@ -47,8 +47,12 @@ def check(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def save_pref(config_home: Path, profile: str = "sample-profile", host: str = "https://workspace-a.example.invalid") -> None:
+def save_pref(config_home: Path, profile: str = "anvil-dev", host: str = "https://workspace-a.example.invalid") -> None:
     with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(config_home)}, clear=False):
+        config_file = config_home / "anvil" / "databricks" / "databrickscfg"
+        config_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        config_file.write_text(f"[{profile}]\nhost = {host}\n", encoding="utf-8")
+        config_file.chmod(0o600)
         dbx.save_preferences(profile, host)
 
 
@@ -71,19 +75,22 @@ def test_profile_persistence(temp: Path) -> None:
         "XDG_CONFIG_HOME": str(config_home),
         "PATH": "/usr/bin:/bin",
         "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
-        "ANVIL_DATABRICKS_SCENARIO": "valid",
+        "ANVIL_DATABRICKS_SCENARIO": "auth_required",
         "ANVIL_DATABRICKS_FIXTURE_STATE": str(state),
     }
-    with mock.patch.dict(os.environ, env, clear=False):
+    with mock.patch.dict(os.environ, env, clear=False), mock.patch.object(dbx.sys, "stdin", TTYInput("")), \
+            mock.patch("builtins.input", side_effect=["https://workspace-a.example.invalid", "1", "y", "y"]):
         result = dbx.setup()
         human = dbx.presentation.setup_text(result)
-        check("Status                 READY" in human and "sample-profile" in human,
+        check("Status                 READY" in human and "anvil-dev" in human,
               "successful setup did not present selected profile and readiness")
         check("not on this shell's PATH" in human and str(FIXTURE_BIN) not in human,
               "setup exposed an internal CLI path or omitted its optional PATH note")
-        prefs_path = Path(result["preferences_path"])
+        prefs_path = dbx.provider_state.state_path()
         prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
-        check(prefs["selected_profile"] == "sample-profile", "single valid profile was not selected")
+        check(prefs["selected_profile"] == "anvil-dev", "Anvil-owned profile was not selected")
+        check(prefs["profile"]["ownership"] == "anvil" and prefs["profile"]["config_file"] == str(dbx.owned_config.config_file()),
+              "Anvil profile ownership metadata was not persisted")
         check(prefs["workspace_host"] == "https://workspace-a.example.invalid", "workspace host was not recorded")
         check(prefs_path.stat().st_mode & 0o777 == 0o600, "Databricks preferences are not mode 0600")
         check(prefs_path.parent.stat().st_mode & 0o777 == 0o700, "Databricks preferences directory is not mode 0700")
@@ -96,14 +103,21 @@ def test_profile_persistence(temp: Path) -> None:
             check(exc.category == "PREFERENCES_INVALID", "nested credential field was not rejected")
         else:
             raise AssertionError("nested credential field was accepted in Anvil preferences")
-        dbx.save_preferences("sample-profile", "https://workspace-a.example.invalid")
+        config_file = dbx.owned_config.config_file()
+        check(config_file.stat().st_mode & 0o777 == 0o600, "Anvil Databricks config is not mode 0600")
+        check(config_file.parent.stat().st_mode & 0o777 == 0o700, "Anvil Databricks config directory is not mode 0700")
+        dbx.save_preferences("anvil-dev", "https://workspace-a.example.invalid")
         # Resolve again in a new call to show that future sessions reuse the
         # selected profile without selecting another workspace.
         name, host, _ = dbx.resolve_profile()
-        check((name, host) == ("sample-profile", "https://workspace-a.example.invalid"), "selected profile did not persist across calls")
+        check((name, host) == ("anvil-dev", "https://workspace-a.example.invalid"), "selected profile did not persist across calls")
+        before = config_file.read_bytes()
         with mock.patch.object(dbx.cli_install, "attempt_cli_install", side_effect=AssertionError("healthy CLI was reinstalled")):
             repeated = dbx.setup()
-        check(repeated["selected_profile"] == "sample-profile", "repeat setup changed the selected workspace")
+        check(repeated["selected_profile"] == "anvil-dev" and repeated["already_configured"], "repeat setup changed the selected workspace")
+        check(config_file.read_bytes() == before, "idempotent setup rewrote a healthy Anvil config")
+        check(json.loads(state.read_text(encoding="utf-8"))["databricks-login"] == 1,
+              "idempotent setup repeated interactive Databricks authentication")
 
 
 def test_cli_environment_auth_without_named_profile(temp: Path) -> None:
@@ -112,72 +126,182 @@ def test_cli_environment_auth_without_named_profile(temp: Path) -> None:
         "HOME": str(temp / "environment-auth-home"),
         "XDG_CONFIG_HOME": str(config_home),
         "XDG_DATA_HOME": str(temp / "environment-auth-data"),
-        "DATABRICKS_CONFIG_FILE": str(temp / "missing-databrickscfg"),
+        "DATABRICKS_CONFIG_FILE": str(temp / "external-databrickscfg"),
+        "DATABRICKS_TOKEN": "secret-external-token-must-not-leak",
+        "DATABRICKS_HOST": "https://external.workspace.invalid",
+        "DATABRICKS_CONFIG_PROFILE": "dev",
         "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
-        "ANVIL_DATABRICKS_SCENARIO": "environment_auth",
+        "ANVIL_DATABRICKS_SCENARIO": "valid",
         "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / "environment-auth-state.json"),
     }
+    external = Path(env["DATABRICKS_CONFIG_FILE"])
+    external.write_text("[dev]\nhost = https://external.workspace.invalid\n", encoding="utf-8")
+    save_pref(config_home)
     original_run = subprocess.run
-    commands: list[list[str]] = []
+    commands: list[tuple[list[str], dict[str, str]]] = []
 
     def recording_run(command, *args, **kwargs):
         if isinstance(command, (list, tuple)) and command and str(command[0]) == str(FIXTURE_BIN / "databricks"):
-            commands.append(list(command))
+            commands.append((list(command), kwargs.get("env", {})))
         return original_run(command, *args, **kwargs)
 
     with mock.patch.dict(os.environ, env, clear=False), \
             mock.patch("subprocess.run", side_effect=recording_run):
-        configured = dbx.setup()
-        check(configured["selected_profile"] == "__ANVIL_DEFAULT__", "default CLI Unified Authentication was not accepted without a named profile")
         selected, host, profiles = dbx.resolve_profile()
-        check(selected == "__ANVIL_DEFAULT__" and host == "https://workspace-a.example.invalid" and profiles == [],
-              "saved default CLI authentication did not resolve on a later operation")
-    identity_commands = [command for command in commands if command[1:3] in (["auth", "describe"], ["current-user", "me"])]
-    check(len(identity_commands) >= 4, "default CLI auth was not revalidated on setup and operation")
-    check(all("--profile" not in command for command in identity_commands), "internal default profile sentinel leaked to the CLI")
+        check(selected == "anvil-dev" and host == "https://workspace-a.example.invalid"
+              and [item["name"] for item in profiles] == ["anvil-dev"],
+              "Anvil did not resolve only its own config profile")
+    check(commands, "Anvil did not invoke the isolated Databricks CLI")
+    for command, child_env in commands:
+        check(child_env.get("DATABRICKS_CONFIG_FILE") == str(config_home / "anvil" / "databricks" / "databrickscfg"),
+              f"CLI command did not use Anvil's config: {command}")
+        check(child_env.get("DATABRICKS_TOKEN") is None and child_env.get("DATABRICKS_HOST") is None,
+              "external credential overrides leaked into an Anvil child process")
+        if "--profile" in command:
+            check(child_env.get("DATABRICKS_CONFIG_PROFILE") == "anvil-dev",
+                  "Anvil child process did not select its owned profile")
+    check(external.read_text(encoding="utf-8") == "[dev]\nhost = https://external.workspace.invalid\n",
+          "Anvil changed the external Databricks configuration")
+    check("secret-external-token-must-not-leak" not in repr(commands), "external token appeared in captured command environment")
+
+
+def test_sdk_environment_uses_owned_config(temp: Path) -> None:
+    config_home = temp / "sdk-boundary-config"
+    env = {"HOME": str(temp / "sdk-home"), "XDG_CONFIG_HOME": str(config_home),
+           "DATABRICKS_CONFIG_FILE": str(temp / "external-sdk-config"),
+           "DATABRICKS_CONFIG_PROFILE": "dev", "DATABRICKS_TOKEN": "hidden-sdk-token",
+           "DATABRICKS_HOST": "https://external.example.invalid"}
+    observed: dict[str, Any] = {}
+
+    def fake_run(command, **kwargs):
+        observed["command"] = command
+        observed["env"] = kwargs["env"]
+        return types.SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    with mock.patch.dict(os.environ, env, clear=False), \
+            mock.patch.object(dbx.sdk, "discover_sdk", return_value={"python": sys.executable}), \
+            mock.patch.object(dbx.sdk.subprocess, "run", side_effect=fake_run):
+        dbx.sdk.call("identity", profile="anvil-dev")
+    child_env = observed["env"]
+    check(child_env.get("DATABRICKS_CONFIG_FILE") == str(config_home / "anvil" / "databricks" / "databrickscfg")
+          and child_env.get("DATABRICKS_CONFIG_PROFILE") == "anvil-dev",
+          "SDK worker did not receive Anvil's config/profile")
+    check(not any(key.startswith("DATABRICKS_") and key not in {"DATABRICKS_CONFIG_FILE", "DATABRICKS_CONFIG_PROFILE"}
+                  for key in child_env),
+          "SDK worker inherited an external Databricks credential override")
+    check("hidden-sdk-token" not in repr(observed), "external token was exposed in SDK process diagnostics")
 
 
 def test_multiple_profile_selection(temp: Path) -> None:
-    state = temp / "multiple-state.json"
+    config_home = temp / "multiple-config"
+    external = temp / "external-databrickscfg"
+    external.write_text("[dev]\nhost = https://workspace-a.example.invalid\n\n[engineering]\nhost = https://workspace-b.example.invalid\n",
+                        encoding="utf-8")
     env = {
-        "XDG_CONFIG_HOME": str(temp / "multiple-config"),
+        "XDG_CONFIG_HOME": str(config_home),
+        "DATABRICKS_CONFIG_FILE": str(external),
         "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
-        "ANVIL_DATABRICKS_SCENARIO": "multiple_profiles",
-        "ANVIL_DATABRICKS_FIXTURE_STATE": str(state),
+        "ANVIL_DATABRICKS_SCENARIO": "auth_required",
+        "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / "multiple-state.json"),
     }
     with mock.patch.dict(os.environ, env, clear=False), mock.patch.object(dbx.sys, "stdin", TTYInput("")), \
-            mock.patch("builtins.input", return_value="2"), contextlib.redirect_stdout(io.StringIO()):
+            mock.patch("builtins.input", side_effect=["https://workspace-c.example.invalid", "1", "y", "y"]), contextlib.redirect_stdout(io.StringIO()):
         result = dbx.setup()
-        check(result["selected_profile"] == "sample-profile-b", "interactive profile choice was ignored")
-        check(result["workspace_host"] == "https://workspace-b.example.invalid", "chosen profile host was mismatched")
-
-    with mock.patch.dict(os.environ, env, clear=False), mock.patch.object(dbx.sys, "stdin", io.StringIO("")):
-        dbx.load_preferences()
-        try:
-            dbx.choose_profile(dbx.discover_profiles(), None)
-        except dbx.DatabricksError as exc:
-            check(exc.category == "PROFILE_SELECTION_REQUIRED", "multiple profiles had the wrong noninteractive error")
-        else:
-            raise AssertionError("multiple profiles were silently selected in noninteractive setup")
+        check(result["selected_profile"] == "anvil-dev", "external profile was adopted instead of creating anvil-dev")
+        check(result["workspace_host"] == "https://workspace-c.example.invalid", "new Anvil profile host was mismatched")
+        check([item["name"] for item in dbx.discover_profiles()] == ["anvil-dev"],
+              "external profiles leaked into Anvil profile discovery")
+        doctor = dbx.local_status()
+        doctor_text = dbx.status_text(doctor)
+        check(doctor["external_profiles_detected"] == 2 and doctor["external_profiles_used"] is False
+              and "Used by Anvil        NO" in doctor_text,
+              "doctor did not distinguish external profiles from Anvil configuration")
+    check(external.read_text(encoding="utf-8").startswith("[dev]"), "external profiles were modified")
 
 
 def test_invalid_selected_profile_never_switches(temp: Path) -> None:
     config_home = temp / "invalid-config"
     config_home.mkdir()
-    save_pref(config_home)
+    state_path = config_home / "anvil" / "databricks.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps({"schema_version": 2, "selected_profile": "dev",
+                                      "workspace_host": "https://workspace-a.example.invalid",
+                                      "providers": {}, "capabilities": {}}), encoding="utf-8")
+    external = temp / "legacy-databrickscfg"
+    external.write_text("[dev]\nhost = https://workspace-a.example.invalid\nauth_type = databricks-cli\n", encoding="utf-8")
     env = {
+        "HOME": str(temp),
         "XDG_CONFIG_HOME": str(config_home),
+        "DATABRICKS_CONFIG_FILE": str(external),
         "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
-        "ANVIL_DATABRICKS_SCENARIO": "invalid_profile",
+        "ANVIL_DATABRICKS_SCENARIO": "auth_required",
         "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / "invalid-state.json"),
     }
+    with mock.patch.dict(os.environ, env, clear=False), mock.patch.object(dbx.sys, "stdin", TTYInput("")), \
+            mock.patch("builtins.input", side_effect=["", "1", "y", "y"]), contextlib.redirect_stdout(io.StringIO()):
+        result = dbx.setup()
+        check(result["selected_profile"] == "anvil-dev", "legacy external profile was not replaced by Anvil-owned setup")
+    check(external.read_text(encoding="utf-8") == "[dev]\nhost = https://workspace-a.example.invalid\nauth_type = databricks-cli\n",
+          "migration reauthenticated or modified the legacy external profile")
+    state = json.loads((config_home / "anvil" / "databricks.json").read_text(encoding="utf-8"))
+    check(state["profile"]["ownership"] == "anvil" and state["selected_profile"] == "anvil-dev",
+          "legacy preferences did not switch only after Anvil profile validation")
+
+
+def test_anvil_config_ownership_and_reset(temp: Path) -> None:
+    config_home = temp / "ownership-config"
+    external = temp / "ownership-external.cfg"
+    external.write_text("[dev]\nhost = https://external.example.invalid\n", encoding="utf-8")
+    env = {"HOME": str(temp), "XDG_CONFIG_HOME": str(config_home),
+           "DATABRICKS_CONFIG_FILE": str(external),
+           "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
+           "ANVIL_DATABRICKS_SCENARIO": "valid",
+           "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / "ownership-fixture-state.json")}
+    target = config_home / "anvil" / "databricks" / "databrickscfg"
     with mock.patch.dict(os.environ, env, clear=False):
-        try:
-            dbx.resolve_profile()
-        except dbx.DatabricksError as exc:
-            check(exc.category == "PROFILE_INVALID", "invalid selected profile had the wrong error")
-        else:
-            raise AssertionError("invalid selected profile silently switched to another profile")
+        target.parent.mkdir(parents=True, mode=0o700)
+        target.write_text("[old]\nhost = https://old.example.invalid\n", encoding="utf-8")
+        original = target.read_bytes()
+        with mock.patch.object(dbx.sys, "stdin", io.StringIO("")):
+            try:
+                dbx.setup()
+            except dbx.DatabricksError as exc:
+                check(exc.category == "CONFIG_OWNERSHIP_AMBIGUOUS", "unowned Anvil config had the wrong diagnostic")
+            else:
+                raise AssertionError("setup adopted an ambiguous Anvil config")
+            dry = dbx.setup(dry_run=True)
+        check(dry["config_ownership_issue"] == "ambiguous" and target.read_bytes() == original,
+              "dry-run did not preserve and diagnose ambiguous configuration")
+        target.unlink()
+        with mock.patch.object(dbx.sys, "stdin", TTYInput("")), \
+                mock.patch("builtins.input", side_effect=["https://workspace-a.example.invalid", "1", "y", "y"]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            first = dbx.setup()
+        check(first["selected_profile"] == "anvil-dev", "clean setup did not create anvil-dev")
+        good_config = target.read_bytes()
+        target.write_text("[broken\nhost = https://workspace-a.example.invalid\n", encoding="utf-8")
+        with mock.patch.object(dbx.sys, "stdin", io.StringIO("")):
+            try:
+                dbx.setup()
+            except dbx.DatabricksError as exc:
+                check(exc.category == "CONFIG_INVALID", "corrupt managed config had the wrong diagnostic")
+            else:
+                raise AssertionError("setup overwrote a corrupt managed config without reset")
+        with mock.patch.object(dbx.sys, "stdin", TTYInput("")), \
+                mock.patch("builtins.input", side_effect=["", "1", "y", "y"]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            reset = dbx.setup(reset=True)
+        check(reset["selected_profile"] == "anvil-dev" and reset["configuration_backup"],
+              "RESET=1 did not revalidate and replace the Anvil-owned configuration")
+        backup = Path(reset["configuration_backup"])
+        check(backup.is_file() and backup.read_text(encoding="utf-8").startswith("[broken"),
+              "reset did not preserve a rollback copy of the prior Anvil config")
+        check(target.read_text(encoding="utf-8").startswith("[anvil-dev]") and target.stat().st_mode & 0o777 == 0o600,
+              "reset did not install a private Anvil-owned profile")
+        check(external.read_text(encoding="utf-8") == "[dev]\nhost = https://external.example.invalid\n",
+              "reset changed an external Databricks profile")
+        check(good_config.startswith(b"[anvil-dev]") and backup.stat().st_mode & 0o777 == 0o600,
+              "Anvil config or reset backup permissions were not private")
 
 
 def test_cli_minimum_and_missing(temp: Path) -> None:
@@ -522,21 +646,42 @@ def test_topology_auth_strategy_and_presenters() -> None:
     check(topology.workspace_cloud("https://example.gcp.databricks.com") == "gcp", "GCP host was not detected")
     args = {"topology": remote, "cloud": "azure", "cli_ready": True, "sdk_ready": True,
             "azure_cli_available": True, "azure_cli_authenticated": False}
-    check(strategy.resolve(**args)["strategy"] == "azure-device-code", "remote Azure did not select device-code auth")
+    check(strategy.resolve(**args)["strategy"] == "azure-cli-device-code", "remote Azure did not select device-code auth")
     check(strategy.resolve(**{**args, "azure_cli_authenticated": True})["strategy"] == "azure-cli-session",
           "existing Azure CLI session was not reused")
     check(strategy.resolve(**{**args, "cloud": "aws"})["strategy"] == "vscode-assisted",
           "remote AWS incorrectly selected browser callback login")
+    check(strategy.resolve(**{**args, "cloud": "azure", "topology": local})["strategy"] == "azure-cli-interactive",
+          "local Azure without a session did not choose Azure CLI interactive login")
+    check(strategy.resolve(**{**args, "cloud": "azure", "topology": local, "azure_cli_available": False})["strategy"] == "databricks-cli-u2m",
+          "local Azure without Azure CLI did not retain the Databricks U2M fallback")
+    hybrid = topology.detect_topology(environ={"REMOTE_CONTAINERS": "true", "SSH_CONNECTION": "fixture"}, tty=True)
+    check(hybrid["kind"] == "unknown_hybrid" and
+          strategy.resolve(**{**args, "topology": hybrid})["strategy"] == "azure-cli-device-code",
+          "remote hybrid Azure did not choose non-loopback device-code auth")
+    check(strategy.resolve(**{**args, "cloud": "aws", "topology": hybrid})["strategy"] == "manual-auth",
+          "remote AWS/GCP selected loopback OAuth")
     check(strategy.resolve(**{**args, "topology": local, "cloud": "aws", "sdk_ready": False})["strategy"] == "databricks-cli-u2m",
           "local interactive OAuth path was removed")
-    check(strategy.resolve(**{**args, "valid_profile": True})["strategy"] == "existing-profile",
-          "valid profile did not take priority")
+    check(strategy.resolve(**{**args, "anvil_profile_valid": True})["strategy"] == "anvil-profile",
+          "valid Anvil-owned profile did not take priority")
+    connector_only = {"cli": {"status": "NOT_INSTALLED"}, "sdk": {"status": "NOT_INSTALLED"},
+                      "sql_connector": {"status": "READY"}, "connect": {"status": "NOT_INSTALLED"},
+                      "vscode": {"status": "NOT_INSTALLED"}}
+    with mock.patch.object(dbx, "load_preferences", return_value={"authentication": {"strategy": "azure-cli-session", "provider": "sdk"}}):
+        azure_routes = dbx.resolve_providers(connector_only, auth_valid=True)
+    check(azure_routes["sql.execute"]["state"] == "UNAVAILABLE",
+          "SQL Connector OAuth was substituted for an Azure CLI authentication session")
+    with mock.patch.object(dbx, "load_preferences", return_value={"authentication": {"strategy": "databricks-cli-u2m", "provider": "cli"}}):
+        u2m_routes = dbx.resolve_providers(connector_only, auth_valid=True)
+    check(u2m_routes["sql.execute"]["provider"] == "sql_connector",
+          "specialized SQL Connector fallback was removed for Databricks OAuth")
 
-    result = {"dry_run": False, "overall": "READY", "selected_profile": "development",
+    result = {"dry_run": False, "overall": "READY", "selected_profile": "anvil-dev",
               "providers": {"cli": {"status": "READY", "installed": True, "path_visible": False,
                                      "executable": "/internal/private/databricks"},
                             "sdk": {"status": "NOT_INSTALLED"}, "vscode": {"available": True}},
-              "authentication": {"strategy": "existing-profile", "provider": "cli"},
+              "authentication": {"strategy": "anvil-profile", "provider": "cli"},
               "topology": {"kind": "local"}}
     rendered = dbx.presentation.setup_text(result)
     check(not rendered.lstrip().startswith("{"), "human setup output begins as JSON")
@@ -579,66 +724,118 @@ def test_auth_executor_fakes(temp: Path) -> None:
     bin_dir = temp / "azure-bin"
     bin_dir.mkdir()
     az = bin_dir / "az"
-    az.write_text("#!/bin/sh\nif [ \"$1 $2\" = 'account show' ]; then printf '{\"id\":\"fixture-subscription\"}\\n'; fi\n",
+    az.write_text("""#!/bin/sh
+if [ "$1 $2" = 'account show' ]; then
+  if [ -f "$ANVIL_AZURE_FIXTURE_AUTH" ]; then printf '{"id":"fixture-subscription"}\\n'; exit 0; fi
+  exit 1
+fi
+if [ "$1" = 'login' ]; then
+  if [ "$ANVIL_AZURE_FIXTURE_SCENARIO" = 'success' ]; then : > "$ANVIL_AZURE_FIXTURE_AUTH"; printf 'Open the sign-in page and enter code ABCD-EFGH\\n'; exit 0; fi
+  exit 1
+fi
+exit 2
+""",
                   encoding="utf-8")
     az.chmod(0o755)
-    with mock.patch.dict(os.environ, {"PATH": str(bin_dir), "ANVIL_AUTH_TIMEOUT": "10"}, clear=False):
+    azure_state = temp / "azure-fixture-authenticated"
+    azure_state.unlink(missing_ok=True)
+    azure_env = {"PATH": str(bin_dir), "ANVIL_AUTH_TIMEOUT": "10",
+                 "ANVIL_AZURE_FIXTURE_AUTH": str(azure_state),
+                 "ANVIL_AZURE_FIXTURE_SCENARIO": "success"}
+    with mock.patch.dict(os.environ, azure_env, clear=False):
+        check(dbx.auth_executor.azure_cli_status(timeout=1) == (True, False),
+              "fake Azure CLI unauthenticated state was not detected")
         device = dbx.auth_executor.run_azure_device_login(timeout=1)
     check(device["status"] == "READY", "fake Azure CLI device-code login did not validate")
-    print("PASS auth timeout, cancellation, and Azure device-code execution use local fakes")
+    azure_state.unlink(missing_ok=True)
+    with mock.patch.dict(os.environ, {**azure_env, "ANVIL_AZURE_FIXTURE_SCENARIO": "failure"}, clear=False):
+        failed = dbx.auth_executor.run_azure_device_login(timeout=1)
+    check(failed["status"] == "FAILED" and failed["category"] == "AUTH_REQUIRED",
+          "fake Azure CLI failed login was not classified")
+    with mock.patch.dict(os.environ, azure_env, clear=False), \
+            mock.patch.object(dbx.auth_executor, "_run_interactive", side_effect=KeyboardInterrupt):
+        cancelled_azure = dbx.auth_executor.run_azure_device_login(timeout=1)
+    check(cancelled_azure["status"] == "CANCELLED" and cancelled_azure["category"] == "AUTH_CANCELLED",
+          "Azure login cancellation was not classified")
+    with mock.patch.dict(os.environ, {**azure_env, "DATABRICKS_TOKEN": "hidden-azure-token"}, clear=False), \
+            mock.patch.object(dbx.auth_executor, "_run_interactive", return_value={"returncode": 0}) as azure_run, \
+            mock.patch.object(dbx.auth_executor, "azure_cli_status", return_value=(True, True)):
+        dbx.auth_executor.run_azure_interactive_login(timeout=1)
+    check("DATABRICKS_TOKEN" not in azure_run.call_args.kwargs["env"]
+          and "hidden-azure-token" not in repr(azure_run.call_args),
+          "external Databricks token leaked into Azure CLI login")
+    print("PASS auth timeout, cancellation, Azure session states, and device-code execution use local fakes")
 
 
 def test_setup_auth_orchestration_fakes() -> None:
-    cli = {"status": "READY", "installed": True, "executable": "/fixture/private/databricks"}
-    sdk = {"status": "READY", "installed": True, "python": sys.executable}
-    providers = {"cli": cli, "sdk": sdk}
     host = "https://workspace-a.cloud.databricks.com"
-    with mock.patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}, clear=True), \
-            mock.patch.object(dbx.sys, "stdin", TTYInput("")), \
-            mock.patch.object(dbx.auth_executor, "run_databricks_login", return_value={"status": "READY"}) as login, \
-            mock.patch.object(dbx, "discover_profiles", return_value=[{"name": "DEFAULT", "host": host,
-                "workspace_host": host, "workspace": True, "valid": True}]), \
-            mock.patch.object(dbx, "validate_selected_profile", return_value=host):
-        selected, selected_host, auth, error = dbx._authenticate_workspace(host, {"cli": cli, "sdk": {"status": "NOT_INSTALLED"}})
-    check((selected, selected_host, error) == ("DEFAULT", host, None), "local CLI OAuth setup did not validate the selected profile")
-    check(auth["strategy"] == "databricks-cli-u2m" and auth["provider"] == "cli"
-          and login.call_args.args[:2] == (cli["executable"], host), "setup did not invoke official login through its absolute CLI path")
+    cli = {"status": "READY", "installed": True, "executable": str(FIXTURE_BIN / "databricks")}
+    stage_dir = Path(tempfile.mkdtemp(prefix="anvil-auth-fakes-"))
+    config_path = stage_dir / "databrickscfg"
+    config_path.write_text("[anvil-dev]\nhost = " + host + "\n", encoding="utf-8")
+    decision = {"strategy": "databricks-cli-u2m", "provider": "cli", "auth_required": True}
+    with mock.patch.dict(os.environ, {"PATH": "/usr/bin:/bin", "ANVIL_DATABRICKS_CLI": cli["executable"]}, clear=False), \
+            mock.patch.object(dbx, "cli_provider", return_value=cli), \
+            mock.patch.object(dbx, "sdk_provider", return_value={"status": "NOT_INSTALLED"}), \
+            mock.patch.object(dbx, "validate_selected_profile", side_effect=[dbx.DatabricksError("AUTH_REQUIRED", "no auth"), host]), \
+            mock.patch.object(dbx.auth_executor, "run_databricks_login", return_value={"status": "READY"}) as login:
+        auth, selected_host, error = dbx._authenticate_workspace(host, "anvil-dev", config_path,
+            {"cli": cli, "sdk": {"status": "NOT_INSTALLED"}}, decision)
+    check((selected_host, error) == (host, None) and auth["strategy"] == "databricks-cli-u2m",
+          "local CLI OAuth did not validate the Anvil-owned profile")
+    check(login.call_args.args[:3] == (cli["executable"], host, "anvil-dev")
+          and login.call_args.kwargs["config_path"] == str(config_path),
+          "OAuth did not use the selected Anvil profile and staged config")
 
     azure_host = "https://adb-123.azuredatabricks.net"
+    azure_path = stage_dir / "azure-databrickscfg"
+    azure_path.write_text("[anvil-dev]\nhost = " + azure_host + "\n", encoding="utf-8")
+    sdk_only = {"cli": {"status": "NOT_INSTALLED"}, "sdk": {"status": "READY", "python": sys.executable}}
     remote_env = {"PATH": "/usr/bin:/bin", "VSCODE_AGENT_FOLDER": "/remote/.vscode-server"}
+    calls = 0
+    def sdk_identity(_operation, *, profile, config_path=None, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("not logged in")
+        return {"identity": {"userName": "fixture-user"}, "host": azure_host}
     with mock.patch.dict(os.environ, remote_env, clear=True), \
-            mock.patch.object(dbx.sys, "stdin", TTYInput("")), \
+            mock.patch.object(dbx, "cli_provider", return_value={"status": "NOT_INSTALLED"}), \
+            mock.patch.object(dbx, "sdk_provider", return_value=sdk_only["sdk"]), \
             mock.patch.object(dbx.shutil, "which", side_effect=lambda name: "/usr/bin/az" if name == "az" else None), \
-            mock.patch.object(dbx.auth_executor, "azure_cli_status", return_value=(True, False)), \
             mock.patch.object(dbx.auth_executor, "run_azure_device_login", return_value={"status": "READY"}) as device_login, \
-            mock.patch.object(dbx.sdk, "call", return_value={"identity": {"userName": "fixture-user"}, "host": azure_host}) as sdk_call:
-        selected, selected_host, auth, error = dbx._authenticate_workspace(azure_host, providers)
-    check((selected, selected_host, error) == ("__ANVIL_DEFAULT__", azure_host, None),
-          "remote Azure device-code path did not validate a workspace identity")
-    check(auth == {"strategy": "azure-cli-session", "provider": "sdk", "cloud": "azure"}
-          and device_login.call_count == 1, "remote Azure setup did not retain non-secret SDK auth metadata")
-    check(sdk_call.call_args.kwargs["auth_type"] == "azure-cli" and sdk_call.call_args.kwargs["host"] == azure_host,
-          "Azure identity validation did not use the documented SDK auth type and workspace host")
+            mock.patch.object(dbx.sdk, "call", side_effect=sdk_identity) as sdk_call:
+        auth, selected_host, error = dbx._authenticate_workspace(azure_host, "anvil-dev", azure_path,
+            sdk_only, {"strategy": "azure-cli-device-code", "provider": "sdk", "auth_required": True})
+    check((selected_host, error) == (azure_host, None) and auth["strategy"] == "azure-cli-device-code"
+          and device_login.call_count == 1, "remote Azure device-code login was not followed by profile validation")
+    check(sdk_call.call_args.kwargs["profile"] == "anvil-dev"
+          and sdk_call.call_args.kwargs["config_path"] == str(azure_path)
+          and "auth_type" not in sdk_call.call_args.kwargs,
+          "SDK validation did not reuse the Anvil profile/config boundary")
+    check("auth_type = azure-cli" in azure_path.read_text(encoding="utf-8"),
+          "Azure CLI authentication was not set on the Anvil-owned profile")
 
+    existing_path = stage_dir / "existing-azure-databrickscfg"
+    existing_path.write_text("[anvil-dev]\nhost = " + azure_host + "\n", encoding="utf-8")
     with mock.patch.dict(os.environ, remote_env, clear=True), \
-            mock.patch.object(dbx.sys, "stdin", TTYInput("")), \
-            mock.patch.object(dbx.shutil, "which", side_effect=lambda name: "/usr/bin/az" if name == "az" else None), \
-            mock.patch.object(dbx.auth_executor, "azure_cli_status", return_value=(True, True)), \
+            mock.patch.object(dbx, "cli_provider", return_value={"status": "NOT_INSTALLED"}), \
+            mock.patch.object(dbx, "sdk_provider", return_value=sdk_only["sdk"]), \
             mock.patch.object(dbx.auth_executor, "run_azure_device_login", side_effect=AssertionError("existing Azure login repeated")), \
             mock.patch.object(dbx.sdk, "call", return_value={"identity": {"id": "fixture-user"}, "host": azure_host}):
-        selected, _, auth, error = dbx._authenticate_workspace(azure_host, providers)
-    check(selected == "__ANVIL_DEFAULT__" and auth["strategy"] == "azure-cli-session" and error is None,
+        auth, _, error = dbx._authenticate_workspace(azure_host, "anvil-dev", existing_path,
+            sdk_only, {"strategy": "azure-cli-session", "provider": "sdk", "auth_required": False})
+    check(auth["strategy"] == "azure-cli-session" and error is None,
           "existing Azure CLI session was not reused without another login")
-    print("PASS setup orchestrates local OAuth and Azure remote/session auth with isolated fakes")
+    print("PASS auth orchestration uses Anvil profile/config with local U2M and Azure CLI session/device fakes")
 
 
 def test_sdk_fallback_routes_core_operations(temp: Path) -> None:
     config_home = temp / "sdk-config"
     config_home.mkdir()
     save_pref(config_home)
-    config_file = temp / "databrickscfg"
-    config_file.write_text("[sample-profile]\nhost = https://workspace-a.example.invalid\n", encoding="utf-8")
-    env = {"XDG_CONFIG_HOME": str(config_home), "DATABRICKS_CONFIG_FILE": str(config_file),
+    config_file = config_home / "anvil" / "databricks" / "databrickscfg"
+    env = {"XDG_CONFIG_HOME": str(config_home), "DATABRICKS_CONFIG_FILE": str(temp / "external-databrickscfg"),
            "ANVIL_DATABRICKS_CLI": "/nonexistent/cli"}
     calls: list[tuple[str, dict[str, Any]]] = []
 
@@ -686,7 +883,7 @@ def test_sdk_fallback_routes_core_operations(temp: Path) -> None:
                 mock.patch.object(dbx.cli_install, "attempt_cli_install", return_value={"status": "BLOCKED", "failure": "policy-blocked"}) as install, \
                 mock.patch.object(dbx.cli_install, "install_sdk", side_effect=AssertionError("existing SDK was reinstalled")):
             configured = dbx.setup()
-            check(install.call_count == 1, "setup did not attempt official CLI installation")
+            check(install.call_count == 0, "healthy Anvil SDK profile triggered unnecessary provider installation")
             check(configured["overall"] == "READY", "healthy SDK fallback was marked unhealthy")
             check(configured["providers"]["cli"]["status"] == "BLOCKED", "CLI install failure was not observable")
             check(configured["providers"]["sdk"]["status"] == "READY", "existing SDK was lost after CLI install failure")
@@ -697,13 +894,13 @@ def test_sdk_fallback_routes_core_operations(temp: Path) -> None:
         sql_result = dbx.execute_sql("SELECT 1", "warehouse-a")
         check(sql_result["rows"] == [[1]] and sql_result["columns"] == ["value"], "SDK SQL result was not normalized")
         sdk_operations = {
-            "clusters.get": dbx.json_from_cli(["clusters", "get", "cluster-a"], profile="sample-profile"),
-            "warehouses.get": dbx.json_from_cli(["warehouses", "get", "warehouse-a"], profile="sample-profile"),
-            "jobs.list": dbx.json_from_cli(["jobs", "list"], profile="sample-profile"),
-            "jobs.get": dbx.json_from_cli(["jobs", "get", "17"], profile="sample-profile"),
-            "pipelines.list": dbx.json_from_cli(["pipelines", "list"], profile="sample-profile"),
-            "pipelines.get": dbx.json_from_cli(["pipelines", "get", "pipeline-a"], profile="sample-profile"),
-            "workspace.list": dbx.json_from_cli(["workspace", "list", "/Shared"], profile="sample-profile"),
+            "clusters.get": dbx.json_from_cli(["clusters", "get", "cluster-a"], profile="anvil-dev"),
+            "warehouses.get": dbx.json_from_cli(["warehouses", "get", "warehouse-a"], profile="anvil-dev"),
+            "jobs.list": dbx.json_from_cli(["jobs", "list"], profile="anvil-dev"),
+            "jobs.get": dbx.json_from_cli(["jobs", "get", "17"], profile="anvil-dev"),
+            "pipelines.list": dbx.json_from_cli(["pipelines", "list"], profile="anvil-dev"),
+            "pipelines.get": dbx.json_from_cli(["pipelines", "get", "pipeline-a"], profile="anvil-dev"),
+            "workspace.list": dbx.json_from_cli(["workspace", "list", "/Shared"], profile="anvil-dev"),
         }
         check(sdk_operations["jobs.get"]["job_id"] == 17 and sdk_operations["pipelines.get"]["pipeline_id"] == "pipeline-a"
               and sdk_operations["workspace.list"]["objects"][0]["path"] == "/Shared",
@@ -820,13 +1017,16 @@ def test_sdk_worker_uses_pinned_official_api_contracts() -> None:
                "databricks.sdk.service.compute": compute_module,
                "databricks.sdk.service.sql": sql_module}
 
-    def invoke(request: dict[str, Any]) -> dict[str, Any]:
+    def invoke(request: dict[str, Any], expected_code: int = 0) -> dict[str, Any]:
+        request.setdefault("profile", "anvil-dev")
         stdout = io.StringIO()
         stderr = io.StringIO()
         with mock.patch.dict(sys.modules, modules), mock.patch("sys.stdin", io.StringIO(json.dumps(request))), \
                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = sdk_worker.main()
-            check(code == 0, f"SDK worker returned a failure for {request['operation']}: {stderr.getvalue()}")
+            check(code == expected_code, f"SDK worker returned an unexpected result for {request['operation']}: {stderr.getvalue()}")
+        if expected_code:
+            return {}
         return json.loads(stdout.getvalue())
 
     python = invoke({"operation": "python.execute", "timeout": 30,
@@ -844,11 +1044,11 @@ def test_sdk_worker_uses_pinned_official_api_contracts() -> None:
           "SDK Statement Execution did not use typed official options")
     check(sql_call["parameters"][0].as_dict() == {"name": "n", "type": "INT", "value": "7"},
           "SDK SQL parameters were not converted to the official typed request model")
-    identity = invoke({"operation": "identity", "auth_type": "azure-cli",
-                       "host": "https://adb-123.azuredatabricks.net", "payload": {}})
+    identity = invoke({"operation": "identity", "payload": {}})
     check(identity["identity"]["userName"] == "fixture-user"
-          and client_configurations[-1] == {"host": "https://adb-123.azuredatabricks.net", "auth_type": "azure-cli"},
-          "Azure CLI Unified Authentication was not routed through the official SDK constructor")
+          and client_configurations[-1] == {"profile": "anvil-dev"},
+          "SDK worker did not use the Anvil-owned Unified Authentication profile")
+    invoke({"operation": "identity", "profile": "dev", "payload": {}}, expected_code=1)
 
     for operation, payload in (
         ("clusters.list", {}), ("clusters.get", {"cluster_id": "cluster-a"}),
@@ -981,8 +1181,10 @@ def main() -> int:
         temp = Path(directory)
         test_profile_persistence(temp)
         test_cli_environment_auth_without_named_profile(temp)
+        test_sdk_environment_uses_owned_config(temp)
         test_multiple_profile_selection(temp)
         test_invalid_selected_profile_never_switches(temp)
+        test_anvil_config_ownership_and_reset(temp)
         test_cli_minimum_and_missing(temp)
         test_cli_install_failure_survives_unsupported_binary(temp)
         test_resource_discovery_and_mutation_safety(temp)

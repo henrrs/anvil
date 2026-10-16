@@ -49,7 +49,8 @@ def load_state() -> dict[str, Any]:
         value = json.loads(state_path().read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {"schema_version": SCHEMA_VERSION, "selected_profile": None, "workspace_host": None,
-                "providers": {}, "capabilities": {}, "authentication": None}
+                "providers": {}, "capabilities": {}, "authentication": None,
+                "profile": None, "workspace": None}
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("Anvil Databricks provider state cannot be read") from exc
     if not isinstance(value, dict):
@@ -67,15 +68,31 @@ def load_state() -> dict[str, Any]:
     result.setdefault("providers", {})
     result.setdefault("capabilities", {})
     result.setdefault("authentication", None)
+    result.setdefault("profile", None)
+    result.setdefault("workspace", None)
     if not isinstance(result["providers"], dict) or not isinstance(result["capabilities"], dict):
         raise ValueError("Anvil Databricks provider state has invalid provider records")
     authentication = result["authentication"]
     if authentication is not None:
         if (not isinstance(authentication, dict)
-                or authentication.get("strategy") not in {"databricks-cli-u2m", "azure-cli-session"}
+                or authentication.get("strategy") not in {"databricks-cli-u2m", "azure-cli-session",
+                                                           "azure-cli-device-code", "azure-cli-interactive",
+                                                           "unified-auth"}
                 or authentication.get("provider") not in {"cli", "sdk"}
                 or authentication.get("cloud") not in {"azure", "aws", "gcp", "unknown"}):
             raise ValueError("Anvil Databricks provider state has invalid authentication metadata")
+    profile = result["profile"]
+    if profile is not None:
+        if (not isinstance(profile, dict) or profile.get("ownership") != "anvil"
+                or not isinstance(profile.get("name"), str)
+                or not profile["name"].startswith("anvil-")
+                or not isinstance(profile.get("config_file"), str)):
+            raise ValueError("Anvil Databricks provider state has invalid profile ownership metadata")
+    workspace = result["workspace"]
+    if workspace is not None:
+        if (not isinstance(workspace, dict) or not isinstance(workspace.get("host"), str)
+                or not isinstance(workspace.get("environment"), str)):
+            raise ValueError("Anvil Databricks provider state has invalid workspace metadata")
     return result
 
 

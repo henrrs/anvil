@@ -20,8 +20,10 @@ The default selection order is:
 - Spark development: Databricks Connect, then assisted VS Code.
 - Bundles: CLI, then an assisted VS Code workflow, otherwise unavailable.
 
-The CLI is preferred when healthy. The resolver never routes SQL through Databricks Connect, and it never labels an assisted IDE operation as headless-ready. An unavailable provider is not simulated. No automatic Connect or SQL Connector package installation occurs.
+The CLI is preferred when healthy. The resolver never routes SQL through Databricks Connect, and it never labels an assisted IDE operation as headless-ready. The CLI and SDK consume the same Anvil-owned profile and config file. An unavailable provider is not simulated. No automatic Connect or SQL Connector package installation occurs.
 
-When Anvil state records an Azure CLI session, provider routing is restricted to the SDK because the documented `azure-cli` auth type is a Databricks SDK path. The official CLI remains independent and does not receive Azure CLI credentials. A normal Databricks CLI OAuth profile can still be reused through Unified Authentication by supported CLI/SDK providers. A CLI install failure does not make Databricks unavailable when the SDK can validate auth and provide the configured core operations.
+When Anvil state records Azure CLI authentication, the SDK is the supported Azure CLI provider. The SQL Connector's independent OAuth U2M path is not substituted for that session. The official Databricks CLI and SDK receive an isolated Anvil config path and selected profile; external `DATABRICKS_*` overrides cannot replace their credentials. A CLI install failure does not make Databricks unavailable when the SDK can validate auth and provide the configured core operations.
+
+External Databricks profiles are reported only as a count in doctor/setup diagnostics. They do not participate in provider selection or Anvil operations. SQL Connector and Databricks Connect remain specialized providers; SQL Connector OAuth is separate because it does not consume a Unified Authentication profile.
 
 Provider API coverage is based on the [Databricks CLI](https://docs.databricks.com/aws/en/dev-tools/cli/install), [Python SDK](https://docs.databricks.com/aws/en/dev-tools/sdk-python), [SQL Connector](https://docs.databricks.com/aws/en/dev-tools/python-sql-connector), [Databricks Connect](https://docs.databricks.com/aws/en/dev-tools/databricks-connect/python/), and [VS Code extension](https://marketplace.visualstudio.com/items?itemName=databricks.databricks) documentation checked on 2026-10-16.

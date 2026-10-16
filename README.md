@@ -38,11 +38,15 @@ make migrate-runtime OPENCODE_MAJOR=2
 
 Use `make inspect` to review the current setup before changing it. Use `make capabilities` to see local runtime features and provider availability; authentication and workspace reachability are not checked by inventory commands. Use `make rollback` to restore the latest verified snapshot according to its recorded scope. `make upgrade` upgrades Anvil without changing the OpenCode executable/version. Use `make update-runtime` for an explicit same-major runtime update and `make migrate-runtime OPENCODE_MAJOR=N` for an explicit major change.
 
-Anvil is a lean, model-agnostic harness and lifecycle layer for OpenCode 1.x and 2.x. Anvil's release version is independent from the OpenCode major. OpenCode owns model/provider authentication, sessions, its native tools, and runtime state. Anvil supplies a focused behavioral environment: compact instructions, one primary agent, a small set of skills, explicit file memory, evidence-driven workflows, safe upgrade and recovery operations, and an optional CLI-backed Databricks capability.
+**Anvil — A lean, model-agnostic OpenCode harness designed to maximize reliable task completion while minimizing unnecessary context and token usage.**
+
+For a shorter headline: **Anvil — Better harness. Better execution.**
+
+Anvil is a lean, model-agnostic harness and lifecycle layer for OpenCode 1.x and 2.x. Anvil's release version is independent from the OpenCode major. OpenCode owns model/provider authentication, sessions, its native tools, and runtime state. Anvil supplies a focused behavioral environment: compact instructions, one primary agent, a small set of skills, explicit file memory, evidence-driven workflows, safe upgrade and recovery operations, and an optional Databricks capability.
 
 ## Why Anvil?
 
-Anvil means a blacksmith's anvil: the stable base on which material is shaped, refined, and made useful. The anvil is not the material and does not supply all the energy; it provides a dependable surface for the work.
+Anvil means a blacksmith's anvil: the stable base on which material is shaped, refined, and made useful. The anvil is not the material and does not supply all the energy; it provides a dependable surface for the work. **Forge better performance from every model.**
 
 Anvil plays that role for language models. It does not create or route models. It gives the selected model disciplined context, useful skills and memory, clear execution rules, and verification. Models may change; the harness remains the foundation.
 
@@ -73,9 +77,9 @@ Use `make migrate-runtime OPENCODE_MAJOR=2` only when a move to OpenCode 2 is ex
 
 ## Databricks
 
-Databricks is optional. Normal `make reforge` and `make upgrade` do not install Databricks tools or contact a workspace. Run `make databricks-setup` when you explicitly want Anvil to configure Databricks. It attempts the official CLI release first, verifies its SHA-256 checksum, installs only under Anvil's user-local data directory without privilege elevation, and prepares an isolated Python SDK fallback if CLI setup is unavailable.
+Databricks is optional. Normal `make reforge` and `make upgrade` do not install Databricks tools or contact a workspace. Run `make databricks-setup` when you explicitly want Anvil to configure Databricks. Anvil creates its own profile, such as `anvil-dev`, in `${XDG_CONFIG_HOME:-~/.config}/anvil/databricks/databrickscfg`. Existing user profiles are left untouched and are not adopted. The CLI is installed under Anvil's user-local data directory with SHA-256 verification; an isolated Python SDK fallback is prepared when needed.
 
-Use `make databricks-setup DRY_RUN=1` to inspect the proposed actions and local auth/provider discovery without network access or state changes. A healthy CLI stays the preferred general provider. Setup reuses validated authentication, runs the official CLI OAuth U2M flow on a local interactive terminal, and can use Azure CLI device-code authentication through the SDK for Azure workspaces in supported remote environments. Remote AWS/GCP sessions are guided to the official VS Code extension or an existing profile instead of an assumed browser callback. If CLI installation is blocked, the SDK can reuse supported Unified Authentication profiles; Anvil stores only non-secret provider metadata. The optional SQL Connector and Databricks Connect are recognized for their specialized paths. The official VS Code extension is assisted only, never automated through private IDE APIs.
+Use `make databricks-setup DRY_RUN=1` to inspect the proposed actions and local auth/provider discovery without network access or state changes. Setup asks for a workspace URL and environment label, then selects authentication from workspace cloud and terminal topology. It reuses a valid Azure CLI session, supports Azure device-code login remotely and Azure interactive login locally, and uses Databricks OAuth U2M where appropriate. The CLI and SDK use the same Anvil-owned config. External `DATABRICKS_*` overrides are removed from Anvil child processes; Anvil reports variable names without revealing their values. Use `make databricks-setup RESET=1` to replace only Anvil-owned config after validation; a private backup is retained. Doctor reports external profiles separately and never uses them. The optional SQL Connector and Databricks Connect remain specialized providers; VS Code is assisted only, never automated through private IDE APIs.
 
 Human-readable output is the default for setup, doctor, and capabilities. Use `make databricks-setup OUTPUT=json` for the full structured result or `VERBOSE=1` for local provider diagnostics. Provider installation and workspace authentication happen only after explicitly running `make databricks-setup`.
 

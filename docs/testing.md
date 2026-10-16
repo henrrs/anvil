@@ -8,7 +8,7 @@ OpenCode fixtures validate the supported OpenCode 1.18.18 and 2.0.0 profile shap
 
 ## Databricks checks
 
-`tests/fixtures/bin/databricks` returns deterministic auth profiles, identity, cluster/warehouse, execution, permission, and system-table responses. Tests cover secure profile persistence, multiple profile selection, invalid-profile behavior, resource selection, stopped-resource approval, command context cleanup, timeout cancellation, SQL state/result bounds, mutation rejection, system-schema discovery, FinOps evidence cases, and query recipe contracts. Fixture logs contain endpoint names and bounded request metadata without Python source, SQL text, credentials, or result payloads.
+`tests/fixtures/bin/databricks` returns deterministic Anvil profile, identity, cluster/warehouse, execution, permission, and system-table responses. Tests cover clean Anvil-owned profile creation, external profile isolation, legacy state migration, auth strategy selection, secure config/state persistence, environment isolation, resource selection, stopped-resource approval, command context cleanup, timeout cancellation, SQL state/result bounds, mutation rejection, system-schema discovery, FinOps evidence cases, and query recipe contracts. Fixture logs contain endpoint names and bounded request metadata without Python source, SQL text, credentials, or result payloads.
 
 No fixture contacts a real Databricks workspace. Passing these tests validates the adapter's offline behavior and API request/response contract, not a live connection.
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import configparser
 from pathlib import Path
 
 
@@ -73,28 +74,68 @@ def output(value) -> None:
         print(json.dumps(value))
 
 
+def profiles():
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    parser.optionxform = str.lower
+    path = os.environ.get("DATABRICKS_CONFIG_FILE")
+    if not path:
+        return []
+    try:
+        with open(path, encoding="utf-8") as stream:
+            parser.read_file(stream)
+    except (OSError, configparser.Error):
+        return []
+    return [{"name": name, "host": parser[name].get("host", ""),
+             "auth_type": parser[name].get("auth_type", "")}
+            for name in parser.sections() if name != "__settings__"]
+
+
+def selected_profile():
+    return args[args.index("--profile") + 1] if "--profile" in args else ""
+
+
 if args == ["-v"] or args == ["version"]:
     print("Databricks CLI v" + os.environ.get("ANVIL_DATABRICKS_CLI_VERSION", "1.0.0"))
     raise SystemExit(0)
 
 if args[:2] == ["auth", "profiles"]:
-    if scenario == "environment_auth":
-        print("", end="")
-    elif scenario == "multiple_profiles":
-        print((FIXTURES / "auth" / "profiles-multiple.txt").read_text(encoding="utf-8"), end="")
-    elif scenario == "invalid_profile":
-        print((FIXTURES / "auth" / "profiles-invalid.txt").read_text(encoding="utf-8"), end="")
-    else:
-        print((FIXTURES / "auth" / "profiles-valid.txt").read_text(encoding="utf-8"), end="")
+    for item in profiles():
+        print(f"{item['name']}  {item['host']}  YES")
     raise SystemExit(0)
 
 if args[:2] == ["auth", "describe"]:
-    profile = args[args.index("--profile") + 1] if "--profile" in args else "sample-profile"
-    describe = FIXTURES / "auth" / ("describe-b.txt" if profile == "sample-profile-b" else "describe.txt")
-    print(describe.read_text(encoding="utf-8"), end="")
+    profile = selected_profile()
+    record = next((item for item in profiles() if item["name"] == profile), None)
+    if not record:
+        raise SystemExit(1)
+    print(f"Config: {os.environ.get('DATABRICKS_CONFIG_FILE')}\nHost: {record['host']}\nUser: fixture-user\nValid: YES")
+    if record.get("auth_type"):
+        print(f"Auth type: {record['auth_type']}")
+    raise SystemExit(0)
+
+if args[:2] == ["auth", "login"]:
+    profile = selected_profile()
+    state = count("databricks-login")
+    path = os.environ.get("DATABRICKS_CONFIG_FILE")
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    parser.optionxform = str.lower
+    if path:
+        try:
+            parser.read(path, encoding="utf-8")
+            if profile in parser:
+                parser[profile]["auth_type"] = "databricks-cli"
+                with open(path, "w", encoding="utf-8") as stream:
+                    parser.write(stream)
+        except (OSError, configparser.Error):
+            pass
+    update_state("auth_login", state)
+    print("Fixture OAuth completed")
     raise SystemExit(0)
 
 if args[:3] == ["current-user", "me", "--output"]:
+    if scenario == "auth_required" and not read_state("auth_login"):
+        print("authentication required", file=sys.stderr)
+        raise SystemExit(1)
     output(fixture("auth/current-user.json"))
     raise SystemExit(0)
 

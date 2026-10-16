@@ -21,7 +21,7 @@ SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 from databricks_providers import discovery, resolver, state as provider_state  # noqa: E402
-from databricks_providers import auth as auth_executor, auth_strategy, cli_install, sdk, sql_connector as discovery_sql_connector  # noqa: E402
+from databricks_providers import auth as auth_executor, auth_strategy, cli_install, owned_config, sdk, sql_connector as discovery_sql_connector  # noqa: E402
 from databricks_providers import presentation, topology  # noqa: E402
 
 
@@ -56,13 +56,19 @@ def load_preferences() -> dict[str, Any]:
 
 def save_preferences(profile: str, host: str, authentication: dict[str, Any] | None = None) -> Path:
     safe_host = workspace_host(host)
+    if not re.fullmatch(r"anvil-[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?", profile):
+        raise DatabricksError("PROFILE_OWNERSHIP_INVALID", "Anvil operations only use Anvil-owned anvil-* profiles")
     try:
         value = load_preferences()
     except DatabricksError as exc:
         if exc.category != "PREFERENCES_INVALID":
             raise
         value = {"schema_version": provider_state.SCHEMA_VERSION, "providers": {}, "capabilities": {}}
+    environment = profile.removeprefix("anvil-")
     value.update({"selected_profile": profile, "workspace_host": safe_host,
+                  "profile": {"name": profile, "ownership": "anvil",
+                              "config_file": str(owned_config.config_file())},
+                  "workspace": {"host": safe_host, "environment": environment},
                   "last_verified_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
     if authentication:
         value["authentication"] = {key: authentication[key] for key in ("strategy", "provider", "cloud") if key in authentication}
@@ -107,12 +113,13 @@ def active_provider(capability: str) -> str | None:
     prefs = load_preferences()
     auth = prefs.get("authentication") if isinstance(prefs.get("authentication"), dict) else {}
     preferred = auth.get("provider") if auth.get("provider") in {"cli", "sdk"} else None
-    allowed = {"sdk"} if auth.get("strategy") == "azure-cli-session" else None
+    allowed = None if not str(auth.get("strategy", "")).startswith("azure-cli") else {"cli", "sdk", "connect", "vscode"}
     sdk_state = sdk_provider()
     providers = {"cli": cli_provider(), "sdk": sdk_state,
                  "sql_connector": {"status": "NOT_INSTALLED"}, "connect": {"status": "NOT_INSTALLED"},
                  "vscode": {"status": "NOT_INSTALLED"}}
-    if capability in {"sql.execute", "system_tables.query"} and sdk_state.get("status") != "READY":
+    if (capability in {"sql.execute", "system_tables.query"} and sdk_state.get("status") != "READY"
+            and (allowed is None or "sql_connector" in allowed)):
         providers["sql_connector"] = discovery.discover_specialized(None)["sql_connector"]
     if capability == "python.execute" and providers["cli"].get("status") != "READY" and sdk_state.get("status") != "READY":
         providers["vscode"] = discovery._vscode()
@@ -124,16 +131,12 @@ def resolve_providers(providers: dict[str, dict[str, Any]], *, auth_valid: bool)
     prefs = load_preferences()
     auth = prefs.get("authentication") if isinstance(prefs.get("authentication"), dict) else {}
     preferred = auth.get("provider") if auth.get("provider") in {"cli", "sdk"} else None
-    allowed = {"sdk"} if auth.get("strategy") == "azure-cli-session" else None
+    allowed = None if not str(auth.get("strategy", "")).startswith("azure-cli") else {"cli", "sdk", "connect", "vscode"}
     return resolver.resolve(providers, auth_valid=auth_valid, preferred_provider=preferred,
                             allowed_providers=allowed)
 
 
 def sdk_auth_options(profile: str | None) -> dict[str, str]:
-    prefs = load_preferences()
-    auth = prefs.get("authentication") if isinstance(prefs.get("authentication"), dict) else {}
-    if profile == "__ANVIL_DEFAULT__" and auth.get("strategy") == "azure-cli-session":
-        return {"auth_type": "azure-cli", "host": str(prefs.get("workspace_host") or "")}
     return {}
 
 
@@ -165,13 +168,15 @@ def require_cli() -> tuple[str, str]:
     return binary, version_text or "unknown"
 
 
-def run_cli(arguments: list[str], *, profile: str | None = None, timeout: float = 20, stdin: str | None = None) -> str:
+def run_cli(arguments: list[str], *, profile: str | None = None, timeout: float = 20,
+            stdin: str | None = None, config_path: Path | None = None) -> str:
     binary, _ = require_cli()
     command = [binary, *arguments]
-    if profile and profile != "__ANVIL_DEFAULT__":
+    if profile:
         command.extend(["--profile", profile])
     try:
-        result = subprocess.run(command, input=stdin, capture_output=True, text=True, timeout=timeout, check=False)
+        result = subprocess.run(command, input=stdin, capture_output=True, text=True, timeout=timeout, check=False,
+                                env=owned_config.child_environment(profile=profile, path=config_path))
     except subprocess.TimeoutExpired as exc:
         raise DatabricksError("CLI_TIMEOUT", "Databricks CLI request timed out") from exc
     except OSError as exc:
@@ -209,12 +214,13 @@ def parse_profiles(output: str) -> list[dict[str, Any]]:
     return profiles
 
 
-def discover_profiles(timeout: float = 60) -> list[dict[str, Any]]:
+def discover_profiles(timeout: float = 60, *, config_path: Path | None = None) -> list[dict[str, Any]]:
     if cli_provider().get("status") == "READY":
-        output = run_cli(["auth", "profiles"], timeout=timeout)
+        output = run_cli(["auth", "profiles"], timeout=timeout, config_path=config_path)
         profiles = parse_profiles(output)
     else:
-        profiles = discovery.config_profiles()
+        profiles = owned_config.read_profiles(config_path)
+    profiles = [item for item in profiles if str(item.get("name", "")).startswith("anvil-")]
     for profile in profiles:
         try:
             profile["workspace_host"] = workspace_host(profile["host"])
@@ -225,7 +231,7 @@ def discover_profiles(timeout: float = 60) -> list[dict[str, Any]]:
             continue
         if cli_provider().get("status") != "READY":
             try:
-                validate_selected_profile(profile["name"], profile)
+                validate_selected_profile(profile["name"], profile, config_path=config_path)
                 profile["valid"] = True
             except DatabricksError:
                 profile["valid"] = False
@@ -236,81 +242,77 @@ def profile_by_name(profiles: list[dict[str, Any]], name: str) -> dict[str, Any]
     return next((item for item in profiles if item["name"] == name), None)
 
 
-def validate_selected_profile(name: str, listed: dict[str, Any]) -> str:
+def validate_selected_profile(name: str, listed: dict[str, Any], *, config_path: Path | None = None) -> str:
+    if not name.startswith("anvil-") or name == "__ANVIL_DEFAULT__":
+        raise DatabricksError("PROFILE_OWNERSHIP_INVALID", "Anvil operations only use Anvil-owned anvil-* profiles")
     if not listed.get("workspace"):
         raise DatabricksError("WORKSPACE_PROFILE_INVALID", "selected profile is not a workspace profile")
-    if not listed.get("valid") and cli_provider().get("status") == "READY":
-        raise DatabricksError("PROFILE_INVALID", f"selected profile '{name}' is invalid; repair its Databricks authentication")
-    auth_options = sdk_auth_options(name)
-    if auth_options or cli_provider().get("status") != "READY":
-        try:
-            response = sdk.call("identity", profile=None if name == "__ANVIL_DEFAULT__" else name,
-                                timeout=20, **auth_options)
-        except RuntimeError as exc:
-            raise DatabricksError("IDENTITY_INVALID", "selected Unified Authentication profile could not validate its identity") from exc
-        host = workspace_host(str(response.get("host") or listed.get("workspace_host") or listed.get("host") or ""))
-        if listed.get("workspace_host") and host != listed["workspace_host"]:
-            raise DatabricksError("PROFILE_CHANGED", "selected profile host changed; run make databricks-setup to review it")
-        identity = response.get("identity")
-        if not isinstance(identity, dict) or not (identity.get("userName") or identity.get("id") or identity.get("applicationId")):
-            raise DatabricksError("IDENTITY_INVALID", "Databricks current-user response did not identify the active principal")
-        return host
-    # The internal sentinel means “use the CLI's normal Unified Authentication
-    # resolution”, including supported environment credentials. It must never
-    # be passed as a literal profile name to the CLI.
-    described = run_cli(["auth", "describe"], profile=name, timeout=15)
-    host_match = re.search(r"(?im)^\s*Host:\s*(https://[^\s]+)\s*$", described)
-    if not host_match:
-        raise DatabricksError("PROFILE_INVALID", "selected profile did not report a workspace host")
-    host = workspace_host(host_match.group(1))
-    if listed.get("workspace_host") and host != listed["workspace_host"]:
-        raise DatabricksError("PROFILE_CHANGED", "selected profile host changed; run make databricks-setup to review it")
-    # This command verifies the selected profile identity without requesting
-    # or displaying sensitive CLI output.
-    identity = run_cli(["current-user", "me", "--output", "json"], profile=name, timeout=20)
+    record = next((item for item in owned_config.read_profiles(config_path)
+                   if item["name"].casefold() == name.casefold()), None)
+    if not record or not record.get("host"):
+        raise DatabricksError("PROFILE_MISSING", "selected Anvil-owned profile is missing from its managed configuration")
     try:
-        identity_data = json.loads(identity)
-    except json.JSONDecodeError as exc:
-        raise DatabricksError("IDENTITY_INVALID", "Databricks current-user response was not valid JSON") from exc
-    if not isinstance(identity_data, dict) or not (identity_data.get("userName") or identity_data.get("id") or identity_data.get("applicationId")):
-        raise DatabricksError("IDENTITY_INVALID", "Databricks current-user response did not identify the active principal")
-    return host
-
-
-def default_authenticated_profile() -> tuple[str, str] | None:
-    """Return the default UAC identity when no named profile is selected."""
+        configured_host = workspace_host(record["host"])
+        listed_host = workspace_host(str(listed.get("workspace_host") or listed.get("host") or configured_host))
+    except DatabricksError:
+        raise
+    if configured_host != listed_host:
+        raise DatabricksError("PROFILE_CHANGED", "selected Anvil profile host changed; review make databricks-setup")
+    failures: list[DatabricksError] = []
     if cli_provider().get("status") == "READY":
         try:
-            host = validate_selected_profile("__ANVIL_DEFAULT__", {"workspace": True, "valid": True})
-            return "__ANVIL_DEFAULT__", host
-        except DatabricksError:
-            pass
+            described = run_cli(["auth", "describe"], profile=name, timeout=15, config_path=config_path)
+            host_match = re.search(r"(?im)^\s*Host:\s*(https://[^\s]+)\s*$", described)
+            if not host_match or workspace_host(host_match.group(1)) != configured_host:
+                raise DatabricksError("PROFILE_INVALID", "Anvil profile did not validate its configured workspace host")
+            identity = run_cli(["current-user", "me", "--output", "json"], profile=name,
+                               timeout=20, config_path=config_path)
+            identity_data = json.loads(identity)
+            if isinstance(identity_data, dict) and (identity_data.get("userName") or identity_data.get("id")
+                                                      or identity_data.get("applicationId")):
+                return configured_host
+            raise DatabricksError("IDENTITY_INVALID", "Databricks current-user response did not identify the active principal")
+        except DatabricksError as exc:
+            failures.append(exc)
+        except (json.JSONDecodeError, ValueError):
+            failures.append(DatabricksError("IDENTITY_INVALID", "Databricks identity response was invalid"))
     if sdk_provider().get("status") == "READY":
         try:
-            host = validate_selected_profile("__ANVIL_DEFAULT__", {"workspace": True, "valid": True})
-            return "__ANVIL_DEFAULT__", host
-        except DatabricksError:
-            pass
-    return None
+            response = sdk.call("identity", profile=name, timeout=20,
+                                config_path=str(config_path) if config_path else None)
+            host = workspace_host(str(response.get("host") or configured_host))
+            identity = response.get("identity")
+            if host == configured_host and isinstance(identity, dict) and (identity.get("userName")
+                    or identity.get("id") or identity.get("applicationId")):
+                return host
+            raise DatabricksError("IDENTITY_INVALID", "Databricks current-user response did not validate the Anvil workspace profile")
+        except RuntimeError as exc:
+            failures.append(DatabricksError("IDENTITY_INVALID", "Anvil Unified Authentication could not validate the workspace identity"))
+        except DatabricksError as exc:
+            failures.append(exc)
+    if failures:
+        raise failures[-1]
+    raise DatabricksError("AUTH_PROVIDER_UNAVAILABLE", "no supported Databricks provider is available to validate the Anvil profile")
 
 
 def resolve_profile(explicit: str | None = None) -> tuple[str, str, list[dict[str, Any]]]:
     prefs = load_preferences()
-    selected = explicit or prefs.get("selected_profile")
-    if selected == "__ANVIL_DEFAULT__":
-        host = validate_selected_profile("__ANVIL_DEFAULT__", {"workspace": True, "valid": True})
-        return "__ANVIL_DEFAULT__", host, []
+    ownership = prefs.get("profile") if isinstance(prefs.get("profile"), dict) else {}
+    if not explicit and (ownership.get("ownership") != "anvil"
+                         or ownership.get("config_file") != str(owned_config.config_file())):
+        raise DatabricksError("PROFILE_NOT_SELECTED", "no Anvil-owned Databricks profile is selected; run make databricks-setup")
+    if explicit and (ownership.get("ownership") != "anvil"
+                     or ownership.get("config_file") != str(owned_config.config_file())):
+        raise DatabricksError("PROFILE_OWNERSHIP_INVALID", "Anvil commands only use profiles from Anvil's managed configuration")
+    selected = explicit or ownership.get("name")
     if not selected:
-        if not discovery.config_profiles():
-            authenticated = default_authenticated_profile()
-            if authenticated:
-                name, host = authenticated
-                return name, host, []
         raise DatabricksError("PROFILE_NOT_SELECTED", "no Anvil Databricks profile is selected; run make databricks-setup")
+    if not isinstance(selected, str) or not selected.startswith("anvil-"):
+        raise DatabricksError("PROFILE_OWNERSHIP_INVALID", "Anvil operations only use Anvil-owned anvil-* profiles")
     profiles = discover_profiles()
     listed = profile_by_name(profiles, str(selected))
     if listed is None:
-            raise DatabricksError("PROFILE_MISSING", "the selected workspace profile is missing; rerun make databricks-setup to repair it without changing workspaces")
+        raise DatabricksError("PROFILE_MISSING", "the selected Anvil-owned workspace profile is missing; rerun make databricks-setup")
     host = validate_selected_profile(str(selected), listed)
     return str(selected), host, profiles
 
@@ -676,32 +678,6 @@ def read_only_setup_message() -> str:
     return "CLI installation is attempted only by make databricks-setup; Anvil installs to its private user-local data directory and never elevates privileges."
 
 
-def choose_profile(profiles: list[dict[str, Any]], previous: str | None) -> dict[str, Any]:
-    workspaces = [item for item in profiles if item.get("workspace")]
-    valid = [item for item in workspaces if item.get("valid")]
-    if previous:
-        selected = profile_by_name(workspaces, previous)
-        if selected is None:
-            raise DatabricksError("PROFILE_MISSING", f"selected profile '{previous}' no longer exists; Anvil will not switch workspaces automatically")
-        if not selected["valid"]:
-            raise DatabricksError("PROFILE_INVALID", f"selected profile '{previous}' is invalid; rerun make databricks-setup to authenticate the same workspace")
-        return selected
-    if not valid:
-        raise DatabricksError("NO_VALID_PROFILE", "no validated Databricks workspace profile is available")
-    if len(valid) == 1:
-        return valid[0]
-    if not sys.stdin.isatty():
-        raise DatabricksError("PROFILE_SELECTION_REQUIRED", "multiple valid workspace profiles are available; rerun make databricks-setup in a terminal to choose one")
-    print("Available Databricks workspace profiles:")
-    for index, item in enumerate(valid, 1):
-        print(f"  {index}. {item['name']}  {item['workspace_host']}")
-    while True:
-        answer = input("Choose the default profile number: ").strip()
-        if answer.isdigit() and 1 <= int(answer) <= len(valid):
-            return valid[int(answer) - 1]
-        print("Enter one of the listed profile numbers.")
-
-
 def provider_snapshot() -> dict[str, dict[str, Any]]:
     state = load_preferences()
     cli = discovery.discover_cli(state)
@@ -718,99 +694,138 @@ def provider_snapshot() -> dict[str, dict[str, Any]]:
     return {"cli": cli, "sdk": sdk_state, **specialized}
 
 
-def _setup_plan(providers: dict[str, dict[str, Any]], profiles: list[dict[str, Any]]) -> dict[str, Any]:
+def _profile_metadata(prefs: dict[str, Any]) -> dict[str, Any]:
+    value = prefs.get("profile")
+    if (not isinstance(value, dict) or value.get("ownership") != "anvil"
+            or value.get("config_file") != str(owned_config.config_file())
+            or not isinstance(value.get("name"), str)
+            or not value["name"].startswith("anvil-")):
+        return {}
+    return value
+
+
+def _external_profiles() -> list[dict[str, Any]]:
+    path = owned_config.external_config_file()
+    try:
+        if path.resolve() == owned_config.config_file().resolve():
+            return []
+    except OSError:
+        pass
+    return discovery.config_profiles(path)
+
+
+def _profile_name(environment: str) -> str:
+    return f"anvil-{environment}"
+
+
+def _normalize_environment(value: str) -> str:
+    raw = re.sub(r"\s+", "-", value.strip().casefold()).strip("-")
+    aliases = {"development": "dev", "develop": "dev", "dev": "dev",
+               "staging": "staging", "stage": "staging",
+               "production": "prod", "prod": "prod", "production-ready": "prod"}
+    label = aliases.get(raw, raw)
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?", label):
+        raise DatabricksError("ENVIRONMENT_INVALID", "use a short neutral environment label such as dev, staging, or prod")
+    return label
+
+
+def _collect_workspace(prefs: dict[str, Any], profile_meta: dict[str, Any]) -> tuple[str, str]:
+    if not sys.stdin.isatty():
+        raise DatabricksError("WORKSPACE_REQUIRED", "workspace URL and environment must be collected in an interactive terminal")
+    workspace_meta = prefs.get("workspace") if isinstance(prefs.get("workspace"), dict) else {}
+    suggestion = os.environ.get("ANVIL_DATABRICKS_HOST") or workspace_meta.get("host") or prefs.get("workspace_host")
+    if suggestion:
+        try:
+            suggestion = workspace_host(str(suggestion))
+        except DatabricksError:
+            suggestion = None
+    host = ""
+    if suggestion:
+        print(f"Previously recorded workspace: {suggestion}")
+        answer = input("Use this workspace? [Y/n]: ").strip().casefold()
+        if answer not in {"n", "no"}:
+            host = str(suggestion)
+    while not host:
+        candidate = input("Workspace URL: ").strip()
+        try:
+            host = workspace_host(candidate)
+        except DatabricksError:
+            print("Enter a workspace URL beginning with https://.")
+    default_environment = str(workspace_meta.get("environment") or
+                              profile_meta.get("name", "anvil-dev").removeprefix("anvil-") or "dev")
+    try:
+        default_environment = _normalize_environment(default_environment)
+    except DatabricksError:
+        default_environment = "dev"
+    default_choice = {"dev": "1", "staging": "2", "prod": "3"}.get(default_environment, "4")
+    print("Environment")
+    print("  [1] development")
+    print("  [2] staging")
+    print("  [3] production")
+    print("  [4] custom")
+    choice = input(f"Selection [{default_choice}]: ").strip().casefold() or default_choice
+    labels = {"1": "dev", "2": "staging", "3": "prod",
+              "development": "dev", "dev": "dev", "staging": "staging",
+              "production": "prod", "prod": "prod"}
+    if choice in labels:
+        environment = labels[choice]
+    elif choice in {"4", "custom"}:
+        custom = input("Environment label: ").strip()
+        environment = _normalize_environment(custom)
+    else:
+        environment = _normalize_environment(choice)
+    return host, environment
+
+
+def _setup_plan(providers: dict[str, dict[str, Any]], *, reset: bool = False) -> dict[str, Any]:
+    prefs = load_preferences()
+    profile_meta = _profile_metadata(prefs)
+    workspace_meta = prefs.get("workspace") if isinstance(prefs.get("workspace"), dict) else {}
+    existing = owned_config.read_profiles()
+    selected = profile_meta.get("name")
+    environment = str(workspace_meta.get("environment") or (selected or "anvil-dev").removeprefix("anvil-"))
+    try:
+        environment = _normalize_environment(environment)
+    except DatabricksError:
+        environment = "dev"
+    profile = _profile_name(environment)
+    target_record = next((item for item in existing if item["name"].casefold() == profile.casefold()), None)
+    host = workspace_meta.get("host") or prefs.get("workspace_host")
+    cloud = topology.workspace_cloud(str(host or ""))
+    environment_info = topology.detect_topology(tty=sys.stdin.isatty())
     cli = providers["cli"]
     sdk_state = providers["sdk"]
-    cli_ready = cli.get("status") == "READY"
-    sdk_ready = sdk_state.get("status") == "READY"
-    environment = topology.detect_topology(tty=sys.stdin.isatty())
-    hosts = [profile.get("host") or profile.get("workspace_host") for profile in profiles]
-    prefs = load_preferences()
-    auth_plan = auth_strategy.resolve(
-        topology=environment,
-        cloud=topology.workspace_cloud(str(prefs.get("workspace_host") or next((h for h in hosts if h), ""))),
-        cli_ready=cli_ready,
-        sdk_ready=sdk_ready,
-        azure_cli_available=bool(shutil.which("az")),
-        azure_cli_authenticated=False,
-        valid_profile=any(bool(profile.get("valid")) for profile in profiles),
-    )
+    auth_plan = auth_strategy.resolve(topology=environment_info, cloud=cloud,
+        cli_ready=cli.get("status") == "READY" or not cli.get("installed"),
+        sdk_ready=sdk_state.get("status") == "READY",
+        azure_cli_available=bool(shutil.which("az")), azure_cli_authenticated=False,
+        anvil_profile_valid=False)
+    external = _external_profiles()
+    auth_plan["session_check"] = "not checked in dry-run"
+    actions = []
+    if reset:
+        actions.append("back up and replace only the Anvil-owned Databricks config")
+    elif target_record and target_record.get("host") == (host or target_record.get("host")):
+        actions.append("revalidate the selected Anvil-owned profile")
+    elif target_record:
+        actions.append(f"resolve the existing Anvil profile name collision for {profile}")
+    else:
+        actions.append(f"create Anvil-owned profile {profile}")
+    actions += ["authenticate using the workspace cloud and detected topology",
+                "validate current user and workspace access",
+                "atomically activate the Anvil config and save non-secret metadata"]
     return {
-        "dry_run": True,
-        "cli": {"detected": cli_ready, "installed": cli.get("installed", False),
-                "executable": cli.get("executable"), "path_visible": cli.get("path_visible", False),
-                "installation": "NOT NEEDED" if cli_ready else "WOULD ATTEMPT", "method": "official user-local GitHub release with SHA-256 verification"},
-        "sdk": {"available": sdk_ready, "action": "KEEP" if sdk_ready or cli_ready else "WOULD PREPARE isolated SDK fallback"},
-        "vscode": providers["vscode"],
-        "profiles_found": len([p for p in profiles if p.get("workspace") or p.get("host") or p.get("workspace_host")]),
-        "selection_needed": sum(bool(p.get("valid")) for p in profiles) > 1,
-        "changes_performed": False,
-        "topology": environment,
-        "authentication": auth_plan,
-        "plan": [*([] if cli_ready or sdk_ready else ["attempt supported provider setup"]),
-                 "reuse or select a workspace authentication method", "validate the workspace identity",
-                 "save non-secret provider metadata"],
+        "dry_run": True, "reset": reset,
+        "workspace_host": host, "environment": environment, "profile": profile,
+        "profile_created": not bool(target_record and target_record.get("host") == (host or target_record.get("host"))),
+        "ownership": "Anvil", "config_file": str(owned_config.config_file()),
+        "external_profiles_detected": len(external), "external_profiles_used": False,
+        "environment_conflicts": owned_config.environment_conflicts(),
+        "providers": providers, "topology": environment_info,
+        "cloud": cloud, "authentication": auth_plan,
+        "would_backup_config": str(owned_config.config_file()) if reset and owned_config.config_file().exists() else None,
+        "plan": actions, "changes_performed": False,
     }
-
-
-def _authentication_context(host: str, providers: dict[str, dict[str, Any]], *, dry_run: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
-    environment = topology.detect_topology(tty=sys.stdin.isatty())
-    azure_available = bool(shutil.which("az"))
-    azure_authenticated = False
-    if azure_available and not dry_run and topology.workspace_cloud(host) == "azure":
-        _, azure_authenticated = auth_executor.azure_cli_status()
-    decision = auth_strategy.resolve(
-        topology=environment, cloud=topology.workspace_cloud(host),
-        cli_ready=providers.get("cli", {}).get("status") == "READY",
-        sdk_ready=providers.get("sdk", {}).get("status") == "READY",
-        azure_cli_available=azure_available, azure_cli_authenticated=azure_authenticated,
-    )
-    return environment, decision
-
-
-def _authenticate_workspace(host: str, providers: dict[str, dict[str, Any]]) -> tuple[str | None, str | None, dict[str, Any], str | None]:
-    """Run only an officially supported flow selected for the current topology."""
-    safe_host = workspace_host(host)
-    environment, decision = _authentication_context(safe_host, providers)
-    strategy = str(decision["strategy"])
-    cloud = topology.workspace_cloud(safe_host)
-    if strategy == "databricks-cli-u2m":
-        binary = providers.get("cli", {}).get("executable")
-        if not binary:
-            return None, None, decision, "AUTH_PROVIDER_UNAVAILABLE"
-        result = auth_executor.run_databricks_login(str(binary), safe_host)
-        if result["status"] != "READY":
-            return None, None, decision, str(result.get("category") or "AUTH_REQUIRED")
-        profiles = discover_profiles()
-        valid = [item for item in profiles if item.get("workspace") and item.get("valid")]
-        if valid:
-            selected = choose_profile(valid, None)
-            validated_host = validate_selected_profile(str(selected["name"]), selected)
-            return str(selected["name"]), validated_host, {**decision, "provider": "cli", "cloud": cloud}, None
-        default = default_authenticated_profile()
-        if default:
-            return default[0], default[1], {**decision, "provider": "cli", "cloud": cloud}, None
-        return None, None, decision, "PROFILE_INVALID"
-    if strategy in {"azure-cli-session", "azure-device-code"}:
-        if not providers.get("sdk", {}).get("status") == "READY":
-            return None, None, decision, "AUTH_PROVIDER_UNAVAILABLE"
-        if strategy == "azure-device-code":
-            result = auth_executor.run_azure_device_login()
-            if result["status"] != "READY":
-                return None, None, decision, str(result.get("category") or "AUTH_REQUIRED")
-        try:
-            response = sdk.call("identity", timeout=25, auth_type="azure-cli", host=safe_host)
-        except RuntimeError:
-            return None, None, decision, "IDENTITY_INVALID"
-        identity = response.get("identity") if isinstance(response, dict) else None
-        try:
-            returned_host = workspace_host(str(response.get("host") or safe_host))
-        except DatabricksError:
-            return None, None, decision, "WORKSPACE_UNREACHABLE"
-        if returned_host != safe_host or not isinstance(identity, dict) or not (identity.get("userName") or identity.get("id") or identity.get("applicationId")):
-            return None, None, decision, "IDENTITY_INVALID"
-        return "__ANVIL_DEFAULT__", safe_host, {"strategy": "azure-cli-session", "provider": "sdk", "cloud": cloud}, None
-    return None, None, decision, None
 
 
 def _save_provider_snapshot(providers: dict[str, dict[str, Any]], install_result: dict[str, Any] | None = None,
@@ -822,17 +837,14 @@ def _save_provider_snapshot(providers: dict[str, dict[str, Any]], install_result
         records["cli"] = {"status": "BLOCKED", "failure": install_result.get("failure", "unknown"),
                           "message": install_result.get("message"), "installed": cli.get("installed", False),
                           "executable": cli.get("executable")}
-    elif cli.get("status") == "READY":
-        records["cli"] = {key: cli.get(key) for key in ("status", "executable", "version", "discovered_by", "path_visible", "absolute_usable")}
-    elif cli.get("installed"):
+    elif cli.get("status") == "READY" or cli.get("installed"):
         records["cli"] = {key: cli.get(key) for key in ("status", "executable", "version", "discovered_by", "path_visible", "absolute_usable")}
     sdk_state = providers["sdk"]
     if sdk_state.get("status") == "READY":
         records["sdk"] = {"status": "READY", "python": sdk_state.get("python"), "version": sdk_state.get("version"),
                            "environment": sdk_state.get("environment"), "isolated": sdk_state.get("isolated")}
-    else:
-        records["sdk"] = {"status": "BLOCKED" if sdk_install_result and sdk_install_result.get("status") != "READY" else "NOT_INSTALLED",
-                          "failure": (sdk_install_result or {}).get("failure")}
+    elif sdk_install_result:
+        records["sdk"] = {"status": "BLOCKED", "failure": sdk_install_result.get("failure")}
     records["vscode"] = {"status": providers["vscode"].get("status"),
                           "extension_id": providers["vscode"].get("extension_id", discovery.OFFICIAL_VSCODE_EXTENSION)}
     records["connect"] = providers["connect"]
@@ -840,31 +852,166 @@ def _save_provider_snapshot(providers: dict[str, dict[str, Any]], install_result
     provider_state.save_state(state)
 
 
-def _setup_summary(providers: dict[str, dict[str, Any]], auth_valid: bool, profiles: list[dict[str, Any]], selected: str | None) -> dict[str, Any]:
+def _setup_summary(providers: dict[str, dict[str, Any]], auth_valid: bool, selected: str | None) -> dict[str, Any]:
     capability_map = resolve_providers(providers, auth_valid=auth_valid)
     health = resolver.overall_state(providers, capability_map, auth_valid=auth_valid)
     return {"overall": health, "selected_profile": selected,
-            "profiles_found": len([p for p in profiles if p.get("workspace")]),
+            "external_profiles_detected": len(_external_profiles()), "external_profiles_used": False,
             "providers": providers, "capabilities": capability_map}
 
 
-def setup(dry_run: bool = False) -> dict[str, Any]:
+def _candidate_identity(profile: str, host: str, config_path: Path) -> tuple[str, str]:
+    listed = {"name": profile, "host": host, "workspace_host": host,
+              "workspace": True, "valid": True}
+    validated_host = validate_selected_profile(profile, listed, config_path=config_path)
+    provider = "cli" if cli_provider().get("status") == "READY" else "sdk"
+    if provider == "cli" and sdk_provider().get("status") == "READY":
+        # Validation may have reached SDK fallback when CLI auth was unusable.
+        try:
+            run_cli(["current-user", "me", "--output", "json"], profile=profile,
+                    timeout=5, config_path=config_path)
+        except DatabricksError:
+            provider = "sdk"
+    return validated_host, provider
+
+
+def _authentication_context(host: str, providers: dict[str, dict[str, Any]], *,
+                            azure_authenticated: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+    environment = topology.detect_topology(tty=sys.stdin.isatty())
+    cloud = topology.workspace_cloud(host)
+    decision = auth_strategy.resolve(
+        topology=environment, cloud=cloud,
+        cli_ready=providers.get("cli", {}).get("status") == "READY",
+        sdk_ready=providers.get("sdk", {}).get("status") == "READY",
+        azure_cli_available=bool(shutil.which("az")),
+        azure_cli_authenticated=azure_authenticated,
+        anvil_profile_valid=False)
+    return environment, decision
+
+
+def _authenticate_workspace(host: str, profile: str, config_path: Path,
+                            providers: dict[str, dict[str, Any]], decision: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    cloud = topology.workspace_cloud(host)
+    strategy = str(decision.get("strategy"))
+    config_record = next((item for item in owned_config.read_profiles(config_path)
+                          if item["name"].casefold() == profile.casefold()), None)
+    if not config_record:
+        return None, None, "PROFILE_CREATE_FAILED"
+    if strategy.startswith("azure-cli"):
+        try:
+            owned_config.set_profile_auth_type(config_path, profile, "azure-cli")
+        except (OSError, ValueError):
+            return None, None, "PROFILE_CREATE_FAILED"
+
+    try:
+        validated_host, provider = _candidate_identity(profile, host, config_path)
+        auth_method = "azure-cli-session" if cloud == "azure" and strategy.startswith("azure-cli") else "unified-auth"
+        if config_record.get("auth_type") == "databricks-cli" or strategy == "databricks-cli-u2m":
+            auth_method = "databricks-cli-u2m"
+        return {"strategy": auth_method, "provider": provider, "cloud": cloud}, validated_host, None
+    except DatabricksError as exc:
+        if strategy == "azure-cli-session":
+            return None, None, "IDENTITY_INVALID"
+
+    if strategy == "azure-cli-device-code":
+        result = auth_executor.run_azure_device_login()
+        auth_method = "azure-cli-device-code"
+    elif strategy == "azure-cli-interactive":
+        result = auth_executor.run_azure_interactive_login()
+        auth_method = "azure-cli-interactive"
+    elif strategy == "databricks-cli-u2m":
+        binary = providers.get("cli", {}).get("executable")
+        if not binary:
+            return None, None, "AUTH_PROVIDER_UNAVAILABLE"
+        result = auth_executor.run_databricks_login(str(binary), host, profile,
+                                                    config_path=str(config_path))
+        auth_method = "databricks-cli-u2m"
+    else:
+        return None, None, "AUTH_REQUIRED"
+    if result.get("status") != "READY":
+        return None, None, str(result.get("category") or "AUTH_FAILED")
+    if owned_config.plaintext_credential_fields(config_path):
+        return None, None, "PLAINTEXT_AUTH_STORAGE_UNSAFE"
+    try:
+        validated_host, provider = _candidate_identity(profile, host, config_path)
+    except DatabricksError:
+        return None, None, "PROFILE_VALIDATION_FAILED"
+    return {"strategy": auth_method, "provider": provider, "cloud": cloud}, validated_host, None
+
+
+def setup(dry_run: bool = False, *, reset: bool = False) -> dict[str, Any]:
     prefs = load_preferences()
-    providers = provider_snapshot()
-    profiles = discovery.config_profiles()
+    profile_meta = _profile_metadata(prefs)
+    target = owned_config.config_file()
+    if target.exists() and not profile_meta and not dry_run:
+        raise DatabricksError("CONFIG_OWNERSHIP_AMBIGUOUS", "Anvil's config path already contains unowned data; it was left unchanged")
     if dry_run:
-        return _setup_plan(providers, profiles)
+        plan = _setup_plan(provider_snapshot(), reset=reset)
+        if target.exists() and not profile_meta:
+            plan["config_ownership_issue"] = "ambiguous"
+            plan["plan"] = ["inspect the existing Anvil config without modifying it"]
+        elif target.exists() and not owned_config.valid_config(target):
+            plan["config_ownership_issue"] = "invalid"
+            plan["plan"] = ["review or reset the invalid Anvil-owned config"]
+        return plan
+
+    providers = provider_snapshot()
+    if profile_meta and target.is_file() and not reset and not owned_config.valid_config(target):
+        raise DatabricksError("CONFIG_INVALID", "Anvil's managed Databricks config is malformed; it was left unchanged")
+    if profile_meta and target.is_file() and not reset:
+        name = str(profile_meta["name"])
+        owned_record = next((item for item in owned_config.read_profiles()
+                             if item["name"].casefold() == name.casefold()), None)
+        if owned_record and owned_record.get("host"):
+            try:
+                safe_host = workspace_host(owned_record["host"])
+                host, _ = _candidate_identity(name, safe_host, target)
+                summary = _setup_summary(providers, True, name)
+                summary.update({"dry_run": False, "already_configured": True, "profile_created": False,
+                                "profile": name,
+                                "workspace_host": host, "environment": str((prefs.get("workspace") or {}).get("environment", "dev")),
+                                "ownership": "Anvil", "cloud": topology.workspace_cloud(host),
+                                "authentication": prefs.get("authentication") or {},
+                                "topology": topology.detect_topology(tty=sys.stdin.isatty()),
+                                "environment_conflicts": owned_config.environment_conflicts(),
+                                "credential_storage": "official Databricks/Azure authentication storage; Anvil stores metadata only"})
+                return summary
+            except DatabricksError:
+                pass
+
+    if not sys.stdin.isatty():
+        return {"overall": "NOT_CONFIGURED", "dry_run": False, "providers": providers,
+                "authentication": {}, "topology": topology.detect_topology(tty=False),
+                "auth_error": "WORKSPACE_REQUIRED",
+                "next_step": "Run make databricks-setup in an interactive terminal to enter the workspace URL and environment.",
+                "external_profiles_detected": len(_external_profiles()), "external_profiles_used": False}
+
+    try:
+        host, environment = _collect_workspace(prefs, profile_meta)
+    except KeyboardInterrupt:
+        return {"overall": "NOT_CONFIGURED", "dry_run": False, "providers": providers,
+                "selected_profile": None, "auth_error": "AUTH_CANCELLED",
+                "next_step": "Rerun make databricks-setup when ready.",
+                "external_profiles_detected": len(_external_profiles()), "external_profiles_used": False,
+                "authentication": {}, "topology": topology.detect_topology(tty=True)}
+    profile = _profile_name(environment)
+    if target.exists() and not profile_meta:
+        raise DatabricksError("CONFIG_OWNERSHIP_AMBIGUOUS", "Anvil's config path contains data without ownership metadata; use a different Anvil config location")
+    try:
+        continue_setup = input(f"Anvil will create {profile} in its managed config. Existing Databricks profiles will not be changed. Continue? [Y/n]: ").strip().casefold() in {"", "y", "yes"}
+    except KeyboardInterrupt:
+        continue_setup = False
+    if not continue_setup:
+        return {"overall": "NOT_CONFIGURED", "dry_run": False, "providers": providers,
+                "selected_profile": None, "auth_error": "AUTH_CANCELLED",
+                "next_step": "Rerun make databricks-setup when ready.", "external_profiles_detected": len(_external_profiles()),
+                "external_profiles_used": False, "authentication": {},
+                "topology": topology.detect_topology(tty=True)}
 
     install_result = None
     sdk_install_result = None
     if providers["cli"].get("status") != "READY":
         install_result = cli_install.attempt_cli_install()
-        if install_result.get("status") == "READY" and install_result.get("executable"):
-            state = load_preferences()
-            state.setdefault("providers", {})["cli"] = {"status": "READY", "executable": install_result["executable"],
-                                                          "version": install_result.get("version"), "discovered_by": "anvil-managed-install",
-                                                          "path_visible": False, "absolute_usable": True}
-            provider_state.save_state(state)
         providers = provider_snapshot()
         if providers["cli"].get("status") != "READY" and providers["sdk"].get("status") != "READY":
             sdk_install_result = cli_install.install_sdk()
@@ -872,130 +1019,98 @@ def setup(dry_run: bool = False) -> dict[str, Any]:
             if sdk_install_result.get("status") != "READY":
                 providers["sdk"] = {"status": "BLOCKED", "failure": sdk_install_result.get("failure", "unknown"),
                                     "message": sdk_install_result.get("message")}
-
     _save_provider_snapshot(providers, install_result, sdk_install_result)
-    usable_provider = providers["cli"].get("status") == "READY" or providers["sdk"].get("status") == "READY"
-    profiles = discover_profiles() if usable_provider else discovery.config_profiles()
-    previous = prefs.get("selected_profile")
-    valid = [p for p in profiles if p.get("workspace") and p.get("valid")]
-    selected_profile: str | None = None
-    host: str | None = None
-    authentication: dict[str, Any] | None = None
-    auth_decision: dict[str, Any] = {}
-    auth_error: str | None = None
+    if providers["cli"].get("status") != "READY" and providers["sdk"].get("status") != "READY":
+        return {"overall": "BLOCKED", "dry_run": False, "providers": providers,
+                "auth_error": "AUTH_PROVIDER_UNAVAILABLE", "selected_profile": None,
+                "authentication": {}, "topology": topology.detect_topology(tty=True),
+                "next_step": "Install or allow one supported Databricks provider, then rerun make databricks-setup."}
 
-    if previous:
-        prior = profile_by_name(profiles, str(previous))
-        if previous == "__ANVIL_DEFAULT__":
-            try:
-                host = validate_selected_profile(str(previous), {"workspace": True, "valid": True})
-                selected_profile = str(previous)
-            except DatabricksError:
-                prior = None
-                auth_error = "PROFILE_INVALID"
-        elif prior and prior.get("workspace") and prior.get("valid"):
-            selected_profile = str(prior["name"])
-            host = validate_selected_profile(selected_profile, prior)
-        elif prior and providers["cli"].get("status") == "READY" and sys.stdin.isatty():
-            answer = input(f"Saved profile '{previous}' needs authentication. Reauthenticate this same workspace? [y/N] ").strip().casefold()
-            if answer in {"y", "yes"}:
-                old_host = prior.get("workspace_host") or prior.get("host")
-                try:
-                    safe_host = workspace_host(str(old_host))
-                    login = auth_executor.run_databricks_login(str(providers["cli"]["executable"]), safe_host, str(previous))
-                    if login["status"] == "READY":
-                        profiles = discover_profiles()
-                        prior = profile_by_name(profiles, str(previous))
-                        if prior and prior.get("valid"):
-                            selected_profile = str(previous)
-                            host = validate_selected_profile(selected_profile, prior)
-                            authentication = {"strategy": "databricks-cli-u2m", "provider": "cli",
-                                              "cloud": topology.workspace_cloud(safe_host)}
-                    else:
-                        auth_error = str(login.get("category") or "AUTH_REQUIRED")
-                except DatabricksError:
-                    auth_error = "PROFILE_INVALID"
+    base_path = target
+    if reset:
+        base_path = target.with_name(f".anvil-reset-empty-{os.getpid()}")
+    profile_preexisting = any(item["name"].casefold() == profile.casefold()
+                              for item in owned_config.read_profiles(base_path))
+    old_state = dict(prefs)
+    state_existed = provider_state.state_path().exists()
+    backup: Path | None = None
+    try:
+        stage = owned_config.stage_profile(profile, host, base_path=base_path)
+    except FileExistsError:
+        raise DatabricksError("PROFILE_COLLISION", "this Anvil profile name already belongs to another workspace; choose a different environment or use RESET=1")
+    except (OSError, ValueError) as exc:
+        raise DatabricksError("PROFILE_CREATE_FAILED", "Anvil could not stage a private workspace profile") from exc
+    if owned_config.plaintext_credential_fields(stage):
+        owned_config.discard_stage(stage)
+        raise DatabricksError("PLAINTEXT_AUTH_STORAGE_UNSAFE", "Anvil will not use a config file containing plaintext credential fields")
+
+    _, azure_authenticated = auth_executor.azure_cli_status() if topology.workspace_cloud(host) == "azure" else (False, False)
+    environment_info, decision = _authentication_context(host, providers, azure_authenticated=azure_authenticated)
+    print(f"\nWorkspace: {host}\nEnvironment: {environment_info['kind']}\nCloud: {topology.workspace_cloud(host)}")
+    print(f"Profile: {profile} (Anvil-managed)\nAuthentication: {str(decision['strategy']).replace('-', ' ')}")
+    conflicts = owned_config.environment_conflicts()
+    if conflicts:
+        print("External Databricks environment variables will be isolated: " + ", ".join(conflicts))
+    try:
+        continue_auth = input("Continue with this authentication method? [Y/n]: ").strip().casefold() in {"", "y", "yes"}
+    except KeyboardInterrupt:
+        owned_config.discard_stage(stage)
+        return {"overall": "NOT_CONFIGURED", "dry_run": False, "providers": providers,
+                "selected_profile": None, "auth_error": "AUTH_CANCELLED",
+                "next_step": "Rerun make databricks-setup when ready.", "external_profiles_detected": len(_external_profiles()),
+                "external_profiles_used": False, "authentication": decision, "topology": environment_info}
+    if not continue_auth:
+        owned_config.discard_stage(stage)
+        return {"overall": "NOT_CONFIGURED", "dry_run": False, "providers": providers,
+                "selected_profile": None, "auth_error": "AUTH_CANCELLED",
+                "next_step": "Rerun make databricks-setup when ready.", "external_profiles_detected": len(_external_profiles()),
+                "external_profiles_used": False, "authentication": decision, "topology": environment_info}
+
+    try:
+        authentication, validated_host, auth_error = _authenticate_workspace(host, profile, stage, providers, decision)
+        if not authentication or not validated_host or auth_error:
+            owned_config.discard_stage(stage)
+            summary = _setup_summary(providers, False, None)
+            summary.update({"dry_run": False, "workspace_host": host, "environment": environment,
+                           "profile": profile, "ownership": "Anvil", "auth_error": auth_error or "AUTH_FAILED",
+                           "authentication": decision, "topology": environment_info,
+                           "environment_conflicts": conflicts,
+                           "next_step": "Resolve the authentication issue and rerun make databricks-setup."})
+            return summary
+        backup = owned_config.backup_existing(reset=reset)
+        owned_config.commit_staged(stage)
+        try:
+            path = save_preferences(profile, validated_host, authentication)
+            state = load_preferences()
+            summary = _setup_summary(providers, True, profile)
+            state["capabilities"] = summary["capabilities"]
+            provider_state.save_state(state)
+        except BaseException:
+            owned_config.restore_backup(backup)
+            if state_existed:
+                provider_state.save_state(old_state)
             else:
-                auth_error = "AUTH_CANCELLED"
-        elif not prior:
-            auth_error = "PROFILE_INVALID"
-        else:
-            auth_error = "PROFILE_INVALID"
-    elif valid:
-        selected = choose_profile(profiles, None)
-        selected_profile = str(selected["name"])
-        host = validate_selected_profile(selected_profile, selected)
-    elif usable_provider:
-        existing = default_authenticated_profile()
-        if existing:
-            selected_profile, host = existing
+                provider_state.state_path().unlink(missing_ok=True)
+            raise
+    except DatabricksError:
+        owned_config.discard_stage(stage)
+        raise
+    except OSError as exc:
+        owned_config.discard_stage(stage)
+        raise DatabricksError("PROFILE_CREATE_FAILED", "Anvil could not safely activate its validated profile") from exc
+    except BaseException:
+        owned_config.discard_stage(stage)
+        raise
 
-    if not selected_profile and not previous and usable_provider and sys.stdin.isatty():
-        answer = input("No validated workspace authentication is available. Configure Databricks now? [Y/n] ").strip().casefold()
-        if answer in {"", "y", "yes"}:
-            configured_profiles = [item for item in profiles if item.get("host") or item.get("workspace_host")]
-            default_host = prefs.get("workspace_host") or next((item.get("workspace_host") or item.get("host") for item in configured_profiles), None)
-            typed_host = input(f"Databricks workspace URL{f' [{default_host}]' if default_host else ''}: ").strip()
-            requested_host = typed_host or str(default_host or "")
-            if requested_host:
-                try:
-                    safe_host = workspace_host(requested_host)
-                    environment, auth_decision = _authentication_context(safe_host, providers)
-                    selected_profile, host, authentication, auth_error = _authenticate_workspace(safe_host, providers)
-                    if (auth_error in {"AUTH_TIMEOUT", "AUTH_CALLBACK_UNREACHABLE"}
-                            and environment.get("vscode_detected")):
-                        auth_decision = {"strategy": "vscode-assisted", "provider": "preferred",
-                                         "auth_required": False,
-                                         "reason": "CLI browser authentication did not complete; the official VS Code flow is available."}
-                    if auth_decision.get("strategy") in {"vscode-assisted", "manual-profile"} and not selected_profile:
-                        auth_error = None
-                except DatabricksError:
-                    auth_error = "WORKSPACE_PROFILE_INVALID"
-            else:
-                auth_error = "AUTH_REQUIRED"
-        else:
-            auth_error = "AUTH_CANCELLED"
-
-    # If there was no terminal, produce a concrete safe recommendation without
-    # attempting an OAuth callback or pretending that setup is complete.
-    if not selected_profile and not auth_decision:
-        host_hint = prefs.get("workspace_host") or next((p.get("host") for p in profiles if p.get("host")), "")
-        environment, auth_decision = _authentication_context(str(host_hint), providers)
-
-    if selected_profile and host:
-        if authentication:
-            save_preferences(selected_profile, host, authentication)
-        else:
-            path = save_preferences(selected_profile, host)
-            existing_auth = load_preferences().get("authentication")
-            if isinstance(existing_auth, dict):
-                authentication = existing_auth
-        path = preferences_path()
-    else:
-        path = preferences_path()
-    summary = _setup_summary(providers, bool(selected_profile and host), profiles, selected_profile)
-    state = load_preferences()
-    state["capabilities"] = summary["capabilities"]
-    provider_state.save_state(state)
-    next_step = None
-    if not selected_profile:
-        if auth_error == "AUTH_CANCELLED":
-            next_step = "Authentication was cancelled. Rerun make databricks-setup when ready."
-        elif auth_decision.get("strategy") == "vscode-assisted":
-            next_step = "Sign in with the Databricks VS Code extension, then run make databricks-setup again."
-        elif auth_decision.get("strategy") == "manual-profile":
-            next_step = "Authenticate with the official Databricks CLI or VS Code extension, then run make databricks-setup again."
-        elif auth_decision.get("strategy") == "azure-device-code":
-            next_step = "Run make databricks-setup from a terminal and provide the Azure Databricks workspace URL."
-        else:
-            next_step = "Run make databricks-setup in a terminal and select a Databricks workspace."
-    summary.update({"dry_run": False, "workspace_host": host, "preferences_path": str(path),
-                    "credential_storage": "Databricks Unified Authentication; Anvil stores metadata only",
-                    "cli_install_attempt": install_result,
-                    "topology": environment if "environment" in locals() else topology.detect_topology(tty=sys.stdin.isatty()),
-                    "authentication": {**(authentication or auth_decision),
-                                        "provider": (authentication or auth_decision).get("provider")},
-                    "auth_error": auth_error, "next_step": next_step})
+    summary.update({"dry_run": False, "profile_created": not profile_preexisting,
+                    "already_configured": False, "workspace_host": validated_host,
+                    "environment": environment, "ownership": "Anvil", "config_file": str(path),
+                    "configuration_backup": str(backup) if backup else None,
+                    "authentication": authentication, "topology": environment_info,
+                    "environment_conflicts": conflicts,
+                    "credential_storage": "official Databricks/Azure authentication storage; Anvil stores metadata only",
+                    "auth_error": None,
+                    "next_step": None if summary["overall"] in {"READY", "DEGRADED"} else "Check provider availability and rerun make databricks-setup."})
     return summary
 
 
@@ -1045,7 +1160,15 @@ def status() -> dict[str, Any]:
         "limitation": None,
     }
     prefs = load_preferences()
-    selected = prefs.get("selected_profile")
+    profile_meta = _profile_metadata(prefs)
+    selected = profile_meta.get("name")
+    value.update({"selected_profile": selected,
+                  "profile_configured": bool(selected and owned_config.config_file().is_file()),
+                  "workspace_host": (prefs.get("workspace") or {}).get("host") if isinstance(prefs.get("workspace"), dict) else None,
+                  "profile_ownership": "Anvil" if selected else None,
+                  "authentication_strategy": (prefs.get("authentication") or {}).get("strategy") if isinstance(prefs.get("authentication"), dict) else None,
+                  "external_profiles_detected": len(_external_profiles()), "external_profiles_used": False,
+                  "environment_conflicts": owned_config.environment_conflicts()})
     usable_provider = cli_ready or sdk_state.get("status") == "READY"
     if not usable_provider:
         if cli.get("status") == "BLOCKED":
@@ -1060,37 +1183,21 @@ def status() -> dict[str, Any]:
         return value
     try:
         if not selected:
-            if not discovery.config_profiles():
-                authenticated = default_authenticated_profile()
-                if authenticated:
-                    selected = authenticated[0]
-            else:
-                value["limitation"] = "No Anvil default profile is selected; run make databricks-setup"
-                cap_map = resolve_providers(providers, auth_valid=False)
-                value["resolved_capabilities"] = cap_map
-                value["overall"] = resolver.overall_state(providers, cap_map, auth_valid=False)
-                return value
-            if not selected:
-                value["limitation"] = "No Anvil default profile is selected; run make databricks-setup"
-                cap_map = resolve_providers(providers, auth_valid=False)
-                value["resolved_capabilities"] = cap_map
-                value["overall"] = resolver.overall_state(providers, cap_map, auth_valid=False)
-                return value
-        value["selected_profile"] = selected
-        value["profile_configured"] = selected != "__ANVIL_DEFAULT__"
-        if selected == "__ANVIL_DEFAULT__":
-            listed = {"workspace": True, "valid": True}
-        else:
-            profiles = discover_profiles()
-            listed = profile_by_name(profiles, str(selected))
-            if not listed:
-                value["profile_valid"] = False
-                value["limitation"] = "Selected profile is missing; Anvil will not switch workspaces automatically"
-                return value
-        value["profile_valid"] = bool(listed.get("valid") and listed.get("workspace"))
-        if not value["profile_valid"] and cli_ready:
-            value["limitation"] = "Selected profile is invalid; repair its Databricks authentication"
+            value["limitation"] = "No Anvil-owned Databricks profile is configured; external profiles are not used. Run make databricks-setup."
+            cap_map = resolve_providers(providers, auth_valid=False)
+            value["resolved_capabilities"] = cap_map
+            value["overall"] = resolver.overall_state(providers, cap_map, auth_valid=False)
             return value
+        profiles = discover_profiles()
+        listed = profile_by_name(profiles, str(selected))
+        if not listed:
+            value["profile_valid"] = False
+            value["limitation"] = "The Anvil-owned profile is missing; run make databricks-setup to recreate it."
+            cap_map = resolve_providers(providers, auth_valid=False)
+            value["resolved_capabilities"] = cap_map
+            value["overall"] = resolver.overall_state(providers, cap_map, auth_valid=False)
+            return value
+        value["profile_valid"] = bool(listed.get("valid") and listed.get("workspace"))
         host = validate_selected_profile(str(selected), listed)
         value["profile_valid"] = True
         value["workspace_host"] = host
@@ -1132,7 +1239,9 @@ def local_status() -> dict[str, Any]:
     """Return installed providers and saved preferences without workspace calls."""
     providers = provider_snapshot()
     prefs = load_preferences()
-    selected = prefs.get("selected_profile")
+    profile_meta = _profile_metadata(prefs)
+    selected = profile_meta.get("name")
+    workspace_meta = prefs.get("workspace") if isinstance(prefs.get("workspace"), dict) else {}
     value: dict[str, Any] = {
         "cli_installed": bool(providers["cli"].get("installed")),
         "cli_path": providers["cli"].get("executable"),
@@ -1150,8 +1259,12 @@ def local_status() -> dict[str, Any]:
         "vscode": providers["vscode"], "connect": providers["connect"],
         "sql_connector": providers["sql_connector"],
         "minimum_cli_version": "1.0.0",
-        "profile_configured": bool(selected), "profile_valid": None,
-        "selected_profile": selected, "workspace_host": prefs.get("workspace_host"),
+        "profile_configured": bool(selected and owned_config.config_file().is_file()), "profile_valid": None,
+        "selected_profile": selected, "workspace_host": workspace_meta.get("host"),
+        "profile_ownership": "Anvil" if selected else None,
+        "authentication_strategy": (prefs.get("authentication") or {}).get("strategy") if isinstance(prefs.get("authentication"), dict) else None,
+        "external_profiles_detected": len(_external_profiles()), "external_profiles_used": False,
+        "environment_conflicts": owned_config.environment_conflicts(),
         "identity_reachable": None, "running_all_purpose_compute": None,
         "running_sql_warehouses": None, "system_catalog_reachable": None,
         "system_schemas": [], "unavailable_system_schemas": [],
@@ -1180,6 +1293,8 @@ def capabilities(value: dict[str, Any]) -> dict[str, Any]:
     system = "YES" if value.get("system_catalog_reachable") is True else "NO" if value.get("system_catalog_reachable") is False else "UNKNOWN"
     return {
         "Authentication": auth,
+        "Authentication strategy": value.get("authentication_strategy") or "NOT_CONFIGURED",
+        "Anvil profile": value.get("selected_profile") or "NOT_CONFIGURED",
         "Workspace API": selected("workspace.list"),
         "Cluster discovery": selected("compute.list"),
         "Warehouse discovery": selected("warehouse.list"),
@@ -1213,6 +1328,7 @@ def main() -> int:
     capabilities_parser.add_argument("--verbose", action="store_true")
     sub.add_parser("setup")
     sub.choices["setup"].add_argument("--dry-run", action="store_true")
+    sub.choices["setup"].add_argument("--reset", action="store_true")
     sub.choices["setup"].add_argument("--format", choices=("json", "text"), default="text")
     sub.choices["setup"].add_argument("--verbose", action="store_true")
     profiles_parser = sub.add_parser("profiles")
@@ -1249,10 +1365,10 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.action == "setup":
-            result = setup(dry_run=args.dry_run)
+            result = setup(dry_run=args.dry_run, reset=args.reset)
             print(json.dumps(result, ensure_ascii=False, indent=2) if args.format == "json"
                   else presentation.setup_text(result, verbose=args.verbose))
-            return 0 if args.dry_run or result.get("overall") == "READY" else 1
+            return 0 if args.dry_run or result.get("overall") in {"READY", "DEGRADED"} else 1
         if args.action == "status":
             value = local_status() if args.local else status()
             print(json.dumps(value, indent=2) if args.format == "json" else status_text(value, verbose=args.verbose))

@@ -1,39 +1,50 @@
 # Databricks setup
 
-`make databricks-setup` is the explicit opt-in to configure Anvil's Databricks integration. Normal `make reforge`, `make upgrade`, `make doctor`, and `make capabilities` do not install Databricks clients. Reforge and upgrade also do not perform Databricks auth probes.
+`make databricks-setup` is the explicit opt-in to configure Anvil's Databricks integration. Normal `make reforge`, `make upgrade`, `make doctor`, and `make capabilities` do not install Databricks clients or authenticate to a workspace.
 
-## Setup lifecycle
+## Anvil-owned configuration
 
-When invoked, setup:
+Anvil stores its Databricks CLI/SDK configuration at:
 
-1. inspects the current CLI, SDK, VS Code extension, Connect/SQL Connector packages, profile file, and saved Anvil state;
-2. validates a supported CLI and prefers a previously verified absolute path;
-3. if no supported CLI is usable, attempts the official Databricks CLI release in Anvil's private user-local data tree, verifies its SHA-256 checksum, and never elevates privileges;
-4. classifies a failed install and prepares/reuses an isolated SDK environment if the CLI is still unavailable;
-5. validates supported Unified Authentication and asks the user to choose among multiple valid workspace profiles;
-6. detects local/remote terminal topology and selects only an officially supported authentication path;
-7. validates Databricks identity through the selected provider;
-8. writes safe provider, auth-strategy, and capability metadata atomically and reports the overall state.
+```text
+${XDG_CONFIG_HOME:-$HOME/.config}/anvil/databricks/databrickscfg
+```
 
-The CLI release is obtained from the official [`databricks/cli` GitHub releases](https://github.com/databricks/cli/releases) metadata and installed at `$XDG_DATA_HOME/anvil/databricks/bin/databricks` (default `~/.local/share/anvil/databricks/bin/databricks`). This path is internal to Anvil; users do not need to invoke it directly. No shell startup file is modified. The CLI remains usable through its validated absolute path when its directory is missing from `PATH`.
+The default development profile is `anvil-dev`; the other suggested labels create `anvil-staging` and `anvil-prod`. A custom neutral label becomes `anvil-<label>`. The file and its directory are mode `0600` and `0700`. Provider metadata remains in the separate `anvil/databricks.json` file and contains no credential values.
 
-If CLI setup is blocked, Anvil reports the failure and attempts the SDK fallback in `$XDG_DATA_HOME/anvil/databricks/venv`. The isolated environment does not modify system or user-global Python packages. A healthy SDK can use an existing supported Unified Authentication profile or an Azure CLI session for Azure workspaces. See [provider routing](providers.md) for the fallback matrix.
+Setup asks for the workspace URL and environment. A previously recorded workspace can be offered as a suggestion and must be confirmed. Existing profiles in the normal Databricks config file are external state: Anvil does not select, copy, repair, rename, delete, or reauthenticate them. If an older Anvil release stored a selected external profile, its name is ignored; the saved workspace host is only a user-confirmed suggestion for the new Anvil profile.
 
-`make databricks-setup` owns the complete onboarding flow. On a local interactive terminal it can run the official CLI OAuth U2M login after the user provides a workspace URL. For an Azure workspace in a supported remote/headless environment, it can run the official Azure CLI device-code flow and validate identity through the SDK. Remote AWS/GCP sessions are not sent through an assumed local browser callback; setup recommends a validated profile or the official Databricks VS Code extension. Anvil does not automate extension UI.
+The flow is:
+
+1. collect workspace and environment information;
+2. prepare a supported CLI and/or isolated SDK during this explicit setup command;
+3. stage a private Anvil profile without replacing the active config;
+4. detect cloud and execution topology, then choose an authentication strategy;
+5. validate the staged profile and current user through the CLI or SDK;
+6. atomically activate the config and save non-secret ownership/provider metadata.
+
+If the active Anvil config is malformed, setup leaves it unchanged and reports `CONFIG_INVALID`. `make databricks-setup RESET=1` stages a clean Anvil config, validates it, keeps a private timestamped backup, and replaces only the Anvil-owned config. An existing config at Anvil's managed path without ownership metadata is ambiguous and is never overwritten, even with reset.
+
+## Providers and authentication
+
+The official Databricks CLI is installed, when needed, at `$XDG_DATA_HOME/anvil/databricks/bin/databricks` (default `~/.local/share/anvil/databricks/bin/databricks`) after checksum verification. If CLI installation is blocked, setup can prepare the isolated Python SDK under `$XDG_DATA_HOME/anvil/databricks/venv`. Neither installation uses privilege elevation or modifies shell startup files. This executable path is internal to Anvil and is not part of user instructions.
+
+Authentication follows the workspace cloud and topology. An existing Azure CLI session is reused for Azure workspaces; local interactive Azure login and remote Azure CLI device-code login are available. Databricks CLI OAuth U2M is used where appropriate, including as a fallback if Azure CLI is unavailable in a suitable local terminal. Remote/headless AWS/GCP or unknown-hybrid contexts are not sent through an assumed loopback browser flow. See [authentication](authentication.md) and [provider routing](providers.md).
+
+CLI and SDK child processes use the same Anvil config/profile. Inherited `DATABRICKS_*` variables are removed from those child environments; output reports only conflicting variable names, never values. The SQL Connector remains a specialized OAuth U2M path and does not reuse the SDK profile. It is not substituted for Azure CLI authentication.
 
 ## Preview and repeat setup
 
 ```bash
 make databricks-setup DRY_RUN=1
 make databricks-setup
+make databricks-setup RESET=1
 ```
 
-The dry-run performs bounded local discovery and prints a human-readable installation/auth strategy plan. It does not contact GitHub/PyPI/Databricks/Azure, install tools, change `PATH`, authenticate, or write Anvil state. A normal setup is safe to repeat: healthy providers and the saved profile are retained, and only missing supported providers are prepared.
+Dry-run performs bounded local discovery and reports the Anvil-owned profile it plans to create. It does not contact GitHub, PyPI, Azure, or Databricks; install tools; authenticate; change `PATH`; or write Anvil state/config. It may report the number of external profiles for diagnostics but never uses them. A healthy owned profile is revalidated on repeat setup without another login or config rewrite.
 
-Public output is concise and human-readable by default. Use `make databricks-setup OUTPUT=json` for the full machine-readable result or `make databricks-setup VERBOSE=1` for local provider diagnostics. A CLI outside `PATH` is still usable by Anvil; setup will not ask the user to copy its internal path.
+Human-readable output is the default. Use `make databricks-setup OUTPUT=json` for structured results or `make databricks-setup VERBOSE=1` for local provider diagnostics. A CLI outside `PATH` is still usable by Anvil.
 
 ## Setup outcomes
 
-Provider outcomes use `READY`, `DEGRADED`, `NOT_CONFIGURED`, `BLOCKED`, and `BROKEN`. A blocked CLI with a healthy SDK can still yield an overall `READY`. A blocked CLI and unavailable SDK are visible as provider state; neither makes Anvil's own installation unhealthy.
-
-If no valid authentication exists and no interactive strategy is appropriate, setup reports `NOT_CONFIGURED` and gives a supported next action. No auth profile is silently switched to another workspace. Authentication is validated before setup reports `READY`; a CLI binary alone does not complete onboarding.
+`READY` means an Anvil-owned profile validated the current identity and at least one core provider is healthy. `DEGRADED` means identity is valid but some capabilities lack a provider. `NOT_CONFIGURED` means workspace/authentication is still needed. A CLI binary by itself does not complete onboarding. Reforge and upgrade never install Databricks tools or probe workspace authentication.

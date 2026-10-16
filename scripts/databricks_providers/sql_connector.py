@@ -3,19 +3,20 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
+from . import owned_config
+
 
 def execute(*, profile: str, host: str, http_path: str, statement: str,
             parameters: list[dict[str, Any]] | None, timeout: int) -> dict[str, Any]:
     worker = Path(__file__).with_name("sql_connector_worker.py")
-    env = os.environ.copy()
-    if profile and profile != "__ANVIL_DEFAULT__":
-        env["DATABRICKS_CONFIG_PROFILE"] = profile
+    if not profile.startswith("anvil-"):
+        raise RuntimeError("SQL Connector requires an Anvil-owned Databricks profile")
+    env = owned_config.child_environment(profile=profile)
     request = {"host": host, "http_path": http_path, "statement": statement,
                "parameters": parameters, "timeout": max(5, min(timeout, 600))}
     try:

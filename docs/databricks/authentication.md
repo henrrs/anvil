@@ -1,35 +1,42 @@
 # Databricks authentication
 
-Anvil uses Databricks Unified Authentication through supported configuration profiles, environment variables, and provider libraries. It does not create credentials, scrape IDE storage, or implement OAuth itself.
+Anvil creates an isolated Databricks configuration and delegates authentication to the official Databricks or cloud tools. It does not create credentials and does not copy tokens, scrape IDE storage, or implement OAuth itself. Configure it with `make databricks-setup`.
 
-## Profiles
+## Anvil profiles
 
-Databricks configuration profiles live in the supported `.databrickscfg` location (or the path selected by `DATABRICKS_CONFIG_FILE`). The SDK accepts a selected profile through `WorkspaceClient(profile=...)`; the CLI uses `--profile`. Anvil discovers profile names and HTTPS workspace hosts, validates the selected identity through the active provider, and stores only the selected name and host in its own state.
+Anvil profiles live in `${XDG_CONFIG_HOME:-$HOME/.config}/anvil/databricks/databrickscfg`; a development setup creates `anvil-dev`. Both the CLI and Python SDK select that config file and profile for Anvil operations. The SDK accepts a config file and profile through Unified Authentication; the Databricks CLI honors `DATABRICKS_CONFIG_FILE` and `DATABRICKS_CONFIG_PROFILE`.
 
-One valid workspace profile can be selected automatically. Several valid profiles require a user choice. If the saved profile disappears or becomes invalid, Anvil asks for repair and does not silently choose another workspace. With only the SDK provider, Anvil can also use the supported default profile or environment-based Unified Authentication.
+External profiles such as `DEFAULT` or `dev` remain untouched and are not an Anvil authentication source. Old Anvil state that points to an external profile is retained only as legacy metadata; it is not silently reused. Setup asks the user to confirm a saved workspace host before using it to create the new Anvil profile.
 
-`make databricks-setup` owns the local interactive OAuth U2M flow and invokes the validated absolute Databricks CLI internally. Users do not need to locate Anvil's private CLI installation path or run an internal executable themselves. The official CLI manages its own secure credential storage and OAuth U2M lifecycle.
+## Strategy selection
 
-The auth strategy resolver uses the workspace cloud and local topology:
+The resolver evaluates workspace cloud, execution topology, available providers, Azure CLI availability/session status, and interactivity after workspace information is collected and an Anvil profile is staged.
 
-- A previously validated profile is reused without another login.
-- On a local interactive terminal, Anvil can start the official Databricks CLI browser-based OAuth U2M flow. The flow has a bounded inactivity watchdog and the CLI's own login challenge timeout.
-- For an Azure workspace, a current Azure CLI session may be reused by the Databricks SDK. In a remote/headless Azure session, Anvil can run `az login --use-device-code` and then validate the identity with `WorkspaceClient(host=..., auth_type="azure-cli")`.
-- For remote AWS/GCP and unsupported headless contexts, Anvil does not assume that a browser callback on the user's workstation can reach a remote process. It guides the user to a supported Databricks Unified Authentication profile or the official VS Code extension.
+- **Azure workspace with an authenticated Azure CLI:** reuse that session. Anvil does not open another browser. The owned profile uses `auth_type=azure-cli` for supported Unified Authentication clients; the SDK path is the guaranteed Azure CLI provider.
+- **Azure workspace in remote/headless/hybrid topology without a session:** use `az login --use-device-code` when Azure CLI is available. This avoids relying on a browser callback to a remote loopback listener.
+- **Azure workspace on a local interactive terminal without a session:** use normal `az login` when Azure CLI is available.
+- **Azure CLI unavailable on a suitable local terminal:** use Databricks CLI OAuth U2M if the supported CLI is available.
+- **AWS/GCP or unknown cloud:** use Databricks CLI OAuth U2M on a local interactive terminal. In remote/headless contexts, Anvil does not assume loopback browser callbacks work; it reports a supported assisted/manual next step.
+- **Already configured Anvil profile:** validate it first. A healthy identity is reused without another login or config write.
 
-Authentication is never implemented by Anvil itself. It does not copy tokens, automate browser UI, inspect IDE credential stores, or infer cross-cloud device-code support.
+The Databricks SQL Connector is a specialized provider with its own OAuth U2M flow; it does not consume the shared Anvil SDK profile, so Anvil does not use it as an Azure CLI-auth fallback. The CLI and SDK remain the primary profile-aware providers.
 
-## State and secrets
+## Environment isolation
 
-Anvil state is `${XDG_CONFIG_HOME:-$HOME/.config}/anvil/databricks.json`, atomically written with mode `0600` inside a `0700` directory. It contains a schema version, selected profile, workspace host, non-secret auth strategy/provider/cloud labels, provider health/discovery metadata, and capability resolution. It never contains tokens, passwords, client secrets, signed URLs, one-time device codes, or raw identity payloads.
+Anvil child processes receive the Anvil config path and, when selected, the `anvil-*` profile. All inherited `DATABRICKS_*` variables are removed from Databricks CLI, SDK, SQL Connector, and Azure login child environments where appropriate. Anvil never mutates the user's parent shell. Doctor and setup may list conflicting variable names such as `DATABRICKS_TOKEN`, but never print their values.
 
-The provider state is a cache. The active executable/package and authentication are revalidated when used. Existing 2.2 profile and host preferences migrate without changing Databricks authentication or profile files.
+## Credential storage and state
+
+The Anvil config file is written atomically with mode `0600` inside a mode `0700` directory. Anvil rejects plaintext token/password/client-secret fields and does not enable Databricks CLI plaintext auth storage. Databricks CLI 1.0 and later use native OS secure credential storage for OAuth U2M tokens by default; Azure CLI owns its own credential cache. Anvil state at `${XDG_CONFIG_HOME:-$HOME/.config}/anvil/databricks.json` stores only the workspace host, environment, profile name/path/ownership, authentication strategy, provider metadata, and capability resolution. It never stores tokens, passwords, client secrets, signed URLs, device codes, or raw identity payloads.
+
+`make databricks-setup RESET=1` affects only the Anvil-owned config. It backs up the previous file and activates a replacement only after identity validation. Existing general-purpose Databricks profiles and cloud authentication are not deleted or converted.
 
 ## Official references
 
-- [Unified Authentication](https://docs.databricks.com/aws/en/dev-tools/auth/unified-auth)
-- [Configuration profiles](https://docs.databricks.com/aws/en/dev-tools/auth/config-profiles)
-- [OAuth U2M](https://docs.databricks.com/aws/en/dev-tools/auth/oauth-u2m)
-- [CLI authentication commands](https://docs.databricks.com/aws/en/dev-tools/cli/reference/auth-commands)
+- [Databricks CLI configuration profiles](https://docs.databricks.com/aws/en/dev-tools/cli/profiles)
+- [Databricks Unified Authentication environment variables](https://docs.databricks.com/aws/en/dev-tools/auth/env-vars)
+- [Databricks CLI authentication commands](https://docs.databricks.com/aws/en/dev-tools/cli/reference/auth-commands)
+- [Databricks CLI authentication and secure token storage](https://docs.databricks.com/aws/en/dev-tools/cli/authentication)
 - [Databricks SDK authentication types](https://github.com/databricks/databricks-sdk-py/blob/main/docs/auth-types-reference.md)
-- [Microsoft Azure CLI device-code sign-in](https://learn.microsoft.com/cli/azure/authenticate-azure-cli-interactively)
+- [Databricks SDK authentication](https://github.com/databricks/databricks-sdk-py/blob/main/docs/authentication.md)
+- [Microsoft Azure CLI interactive and device-code sign-in](https://learn.microsoft.com/cli/azure/authenticate-azure-cli-interactively)

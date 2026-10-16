@@ -202,8 +202,8 @@ def profile_file() -> Path:
     return Path(configured).expanduser() if configured else Path.home() / ".databrickscfg"
 
 
-def config_profiles() -> list[dict[str, Any]]:
-    path = profile_file()
+def config_profiles(path: Path | str | None = None) -> list[dict[str, Any]]:
+    path = Path(path).expanduser() if path is not None else profile_file()
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:

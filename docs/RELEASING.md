@@ -1,6 +1,6 @@
 # Releasing Anvil
 
-Anvil uses Semantic Versioning. Anvil 2.0 was the runtime/configuration migration to OpenCode 2. Starting with Anvil 2.1, Anvil product versions and OpenCode runtime majors are independent; runtime-major migration is explicit. Anvil 2.3 adds Databricks provider independence while retaining the 2.2 feature contracts and both OpenCode runtime profiles. Anvil 2.3.1 corrects runtime independence by removing OpenCode release-service availability from the Anvil upgrade path. Anvil 2.4.0 is a MINOR release because it adds backward-compatible runtime quiescing, human presenters, and Databricks authentication orchestration while retaining the existing commands and metadata contract.
+Anvil uses Semantic Versioning. Anvil 2.0 was the runtime/configuration migration to OpenCode 2. Starting with Anvil 2.1, Anvil product versions and OpenCode runtime majors are independent; runtime-major migration is explicit. Anvil 2.3 adds Databricks provider independence; 2.3.1 corrects runtime independence; 2.4.0 adds safe runtime quiescing and topology-aware setup. Anvil 2.5.0 is a MINOR release because it moves Databricks onboarding to an Anvil-owned config and profile while retaining CLI/SDK provider independence, existing commands, and the state schema.
 
 ## Version bumps
 

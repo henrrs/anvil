@@ -9,7 +9,10 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any
+
+from . import owned_config
 
 
 def azure_cli_status(timeout: float = 5) -> tuple[bool, bool]:
@@ -18,7 +21,8 @@ def azure_cli_status(timeout: float = 5) -> tuple[bool, bool]:
         return False, False
     try:
         result = subprocess.run([executable, "account", "show", "--only-show-errors", "--output", "json"],
-                                capture_output=True, text=True, timeout=timeout, check=False)
+                                capture_output=True, text=True, timeout=timeout, check=False,
+                                env=owned_config.azure_login_environment())
         value = json.loads(result.stdout) if result.returncode == 0 else None
         return True, isinstance(value, dict) and bool(value.get("id"))
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
@@ -32,11 +36,11 @@ def _timeout() -> float:
         return 90.0
 
 
-def _run_interactive(command: list[str], timeout: float) -> dict[str, Any]:
+def _run_interactive(command: list[str], timeout: float, *, env: dict[str, str] | None = None) -> dict[str, Any]:
     """Forward official CLI progress and enforce an inactivity watchdog."""
     if os.name != "posix":
         try:
-            result = subprocess.run(command, timeout=timeout, check=False)
+            result = subprocess.run(command, timeout=timeout, check=False, env=env)
             return {"returncode": result.returncode}
         except subprocess.TimeoutExpired:
             return {"timeout": True}
@@ -44,7 +48,7 @@ def _run_interactive(command: list[str], timeout: float) -> dict[str, Any]:
 
     master, slave = pty.openpty()
     try:
-        process = subprocess.Popen(command, stdin=None, stdout=slave, stderr=slave, close_fds=True)
+        process = subprocess.Popen(command, stdin=None, stdout=slave, stderr=slave, close_fds=True, env=env)
     except BaseException:
         os.close(master)
         os.close(slave)
@@ -95,12 +99,15 @@ def _run_interactive(command: list[str], timeout: float) -> dict[str, Any]:
         os.close(master)
 
 
-def run_databricks_login(binary: str, host: str, profile: str = "DEFAULT") -> dict[str, Any]:
+def run_databricks_login(binary: str, host: str, profile: str = "DEFAULT", *,
+                         config_path: str | None = None) -> dict[str, Any]:
     timeout = _timeout()
     command = [binary, "auth", "login", "--host", host, "--profile", profile,
                "--timeout", f"{max(1, int(timeout))}s"]
     try:
-        result = _run_interactive(command, timeout)
+        result = _run_interactive(command, timeout,
+                                  env=owned_config.child_environment(profile=profile,
+                                                                    path=Path(config_path) if config_path else None))
     except subprocess.TimeoutExpired:
         return {"status": "FAILED", "category": "AUTH_TIMEOUT"}
     except KeyboardInterrupt:
@@ -114,13 +121,22 @@ def run_databricks_login(binary: str, host: str, profile: str = "DEFAULT") -> di
 
 
 def run_azure_device_login(timeout: float | None = None) -> dict[str, Any]:
+    return _run_azure_login(["login", "--use-device-code"], timeout)
+
+
+def run_azure_interactive_login(timeout: float | None = None) -> dict[str, Any]:
+    return _run_azure_login(["login"], timeout)
+
+
+def _run_azure_login(arguments: list[str], timeout: float | None) -> dict[str, Any]:
     executable = shutil.which("az")
     if not executable:
         return {"status": "FAILED", "category": "AUTH_PROVIDER_UNAVAILABLE"}
     try:
-        # Azure CLI owns the official device-code UX. Its URL and one-time code
-        # are streamed directly to the terminal; Anvil never stores them.
-        result = _run_interactive([executable, "login", "--use-device-code"], timeout or _timeout())
+        # Azure CLI owns the official browser/device-code UX; any one-time code
+        # is streamed directly to the terminal and is never stored by Anvil.
+        result = _run_interactive([executable, *arguments], timeout or _timeout(),
+                                  env=owned_config.azure_login_environment())
     except subprocess.TimeoutExpired:
         return {"status": "FAILED", "category": "AUTH_TIMEOUT"}
     except KeyboardInterrupt:

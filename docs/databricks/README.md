@@ -7,12 +7,12 @@ Anvil primary agent
   → anvil-databricks skill
   → capability resolver
   → CLI / Python SDK / SQL Connector / Connect / assisted VS Code
-  → supported Unified Authentication
+  → Anvil-owned Unified Authentication profile
 ```
 
 Run `make databricks-setup` only when you want to configure Databricks. That command attempts a safe user-local installation of the official Databricks CLI and prepares an isolated SDK fallback if needed. Preview local discovery and planned actions with `make databricks-setup DRY_RUN=1`; dry-run does not install, write state, or make network requests. Reforge and upgrade never install Databricks tooling or probe workspace auth.
 
-Anvil reuses supported `.databrickscfg` profiles and environment-based Unified Authentication without extracting credentials. Provider state stores only profile, host, absolute executable path, versions, health metadata, and capability resolution. The official Databricks VS Code extension is an assisted integration; Anvil uses the public `code --list-extensions` command and does not automate IDE UI or inspect extension files.
+Anvil creates its own `anvil-*` profile in an isolated config file and does not adopt or modify external `.databrickscfg` profiles. CLI and SDK operations share that profile; inherited `DATABRICKS_*` overrides are stripped from child processes. Provider state stores only ownership/profile, workspace, strategy, absolute executable path, versions, health metadata, and capability resolution. The official Databricks VS Code extension is an assisted integration; Anvil uses the public `code --list-extensions` command and does not automate IDE UI or inspect extension files.
 
 The CLI remains the preferred provider when healthy. The isolated Databricks SDK for Python provides headless identity, compute, warehouse, Command Execution and Statement Execution capabilities when the CLI is unavailable. SQL Connector and Databricks Connect remain specialized paths and are not installed by default.
 
