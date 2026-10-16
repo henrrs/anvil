@@ -21,7 +21,8 @@ SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 from databricks_providers import discovery, resolver, state as provider_state  # noqa: E402
-from databricks_providers import cli_install, sdk, sql_connector as discovery_sql_connector  # noqa: E402
+from databricks_providers import auth as auth_executor, auth_strategy, cli_install, sdk, sql_connector as discovery_sql_connector  # noqa: E402
+from databricks_providers import presentation, topology  # noqa: E402
 
 
 MINIMUM_CLI = (1, 0, 0)
@@ -53,7 +54,7 @@ def load_preferences() -> dict[str, Any]:
         raise DatabricksError("PREFERENCES_INVALID", "Anvil Databricks preferences cannot be read") from exc
 
 
-def save_preferences(profile: str, host: str) -> Path:
+def save_preferences(profile: str, host: str, authentication: dict[str, Any] | None = None) -> Path:
     safe_host = workspace_host(host)
     try:
         value = load_preferences()
@@ -63,6 +64,8 @@ def save_preferences(profile: str, host: str) -> Path:
         value = {"schema_version": provider_state.SCHEMA_VERSION, "providers": {}, "capabilities": {}}
     value.update({"selected_profile": profile, "workspace_host": safe_host,
                   "last_verified_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+    if authentication:
+        value["authentication"] = {key: authentication[key] for key in ("strategy", "provider", "cloud") if key in authentication}
     try:
         return provider_state.save_state(value)
     except ValueError as exc:
@@ -101,6 +104,10 @@ def sdk_provider() -> dict[str, Any]:
 
 
 def active_provider(capability: str) -> str | None:
+    prefs = load_preferences()
+    auth = prefs.get("authentication") if isinstance(prefs.get("authentication"), dict) else {}
+    preferred = auth.get("provider") if auth.get("provider") in {"cli", "sdk"} else None
+    allowed = {"sdk"} if auth.get("strategy") == "azure-cli-session" else None
     sdk_state = sdk_provider()
     providers = {"cli": cli_provider(), "sdk": sdk_state,
                  "sql_connector": {"status": "NOT_INSTALLED"}, "connect": {"status": "NOT_INSTALLED"},
@@ -109,7 +116,25 @@ def active_provider(capability: str) -> str | None:
         providers["sql_connector"] = discovery.discover_specialized(None)["sql_connector"]
     if capability == "python.execute" and providers["cli"].get("status") != "READY" and sdk_state.get("status") != "READY":
         providers["vscode"] = discovery._vscode()
-    return resolver.resolve(providers, auth_valid=True).get(capability, {}).get("provider")
+    return resolver.resolve(providers, auth_valid=True, preferred_provider=preferred,
+                            allowed_providers=allowed).get(capability, {}).get("provider")
+
+
+def resolve_providers(providers: dict[str, dict[str, Any]], *, auth_valid: bool) -> dict[str, dict[str, Any]]:
+    prefs = load_preferences()
+    auth = prefs.get("authentication") if isinstance(prefs.get("authentication"), dict) else {}
+    preferred = auth.get("provider") if auth.get("provider") in {"cli", "sdk"} else None
+    allowed = {"sdk"} if auth.get("strategy") == "azure-cli-session" else None
+    return resolver.resolve(providers, auth_valid=auth_valid, preferred_provider=preferred,
+                            allowed_providers=allowed)
+
+
+def sdk_auth_options(profile: str | None) -> dict[str, str]:
+    prefs = load_preferences()
+    auth = prefs.get("authentication") if isinstance(prefs.get("authentication"), dict) else {}
+    if profile == "__ANVIL_DEFAULT__" and auth.get("strategy") == "azure-cli-session":
+        return {"auth_type": "azure-cli", "host": str(prefs.get("workspace_host") or "")}
+    return {}
 
 
 def parse_version(value: str) -> tuple[int, int, int] | None:
@@ -216,9 +241,11 @@ def validate_selected_profile(name: str, listed: dict[str, Any]) -> str:
         raise DatabricksError("WORKSPACE_PROFILE_INVALID", "selected profile is not a workspace profile")
     if not listed.get("valid") and cli_provider().get("status") == "READY":
         raise DatabricksError("PROFILE_INVALID", f"selected profile '{name}' is invalid; repair its Databricks authentication")
-    if cli_provider().get("status") != "READY":
+    auth_options = sdk_auth_options(name)
+    if auth_options or cli_provider().get("status") != "READY":
         try:
-            response = sdk.call("identity", profile=None if name == "__ANVIL_DEFAULT__" else name, timeout=20)
+            response = sdk.call("identity", profile=None if name == "__ANVIL_DEFAULT__" else name,
+                                timeout=20, **auth_options)
         except RuntimeError as exc:
             raise DatabricksError("IDENTITY_INVALID", "selected Unified Authentication profile could not validate its identity") from exc
         host = workspace_host(str(response.get("host") or listed.get("workspace_host") or listed.get("host") or ""))
@@ -283,7 +310,7 @@ def resolve_profile(explicit: str | None = None) -> tuple[str, str, list[dict[st
     profiles = discover_profiles()
     listed = profile_by_name(profiles, str(selected))
     if listed is None:
-        raise DatabricksError("PROFILE_MISSING", f"selected Databricks profile '{selected}' is missing; authenticate it, then run make databricks-setup")
+            raise DatabricksError("PROFILE_MISSING", "the selected workspace profile is missing; rerun make databricks-setup to repair it without changing workspaces")
     host = validate_selected_profile(str(selected), listed)
     return str(selected), host, profiles
 
@@ -312,7 +339,7 @@ def json_from_cli(arguments: list[str], *, profile: str, timeout: float = 20) ->
     if route and active_provider(route[0]) == "sdk":
         _capability, operation, payload = route
         try:
-            return sdk.call(operation, profile=profile, timeout=int(timeout), **payload)
+            return sdk.call(operation, profile=profile, timeout=int(timeout), **sdk_auth_options(profile), **payload)
         except RuntimeError as exc:
             raise DatabricksError("SDK_REQUEST_FAILED", f"Databricks SDK request failed for {operation}") from exc
     output = run_cli([*arguments, "--output", "json"], profile=profile, timeout=timeout)
@@ -505,7 +532,7 @@ def execute_sql(statement: str, warehouse_id: str, profile: str | None = None, p
         return bounded_result(result)
     if selected_provider == "sdk":
         try:
-            response = sdk.call("sql.execute", profile=selected, timeout=timeout, statement=statement,
+            response = sdk.call("sql.execute", profile=selected, timeout=timeout, **sdk_auth_options(selected), statement=statement,
                                 warehouse_id=warehouse_id, parameters=parameters)
         except RuntimeError as exc:
             category = "STATEMENT_TIMEOUT" if "timed out" in str(exc).casefold() else "SDK_REQUEST_FAILED"
@@ -587,7 +614,7 @@ def execute_python(code: str, cluster_id: str, profile: str | None = None, timeo
         raise DatabricksError("CAPABILITY_ASSISTED", "Python execution is available as an assisted VS Code workflow; Anvil cannot automate the IDE")
     if selected_provider == "sdk":
         try:
-            response = sdk.call("python.execute", profile=selected, timeout=timeout,
+            response = sdk.call("python.execute", profile=selected, timeout=timeout, **sdk_auth_options(selected),
                                 cluster_id=cluster_id, code=code)
         except RuntimeError as exc:
             category = "COMMAND_TIMEOUT" if "timed out" in str(exc).casefold() else "SDK_REQUEST_FAILED"
@@ -657,10 +684,10 @@ def choose_profile(profiles: list[dict[str, Any]], previous: str | None) -> dict
         if selected is None:
             raise DatabricksError("PROFILE_MISSING", f"selected profile '{previous}' no longer exists; Anvil will not switch workspaces automatically")
         if not selected["valid"]:
-            raise DatabricksError("PROFILE_INVALID", f"selected profile '{previous}' is invalid; repair it with databricks auth login --profile {previous}")
+            raise DatabricksError("PROFILE_INVALID", f"selected profile '{previous}' is invalid; rerun make databricks-setup to authenticate the same workspace")
         return selected
     if not valid:
-        raise DatabricksError("NO_VALID_PROFILE", "no valid Databricks workspace profiles were found; authenticate with databricks auth login")
+        raise DatabricksError("NO_VALID_PROFILE", "no validated Databricks workspace profile is available")
     if len(valid) == 1:
         return valid[0]
     if not sys.stdin.isatty():
@@ -696,6 +723,18 @@ def _setup_plan(providers: dict[str, dict[str, Any]], profiles: list[dict[str, A
     sdk_state = providers["sdk"]
     cli_ready = cli.get("status") == "READY"
     sdk_ready = sdk_state.get("status") == "READY"
+    environment = topology.detect_topology(tty=sys.stdin.isatty())
+    hosts = [profile.get("host") or profile.get("workspace_host") for profile in profiles]
+    prefs = load_preferences()
+    auth_plan = auth_strategy.resolve(
+        topology=environment,
+        cloud=topology.workspace_cloud(str(prefs.get("workspace_host") or next((h for h in hosts if h), ""))),
+        cli_ready=cli_ready,
+        sdk_ready=sdk_ready,
+        azure_cli_available=bool(shutil.which("az")),
+        azure_cli_authenticated=False,
+        valid_profile=any(bool(profile.get("valid")) for profile in profiles),
+    )
     return {
         "dry_run": True,
         "cli": {"detected": cli_ready, "installed": cli.get("installed", False),
@@ -703,10 +742,75 @@ def _setup_plan(providers: dict[str, dict[str, Any]], profiles: list[dict[str, A
                 "installation": "NOT NEEDED" if cli_ready else "WOULD ATTEMPT", "method": "official user-local GitHub release with SHA-256 verification"},
         "sdk": {"available": sdk_ready, "action": "KEEP" if sdk_ready or cli_ready else "WOULD PREPARE isolated SDK fallback"},
         "vscode": providers["vscode"],
-        "profiles_found": len([p for p in profiles if p.get("workspace")]),
+        "profiles_found": len([p for p in profiles if p.get("workspace") or p.get("host") or p.get("workspace_host")]),
         "selection_needed": sum(bool(p.get("valid")) for p in profiles) > 1,
         "changes_performed": False,
+        "topology": environment,
+        "authentication": auth_plan,
+        "plan": [*([] if cli_ready or sdk_ready else ["attempt supported provider setup"]),
+                 "reuse or select a workspace authentication method", "validate the workspace identity",
+                 "save non-secret provider metadata"],
     }
+
+
+def _authentication_context(host: str, providers: dict[str, dict[str, Any]], *, dry_run: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
+    environment = topology.detect_topology(tty=sys.stdin.isatty())
+    azure_available = bool(shutil.which("az"))
+    azure_authenticated = False
+    if azure_available and not dry_run and topology.workspace_cloud(host) == "azure":
+        _, azure_authenticated = auth_executor.azure_cli_status()
+    decision = auth_strategy.resolve(
+        topology=environment, cloud=topology.workspace_cloud(host),
+        cli_ready=providers.get("cli", {}).get("status") == "READY",
+        sdk_ready=providers.get("sdk", {}).get("status") == "READY",
+        azure_cli_available=azure_available, azure_cli_authenticated=azure_authenticated,
+    )
+    return environment, decision
+
+
+def _authenticate_workspace(host: str, providers: dict[str, dict[str, Any]]) -> tuple[str | None, str | None, dict[str, Any], str | None]:
+    """Run only an officially supported flow selected for the current topology."""
+    safe_host = workspace_host(host)
+    environment, decision = _authentication_context(safe_host, providers)
+    strategy = str(decision["strategy"])
+    cloud = topology.workspace_cloud(safe_host)
+    if strategy == "databricks-cli-u2m":
+        binary = providers.get("cli", {}).get("executable")
+        if not binary:
+            return None, None, decision, "AUTH_PROVIDER_UNAVAILABLE"
+        result = auth_executor.run_databricks_login(str(binary), safe_host)
+        if result["status"] != "READY":
+            return None, None, decision, str(result.get("category") or "AUTH_REQUIRED")
+        profiles = discover_profiles()
+        valid = [item for item in profiles if item.get("workspace") and item.get("valid")]
+        if valid:
+            selected = choose_profile(valid, None)
+            validated_host = validate_selected_profile(str(selected["name"]), selected)
+            return str(selected["name"]), validated_host, {**decision, "provider": "cli", "cloud": cloud}, None
+        default = default_authenticated_profile()
+        if default:
+            return default[0], default[1], {**decision, "provider": "cli", "cloud": cloud}, None
+        return None, None, decision, "PROFILE_INVALID"
+    if strategy in {"azure-cli-session", "azure-device-code"}:
+        if not providers.get("sdk", {}).get("status") == "READY":
+            return None, None, decision, "AUTH_PROVIDER_UNAVAILABLE"
+        if strategy == "azure-device-code":
+            result = auth_executor.run_azure_device_login()
+            if result["status"] != "READY":
+                return None, None, decision, str(result.get("category") or "AUTH_REQUIRED")
+        try:
+            response = sdk.call("identity", timeout=25, auth_type="azure-cli", host=safe_host)
+        except RuntimeError:
+            return None, None, decision, "IDENTITY_INVALID"
+        identity = response.get("identity") if isinstance(response, dict) else None
+        try:
+            returned_host = workspace_host(str(response.get("host") or safe_host))
+        except DatabricksError:
+            return None, None, decision, "WORKSPACE_UNREACHABLE"
+        if returned_host != safe_host or not isinstance(identity, dict) or not (identity.get("userName") or identity.get("id") or identity.get("applicationId")):
+            return None, None, decision, "IDENTITY_INVALID"
+        return "__ANVIL_DEFAULT__", safe_host, {"strategy": "azure-cli-session", "provider": "sdk", "cloud": cloud}, None
+    return None, None, decision, None
 
 
 def _save_provider_snapshot(providers: dict[str, dict[str, Any]], install_result: dict[str, Any] | None = None,
@@ -737,7 +841,7 @@ def _save_provider_snapshot(providers: dict[str, dict[str, Any]], install_result
 
 
 def _setup_summary(providers: dict[str, dict[str, Any]], auth_valid: bool, profiles: list[dict[str, Any]], selected: str | None) -> dict[str, Any]:
-    capability_map = resolver.resolve(providers, auth_valid=auth_valid)
+    capability_map = resolve_providers(providers, auth_valid=auth_valid)
     health = resolver.overall_state(providers, capability_map, auth_valid=auth_valid)
     return {"overall": health, "selected_profile": selected,
             "profiles_found": len([p for p in profiles if p.get("workspace")]),
@@ -770,62 +874,128 @@ def setup(dry_run: bool = False) -> dict[str, Any]:
                                     "message": sdk_install_result.get("message")}
 
     _save_provider_snapshot(providers, install_result, sdk_install_result)
-    profiles = discover_profiles() if providers["cli"].get("status") == "READY" or providers["sdk"].get("status") == "READY" else discovery.config_profiles()
+    usable_provider = providers["cli"].get("status") == "READY" or providers["sdk"].get("status") == "READY"
+    profiles = discover_profiles() if usable_provider else discovery.config_profiles()
     previous = prefs.get("selected_profile")
     valid = [p for p in profiles if p.get("workspace") and p.get("valid")]
-    default_auth = None
-    if not previous and not valid and not profiles:
-        default_auth = default_authenticated_profile()
-        if default_auth:
-            default_name, default_host = default_auth
-            profiles = [{"name": default_name, "host": default_host, "workspace_host": default_host,
-                         "workspace": True, "valid": True}]
-            valid = profiles
-    if not previous and not valid and providers["cli"].get("status") == "READY" and sys.stdin.isatty():
-        binary = providers["cli"].get("executable")
-        answer = input("No valid Databricks profile is available. Start official Databricks login now? [y/N] ").strip().casefold()
-        if answer in {"y", "yes"}:
-            result = subprocess.run([str(binary), "auth", "login"], timeout=900, check=False)
-            if result.returncode == 0:
-                profiles = discover_profiles()
-                valid = [p for p in profiles if p.get("workspace") and p.get("valid")]
-    if not profiles and not default_auth and (providers["cli"].get("status") == "READY" or providers["sdk"].get("status") == "READY"):
-        default_auth = default_authenticated_profile()
-        if default_auth:
-            default_name, default_host = default_auth
-            profiles = [{"name": default_name, "host": default_host, "workspace_host": default_host,
-                         "workspace": True, "valid": True}]
-            valid = profiles
     selected_profile: str | None = None
     host: str | None = None
+    authentication: dict[str, Any] | None = None
+    auth_decision: dict[str, Any] = {}
+    auth_error: str | None = None
+
     if previous:
         prior = profile_by_name(profiles, str(previous))
-        if (prior is None or not prior.get("workspace") or not prior.get("valid")) and providers["cli"].get("status") == "READY" and sys.stdin.isatty():
-            answer = input(f"Saved profile '{previous}' is invalid. Reauthenticate this same profile? [y/N] ").strip().casefold()
+        if previous == "__ANVIL_DEFAULT__":
+            try:
+                host = validate_selected_profile(str(previous), {"workspace": True, "valid": True})
+                selected_profile = str(previous)
+            except DatabricksError:
+                prior = None
+                auth_error = "PROFILE_INVALID"
+        elif prior and prior.get("workspace") and prior.get("valid"):
+            selected_profile = str(prior["name"])
+            host = validate_selected_profile(selected_profile, prior)
+        elif prior and providers["cli"].get("status") == "READY" and sys.stdin.isatty():
+            answer = input(f"Saved profile '{previous}' needs authentication. Reauthenticate this same workspace? [y/N] ").strip().casefold()
             if answer in {"y", "yes"}:
-                result = subprocess.run([str(providers["cli"]["executable"]), "auth", "login", "--profile", str(previous)],
-                                        timeout=900, check=False)
-                if result.returncode == 0:
-                    profiles = discover_profiles()
-        selected = choose_profile(profiles, str(previous))
-        selected_profile = str(selected["name"])
-        host = validate_selected_profile(selected_profile, selected)
+                old_host = prior.get("workspace_host") or prior.get("host")
+                try:
+                    safe_host = workspace_host(str(old_host))
+                    login = auth_executor.run_databricks_login(str(providers["cli"]["executable"]), safe_host, str(previous))
+                    if login["status"] == "READY":
+                        profiles = discover_profiles()
+                        prior = profile_by_name(profiles, str(previous))
+                        if prior and prior.get("valid"):
+                            selected_profile = str(previous)
+                            host = validate_selected_profile(selected_profile, prior)
+                            authentication = {"strategy": "databricks-cli-u2m", "provider": "cli",
+                                              "cloud": topology.workspace_cloud(safe_host)}
+                    else:
+                        auth_error = str(login.get("category") or "AUTH_REQUIRED")
+                except DatabricksError:
+                    auth_error = "PROFILE_INVALID"
+            else:
+                auth_error = "AUTH_CANCELLED"
+        elif not prior:
+            auth_error = "PROFILE_INVALID"
+        else:
+            auth_error = "PROFILE_INVALID"
     elif valid:
         selected = choose_profile(profiles, None)
         selected_profile = str(selected["name"])
         host = validate_selected_profile(selected_profile, selected)
+    elif usable_provider:
+        existing = default_authenticated_profile()
+        if existing:
+            selected_profile, host = existing
+
+    if not selected_profile and not previous and usable_provider and sys.stdin.isatty():
+        answer = input("No validated workspace authentication is available. Configure Databricks now? [Y/n] ").strip().casefold()
+        if answer in {"", "y", "yes"}:
+            configured_profiles = [item for item in profiles if item.get("host") or item.get("workspace_host")]
+            default_host = prefs.get("workspace_host") or next((item.get("workspace_host") or item.get("host") for item in configured_profiles), None)
+            typed_host = input(f"Databricks workspace URL{f' [{default_host}]' if default_host else ''}: ").strip()
+            requested_host = typed_host or str(default_host or "")
+            if requested_host:
+                try:
+                    safe_host = workspace_host(requested_host)
+                    environment, auth_decision = _authentication_context(safe_host, providers)
+                    selected_profile, host, authentication, auth_error = _authenticate_workspace(safe_host, providers)
+                    if (auth_error in {"AUTH_TIMEOUT", "AUTH_CALLBACK_UNREACHABLE"}
+                            and environment.get("vscode_detected")):
+                        auth_decision = {"strategy": "vscode-assisted", "provider": "preferred",
+                                         "auth_required": False,
+                                         "reason": "CLI browser authentication did not complete; the official VS Code flow is available."}
+                    if auth_decision.get("strategy") in {"vscode-assisted", "manual-profile"} and not selected_profile:
+                        auth_error = None
+                except DatabricksError:
+                    auth_error = "WORKSPACE_PROFILE_INVALID"
+            else:
+                auth_error = "AUTH_REQUIRED"
+        else:
+            auth_error = "AUTH_CANCELLED"
+
+    # If there was no terminal, produce a concrete safe recommendation without
+    # attempting an OAuth callback or pretending that setup is complete.
+    if not selected_profile and not auth_decision:
+        host_hint = prefs.get("workspace_host") or next((p.get("host") for p in profiles if p.get("host")), "")
+        environment, auth_decision = _authentication_context(str(host_hint), providers)
+
     if selected_profile and host:
-        path = save_preferences(selected_profile, host)
+        if authentication:
+            save_preferences(selected_profile, host, authentication)
+        else:
+            path = save_preferences(selected_profile, host)
+            existing_auth = load_preferences().get("authentication")
+            if isinstance(existing_auth, dict):
+                authentication = existing_auth
+        path = preferences_path()
     else:
         path = preferences_path()
-    summary = _setup_summary(providers, bool(selected_profile), profiles, selected_profile)
+    summary = _setup_summary(providers, bool(selected_profile and host), profiles, selected_profile)
     state = load_preferences()
     state["capabilities"] = summary["capabilities"]
     provider_state.save_state(state)
+    next_step = None
+    if not selected_profile:
+        if auth_error == "AUTH_CANCELLED":
+            next_step = "Authentication was cancelled. Rerun make databricks-setup when ready."
+        elif auth_decision.get("strategy") == "vscode-assisted":
+            next_step = "Sign in with the Databricks VS Code extension, then run make databricks-setup again."
+        elif auth_decision.get("strategy") == "manual-profile":
+            next_step = "Authenticate with the official Databricks CLI or VS Code extension, then run make databricks-setup again."
+        elif auth_decision.get("strategy") == "azure-device-code":
+            next_step = "Run make databricks-setup from a terminal and provide the Azure Databricks workspace URL."
+        else:
+            next_step = "Run make databricks-setup in a terminal and select a Databricks workspace."
     summary.update({"dry_run": False, "workspace_host": host, "preferences_path": str(path),
                     "credential_storage": "Databricks Unified Authentication; Anvil stores metadata only",
                     "cli_install_attempt": install_result,
-                    "next_step": None if selected_profile else "Authenticate through the official CLI or VS Code Databricks extension, then rerun make databricks-setup"})
+                    "topology": environment if "environment" in locals() else topology.detect_topology(tty=sys.stdin.isatty()),
+                    "authentication": {**(authentication or auth_decision),
+                                        "provider": (authentication or auth_decision).get("provider")},
+                    "auth_error": auth_error, "next_step": next_step})
     return summary
 
 
@@ -884,7 +1054,7 @@ def status() -> dict[str, Any]:
             value["limitation"] = "Databricks CLI is not installed"
         else:
             value["limitation"] = "No supported headless Databricks provider is installed"
-        cap_map = resolver.resolve(providers, auth_valid=False)
+        cap_map = resolve_providers(providers, auth_valid=False)
         value["resolved_capabilities"] = cap_map
         value["overall"] = resolver.overall_state(providers, cap_map, auth_valid=False)
         return value
@@ -896,13 +1066,13 @@ def status() -> dict[str, Any]:
                     selected = authenticated[0]
             else:
                 value["limitation"] = "No Anvil default profile is selected; run make databricks-setup"
-                cap_map = resolver.resolve(providers, auth_valid=False)
+                cap_map = resolve_providers(providers, auth_valid=False)
                 value["resolved_capabilities"] = cap_map
                 value["overall"] = resolver.overall_state(providers, cap_map, auth_valid=False)
                 return value
             if not selected:
                 value["limitation"] = "No Anvil default profile is selected; run make databricks-setup"
-                cap_map = resolver.resolve(providers, auth_valid=False)
+                cap_map = resolve_providers(providers, auth_valid=False)
                 value["resolved_capabilities"] = cap_map
                 value["overall"] = resolver.overall_state(providers, cap_map, auth_valid=False)
                 return value
@@ -952,7 +1122,7 @@ def status() -> dict[str, Any]:
             value["profile_valid"] = False
             value["identity_reachable"] = False
     auth_valid = value["profile_valid"] is True and value["identity_reachable"] is True
-    cap_map = resolver.resolve(providers, auth_valid=auth_valid)
+    cap_map = resolve_providers(providers, auth_valid=auth_valid)
     value["resolved_capabilities"] = cap_map
     value["overall"] = resolver.overall_state(providers, cap_map, auth_valid=auth_valid)
     return value
@@ -994,62 +1164,8 @@ def local_status() -> dict[str, Any]:
     return value
 
 
-def status_text(value: dict[str, Any]) -> str:
-    if not value["cli_installed"]:
-        cli = "NO"
-    elif value["cli_supported"]:
-        cli = f"YES ({value['cli_version']})"
-    else:
-        cli = f"NO (found {value['cli_version']}; need >= 1.0.0)"
-    profile = value["selected_profile"] or "not selected"
-    if value["profile_valid"] is True:
-        profile_state = "valid"
-    elif value["profile_valid"] is False:
-        profile_state = "invalid"
-    elif value.get("auth_checked") is False:
-        profile_state = "not checked"
-    else:
-        profile_state = "not configured"
-    def yes_no(item: Any) -> str:
-        return "YES" if item is True else "NO" if item is False else "NOT CHECKED"
-    lines = [
-        "Databricks",
-        f"  CLI installed          {cli}",
-        f"  CLI absolute path      {value.get('cli_path') or 'not found'}",
-        f"  CLI PATH visibility    {'YES' if value.get('cli_path_visible') else 'NO'}",
-        f"  CLI absolute usable    {'YES' if value.get('cli_absolute_usable') else 'NO'}",
-        f"  CLI failure            {value.get('cli_failure') or 'none'}",
-        f"  CLI setup failure      {value.get('cli_setup_failure') or 'none'}",
-        f"  SDK installed          {'YES' if value.get('sdk_installed') else 'NO'}",
-        f"  SDK environment        {'isolated' if value.get('sdk_isolated') else 'existing Python' if value.get('sdk_installed') else 'not installed'}",
-        f"  SDK version            {value.get('sdk_version') or 'not installed'}",
-        f"  VS Code                {'AVAILABLE' if value.get('vscode', {}).get('available') else 'NOT FOUND'}",
-        f"  Databricks extension   {value.get('vscode', {}).get('extension', 'UNKNOWN')}",
-        f"  Databricks Connect     {'AVAILABLE' if value.get('connect', {}).get('status') == 'READY' else 'NOT CONFIGURED'}",
-        f"  SQL Connector          {'AVAILABLE' if value.get('sql_connector', {}).get('status') == 'READY' else 'NOT INSTALLED'}",
-        f"  Auth profile           {profile} ({profile_state})",
-        f"  Current identity       {yes_no(value['identity_reachable'])}",
-        f"  Workspace host         {value['workspace_host'] or 'not available'}",
-        f"  Running all-purpose    {value['running_all_purpose_compute'] if value['running_all_purpose_compute'] is not None else 'not checked'}",
-        f"  Running SQL warehouses {value['running_sql_warehouses'] if value['running_sql_warehouses'] is not None else 'not checked'}",
-        f"  System catalog         {yes_no(value['system_catalog_reachable'])}",
-        f"  Key schemas            {', '.join(value['system_schemas']) if value['system_schemas'] else 'not checked'}",
-        f"  Unavailable schemas    {', '.join(value['unavailable_system_schemas']) if value['system_catalog_reachable'] is True else 'not checked'}",
-        f"  Setup                  make databricks-setup",
-    ]
-    if value.get("cli_supported") and not value.get("cli_path_visible"):
-        lines.append("  PATH repair            add the CLI directory to PATH in your shell settings if you want direct shell use")
-    cap_map = value.get("resolved_capabilities", {})
-    if cap_map:
-        lines.append("  Resolved capabilities")
-        for capability, resolved in cap_map.items():
-            provider = resolved.get("provider") or resolved.get("state", "UNAVAILABLE")
-            label = resolver.PROVIDER_LABELS.get(provider, provider)
-            lines.append(f"    {capability:<23} {label}")
-    lines.append(f"  Overall                {value.get('overall', 'NOT_CONFIGURED')}")
-    if value.get("limitation"):
-        lines.append(f"  Note                   {value['limitation']}")
-    return "\n".join(lines)
+def status_text(value: dict[str, Any], *, verbose: bool = False) -> str:
+    return presentation.doctor_text(value, verbose=verbose)
 
 
 def capabilities(value: dict[str, Any]) -> dict[str, Any]:
@@ -1091,10 +1207,14 @@ def main() -> int:
     status_parser = sub.add_parser("status")
     status_parser.add_argument("--format", choices=("json", "text"), default="text")
     status_parser.add_argument("--local", action="store_true", help="Inspect local providers and saved preferences without contacting Databricks")
+    status_parser.add_argument("--verbose", action="store_true")
     capabilities_parser = sub.add_parser("capabilities")
     capabilities_parser.add_argument("--format", choices=("json", "text"), default="text")
+    capabilities_parser.add_argument("--verbose", action="store_true")
     sub.add_parser("setup")
     sub.choices["setup"].add_argument("--dry-run", action="store_true")
+    sub.choices["setup"].add_argument("--format", choices=("json", "text"), default="text")
+    sub.choices["setup"].add_argument("--verbose", action="store_true")
     profiles_parser = sub.add_parser("profiles")
     profiles_parser.add_argument("--format", choices=("json", "text"), default="text")
     for name in ("clusters", "warehouses"):
@@ -1130,20 +1250,19 @@ def main() -> int:
     try:
         if args.action == "setup":
             result = setup(dry_run=args.dry_run)
-            print(json.dumps(result, indent=2))
-            return 0
+            print(json.dumps(result, ensure_ascii=False, indent=2) if args.format == "json"
+                  else presentation.setup_text(result, verbose=args.verbose))
+            return 0 if args.dry_run or result.get("overall") == "READY" else 1
         if args.action == "status":
             value = local_status() if args.local else status()
-            print(json.dumps(value, indent=2) if args.format == "json" else status_text(value))
+            print(json.dumps(value, indent=2) if args.format == "json" else status_text(value, verbose=args.verbose))
             return 0
         if args.action == "capabilities":
             value = capabilities(local_status())
             if args.format == "json":
                 print(json.dumps(value, indent=2))
             else:
-                print("Databricks capabilities")
-                for name, state in value.items():
-                    print(f"  {name:<24} {state}")
+                print(presentation.capabilities_text(value))
             return 0
         if args.action == "profiles":
             profiles = discover_profiles()
@@ -1193,6 +1312,12 @@ def main() -> int:
         return 0
     except (DatabricksError, OSError, ValueError, json.JSONDecodeError) as exc:
         category = exc.category if isinstance(exc, DatabricksError) else "INVALID_INPUT"
+        if args.action == "setup":
+            if args.format == "json":
+                print(json.dumps({"overall": "NOT_CONFIGURED", "error": {"category": category}}, indent=2))
+            else:
+                print(presentation.setup_error_text(category))
+            return 1
         print(f"ERROR {category}: {exc}", file=sys.stderr)
         return 1
 

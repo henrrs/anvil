@@ -76,6 +76,11 @@ def test_profile_persistence(temp: Path) -> None:
     }
     with mock.patch.dict(os.environ, env, clear=False):
         result = dbx.setup()
+        human = dbx.presentation.setup_text(result)
+        check("Status                 READY" in human and "sample-profile" in human,
+              "successful setup did not present selected profile and readiness")
+        check("not on this shell's PATH" in human and str(FIXTURE_BIN) not in human,
+              "setup exposed an internal CLI path or omitted its optional PATH note")
         prefs_path = Path(result["preferences_path"])
         prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
         check(prefs["selected_profile"] == "sample-profile", "single valid profile was not selected")
@@ -415,6 +420,8 @@ def test_provider_resolver_and_path_regression(temp: Path) -> None:
     check(assisted["python.execute"]["state"] == "ASSISTED" and not assisted["python.execute"]["headless"],
           "VS Code was incorrectly reported as headless execution")
     check(assisted["bundles.run"]["state"] == "ASSISTED", "VS Code Bundles flow was not marked assisted")
+    check(dbx.resolver.overall_state({"cli": {"status": "BLOCKED"}}, {}, auth_valid=False) == "NOT_CONFIGURED",
+          "an unavailable optional provider was reported as the overall state before authentication")
 
     binary = temp / "installed" / "databricks"
     binary.parent.mkdir()
@@ -501,6 +508,128 @@ def test_provider_state_dry_run_and_installer(temp: Path) -> None:
     with mock.patch.object(dbx.cli_install, "_request", side_effect=PermissionError()):
         denied = dbx.cli_install.attempt_cli_install()
     check(denied["status"] == "BLOCKED" and denied["failure"] == "permission-denied", "local permission failure was not classified")
+
+
+def test_topology_auth_strategy_and_presenters() -> None:
+    topology = dbx.topology
+    strategy = dbx.auth_strategy
+    local = topology.detect_topology(environ={"TERM_PROGRAM": "vscode"}, tty=True)
+    remote = topology.detect_topology(environ={"VSCODE_AGENT_FOLDER": "/home/user/.vscode-server", "SSH_CONNECTION": "fixture"}, tty=True)
+    check(local["kind"] == "vscode_local", "local VS Code terminal was misclassified")
+    check(remote["kind"] == "vscode_remote", "VS Code Remote session was misclassified")
+    check(topology.detect_topology(environ={"CI": "true"}, tty=False)["kind"] == "headless", "headless session was misclassified")
+    check(topology.workspace_cloud("https://adb-123.azuredatabricks.net") == "azure", "Azure host was not detected")
+    check(topology.workspace_cloud("https://example.gcp.databricks.com") == "gcp", "GCP host was not detected")
+    args = {"topology": remote, "cloud": "azure", "cli_ready": True, "sdk_ready": True,
+            "azure_cli_available": True, "azure_cli_authenticated": False}
+    check(strategy.resolve(**args)["strategy"] == "azure-device-code", "remote Azure did not select device-code auth")
+    check(strategy.resolve(**{**args, "azure_cli_authenticated": True})["strategy"] == "azure-cli-session",
+          "existing Azure CLI session was not reused")
+    check(strategy.resolve(**{**args, "cloud": "aws"})["strategy"] == "vscode-assisted",
+          "remote AWS incorrectly selected browser callback login")
+    check(strategy.resolve(**{**args, "topology": local, "cloud": "aws", "sdk_ready": False})["strategy"] == "databricks-cli-u2m",
+          "local interactive OAuth path was removed")
+    check(strategy.resolve(**{**args, "valid_profile": True})["strategy"] == "existing-profile",
+          "valid profile did not take priority")
+
+    result = {"dry_run": False, "overall": "READY", "selected_profile": "development",
+              "providers": {"cli": {"status": "READY", "installed": True, "path_visible": False,
+                                     "executable": "/internal/private/databricks"},
+                            "sdk": {"status": "NOT_INSTALLED"}, "vscode": {"available": True}},
+              "authentication": {"strategy": "existing-profile", "provider": "cli"},
+              "topology": {"kind": "local"}}
+    rendered = dbx.presentation.setup_text(result)
+    check(not rendered.lstrip().startswith("{"), "human setup output begins as JSON")
+    check("Status                 READY" in rendered and "development" in rendered,
+          "human setup output omitted readiness or profile")
+    check("not on this shell's PATH" in rendered, "human setup omitted optional PATH guidance")
+    check("/internal/private" not in rendered and "absolute_usable" not in rendered,
+          "human setup leaked internal implementation details")
+    check("/internal/private/databricks" in dbx.presentation.setup_text(result, verbose=True),
+          "verbose mode omitted provider diagnostics")
+    remote_result = {"dry_run": False, "overall": "NOT_CONFIGURED", "providers": {},
+                     "topology": {"kind": "vscode_remote"}, "authentication": {"strategy": "vscode-assisted"},
+                     "next_step": "Sign in with the Databricks VS Code extension, then run make databricks-setup again."}
+    remote_text = dbx.presentation.setup_text(remote_result)
+    check("vscode remote" in remote_text and "Next step" in remote_text and "READY" not in remote_text,
+          "remote no-auth output is not actionable or falsely ready")
+    with mock.patch.object(dbx, "setup", return_value=result), mock.patch.object(sys, "argv", ["databricks.py", "setup", "--format", "json"]), contextlib.redirect_stdout(io.StringIO()) as output:
+        check(dbx.main() == 0, "JSON setup presenter failed")
+    structured = json.loads(output.getvalue())
+    check(structured["overall"] == "READY" and "providers" in structured and not output.getvalue().startswith("Databricks Setup"),
+          "JSON setup output included human decoration or lost structured provider detail")
+    with mock.patch.object(dbx, "setup", return_value={**remote_result, "dry_run": True}), mock.patch.object(sys, "argv", ["databricks.py", "setup", "--dry-run"]), contextlib.redirect_stdout(io.StringIO()) as output:
+        check(dbx.main() == 0, "human dry-run presenter failed")
+    check("Databricks Setup Plan" in output.getvalue() and not output.getvalue().lstrip().startswith("{"),
+          "default dry-run output is not human-readable")
+    print("PASS Databricks topology, auth strategy and human presentation contracts")
+
+
+def test_auth_executor_fakes(temp: Path) -> None:
+    cli = temp / "slow-databricks"
+    cli.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(3)\n", encoding="utf-8")
+    cli.chmod(0o755)
+    with mock.patch.object(dbx.auth_executor, "_timeout", return_value=0.05):
+        timed = dbx.auth_executor.run_databricks_login(str(cli), "https://workspace.example.invalid")
+    check(timed["category"] == "AUTH_TIMEOUT", "stalled CLI login did not time out")
+    with mock.patch.object(dbx.auth_executor, "_run_interactive", side_effect=KeyboardInterrupt):
+        cancelled = dbx.auth_executor.run_databricks_login(str(cli), "https://workspace.example.invalid")
+    check(cancelled["status"] == "CANCELLED" and cancelled["category"] == "AUTH_CANCELLED",
+          "login cancellation was not classified")
+    bin_dir = temp / "azure-bin"
+    bin_dir.mkdir()
+    az = bin_dir / "az"
+    az.write_text("#!/bin/sh\nif [ \"$1 $2\" = 'account show' ]; then printf '{\"id\":\"fixture-subscription\"}\\n'; fi\n",
+                  encoding="utf-8")
+    az.chmod(0o755)
+    with mock.patch.dict(os.environ, {"PATH": str(bin_dir), "ANVIL_AUTH_TIMEOUT": "10"}, clear=False):
+        device = dbx.auth_executor.run_azure_device_login(timeout=1)
+    check(device["status"] == "READY", "fake Azure CLI device-code login did not validate")
+    print("PASS auth timeout, cancellation, and Azure device-code execution use local fakes")
+
+
+def test_setup_auth_orchestration_fakes() -> None:
+    cli = {"status": "READY", "installed": True, "executable": "/fixture/private/databricks"}
+    sdk = {"status": "READY", "installed": True, "python": sys.executable}
+    providers = {"cli": cli, "sdk": sdk}
+    host = "https://workspace-a.cloud.databricks.com"
+    with mock.patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}, clear=True), \
+            mock.patch.object(dbx.sys, "stdin", TTYInput("")), \
+            mock.patch.object(dbx.auth_executor, "run_databricks_login", return_value={"status": "READY"}) as login, \
+            mock.patch.object(dbx, "discover_profiles", return_value=[{"name": "DEFAULT", "host": host,
+                "workspace_host": host, "workspace": True, "valid": True}]), \
+            mock.patch.object(dbx, "validate_selected_profile", return_value=host):
+        selected, selected_host, auth, error = dbx._authenticate_workspace(host, {"cli": cli, "sdk": {"status": "NOT_INSTALLED"}})
+    check((selected, selected_host, error) == ("DEFAULT", host, None), "local CLI OAuth setup did not validate the selected profile")
+    check(auth["strategy"] == "databricks-cli-u2m" and auth["provider"] == "cli"
+          and login.call_args.args[:2] == (cli["executable"], host), "setup did not invoke official login through its absolute CLI path")
+
+    azure_host = "https://adb-123.azuredatabricks.net"
+    remote_env = {"PATH": "/usr/bin:/bin", "VSCODE_AGENT_FOLDER": "/remote/.vscode-server"}
+    with mock.patch.dict(os.environ, remote_env, clear=True), \
+            mock.patch.object(dbx.sys, "stdin", TTYInput("")), \
+            mock.patch.object(dbx.shutil, "which", side_effect=lambda name: "/usr/bin/az" if name == "az" else None), \
+            mock.patch.object(dbx.auth_executor, "azure_cli_status", return_value=(True, False)), \
+            mock.patch.object(dbx.auth_executor, "run_azure_device_login", return_value={"status": "READY"}) as device_login, \
+            mock.patch.object(dbx.sdk, "call", return_value={"identity": {"userName": "fixture-user"}, "host": azure_host}) as sdk_call:
+        selected, selected_host, auth, error = dbx._authenticate_workspace(azure_host, providers)
+    check((selected, selected_host, error) == ("__ANVIL_DEFAULT__", azure_host, None),
+          "remote Azure device-code path did not validate a workspace identity")
+    check(auth == {"strategy": "azure-cli-session", "provider": "sdk", "cloud": "azure"}
+          and device_login.call_count == 1, "remote Azure setup did not retain non-secret SDK auth metadata")
+    check(sdk_call.call_args.kwargs["auth_type"] == "azure-cli" and sdk_call.call_args.kwargs["host"] == azure_host,
+          "Azure identity validation did not use the documented SDK auth type and workspace host")
+
+    with mock.patch.dict(os.environ, remote_env, clear=True), \
+            mock.patch.object(dbx.sys, "stdin", TTYInput("")), \
+            mock.patch.object(dbx.shutil, "which", side_effect=lambda name: "/usr/bin/az" if name == "az" else None), \
+            mock.patch.object(dbx.auth_executor, "azure_cli_status", return_value=(True, True)), \
+            mock.patch.object(dbx.auth_executor, "run_azure_device_login", side_effect=AssertionError("existing Azure login repeated")), \
+            mock.patch.object(dbx.sdk, "call", return_value={"identity": {"id": "fixture-user"}, "host": azure_host}):
+        selected, _, auth, error = dbx._authenticate_workspace(azure_host, providers)
+    check(selected == "__ANVIL_DEFAULT__" and auth["strategy"] == "azure-cli-session" and error is None,
+          "existing Azure CLI session was not reused without another login")
+    print("PASS setup orchestrates local OAuth and Azure remote/session auth with isolated fakes")
 
 
 def test_sdk_fallback_routes_core_operations(temp: Path) -> None:
@@ -649,7 +778,10 @@ def test_sdk_worker_uses_pinned_official_api_contracts() -> None:
             return value
         return invoke_method
 
+    client_configurations: list[dict[str, Any]] = []
     workspace_client = types.SimpleNamespace(
+        config=types.SimpleNamespace(host="https://adb-123.azuredatabricks.net"),
+        current_user=types.SimpleNamespace(me=lambda: {"userName": "fixture-user"}),
         command_execution=command_api,
         statement_execution=StatementAPI(),
         clusters=types.SimpleNamespace(
@@ -670,7 +802,7 @@ def test_sdk_worker_uses_pinned_official_api_contracts() -> None:
 
     sdk_module = types.ModuleType("databricks.sdk")
     sdk_module.__path__ = []
-    sdk_module.WorkspaceClient = lambda **_kwargs: workspace_client
+    sdk_module.WorkspaceClient = lambda **kwargs: (client_configurations.append(kwargs) or workspace_client)
     root_module = types.ModuleType("databricks")
     root_module.__path__ = []
     service_module = types.ModuleType("databricks.sdk.service")
@@ -712,6 +844,11 @@ def test_sdk_worker_uses_pinned_official_api_contracts() -> None:
           "SDK Statement Execution did not use typed official options")
     check(sql_call["parameters"][0].as_dict() == {"name": "n", "type": "INT", "value": "7"},
           "SDK SQL parameters were not converted to the official typed request model")
+    identity = invoke({"operation": "identity", "auth_type": "azure-cli",
+                       "host": "https://adb-123.azuredatabricks.net", "payload": {}})
+    check(identity["identity"]["userName"] == "fixture-user"
+          and client_configurations[-1] == {"host": "https://adb-123.azuredatabricks.net", "auth_type": "azure-cli"},
+          "Azure CLI Unified Authentication was not routed through the official SDK constructor")
 
     for operation, payload in (
         ("clusters.list", {}), ("clusters.get", {"cluster_id": "cluster-a"}),
@@ -855,6 +992,9 @@ def main() -> int:
         test_system_catalog_discovery(temp)
         test_provider_resolver_and_path_regression(temp)
         test_provider_state_dry_run_and_installer(temp)
+        test_topology_auth_strategy_and_presenters()
+        test_auth_executor_fakes(temp)
+        test_setup_auth_orchestration_fakes()
         test_sdk_fallback_routes_core_operations(temp)
         test_sdk_worker_uses_pinned_official_api_contracts()
     test_finops_scenarios()

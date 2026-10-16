@@ -9,8 +9,10 @@ import os
 import pathlib
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
+import time
 import tempfile
 from typing import Any
 
@@ -93,6 +95,12 @@ def fixture(temp: pathlib.Path) -> dict[str, pathlib.Path]:
     fake_binary.write_text(
         "#!/usr/bin/env bash\n"
         "if [[ \"${1:-}\" == --version ]]; then printf 'opencode v1.19.0\\n'; "
+        "elif [[ \"${1:-}\" == --hold ]]; then "
+        "if [[ \"${ANVIL_TEST_IGNORE_TERM:-0}\" == 1 ]]; then trap '' TERM; "
+        "else trap '[[ -n \"${ANVIL_TEST_TERM_MARKER:-}\" ]] && : > \"$ANVIL_TEST_TERM_MARKER\"; exit 0' TERM; fi; "
+        "[[ -n \"${ANVIL_TEST_READY:-}\" ]] && : > \"$ANVIL_TEST_READY\"; "
+        "while :; do read -t 0.1 _ || true; done; "
+        "elif [[ \"${1:-}\" == --run-upgrade-child ]]; then /usr/bin/make --no-print-directory -C \"${ANVIL_TEST_REPO}\" upgrade; exit $?; "
         f"else exec {shlex.quote(str(FIXTURES / 'bin' / 'opencode-v1'))} \"$@\"; fi\n",
         encoding="utf-8",
     )
@@ -145,6 +153,7 @@ def env_for(paths: dict[str, pathlib.Path], **extra: str) -> dict[str, str]:
         "LANG": "C.UTF-8",
         "ANVIL_DATABRICKS_CLI": "/nonexistent/anvil-test-databricks",
         "ANVIL_VSCODE_CLI": "/nonexistent/anvil-test-code",
+        "ANVIL_TEST_REPO": str(ROOT),
     }
     result.update(extra)
     return result
@@ -402,6 +411,8 @@ def release_403_boundary_test(temp: pathlib.Path) -> None:
     before_data = tree_hash(paths["data_opencode"])
     before_state = tree_hash(paths["state_opencode"])
     before_installation = file_hash(paths["anvil_data"] / "installation.json")
+    before_anvil_data = tree_hash(paths["anvil_data"])
+    before_shell_startup = file_hash(paths["home"] / ".bashrc")
 
     env = offline_env(paths, temp, ANVIL_YES="1", ANVIL_NETWORK_GUARD_HTTP_403="1")
     upgrade = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
@@ -646,6 +657,138 @@ def dry_run_test(temp: pathlib.Path, wrapper_v1: pathlib.Path, wrapper_v2: pathl
     print("PASS Anvil upgrade dry-run is offline; explicit runtime migration dry-run preserves live state")
 
 
+def wait_for_file(path: pathlib.Path, process: subprocess.Popen[str], timeout: float = 5) -> None:
+    deadline = time.monotonic() + timeout
+    while not path.exists() and process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.025)
+    check(path.exists(), f"runtime fixture did not reach its ready marker; exit={process.poll()}")
+
+
+def start_runtime(paths: dict[str, pathlib.Path], *, marker: pathlib.Path, **extra: str) -> subprocess.Popen[str]:
+    env = env_for(paths, ANVIL_TEST_READY=str(marker), **extra)
+    process = subprocess.Popen([str(paths["binary"]), "--hold"], env=env, text=True,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    wait_for_file(marker, process)
+    return process
+
+
+def runtime_quiesce_test(temp: pathlib.Path) -> None:
+    paths = fixture(temp)
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_YES="1",
+                      ANVIL_UPGRADE_COUNTDOWN_SECONDS="0", ANVIL_OPEN_CODE_GRACE_SECONDS="0.25")
+    before_config = tree_hash(paths["config"])
+    before_data = tree_hash(paths["data_opencode"])
+    before_state = tree_hash(paths["state_opencode"])
+    before_installation = file_hash(paths["anvil_data"] / "installation.json")
+    before_anvil_data = tree_hash(paths["anvil_data"])
+    before_shell_startup = file_hash(paths["home"] / ".bashrc")
+    marker = temp / "runtime-ready"
+    term_marker = temp / "runtime-term"
+    runtime = start_runtime(paths, marker=marker, ANVIL_TEST_TERM_MARKER=str(term_marker))
+    dry = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env)
+    check("active processes    1 running" in dry.stdout, "upgrade dry-run did not report the running OpenCode process")
+    check("No processes stopped" in dry.stdout and "No files changed" in dry.stdout, "dry-run did not state its non-mutating behavior")
+    check(runtime.poll() is None and not term_marker.exists(), "dry-run signaled or stopped OpenCode")
+    check(not (paths["anvil_data"] / "backups").exists(), "dry-run created a backup with OpenCode running")
+    check(tree_hash(paths["config"]) == before_config and tree_hash(paths["data_opencode"]) == before_data
+          and tree_hash(paths["state_opencode"]) == before_state
+          and file_hash(paths["anvil_data"] / "installation.json") == before_installation
+          and tree_hash(paths["anvil_data"]) == before_anvil_data
+          and file_hash(paths["home"] / ".bashrc") == before_shell_startup,
+          "dry-run changed Anvil/OpenCode state")
+    runtime.terminate()
+    runtime.wait(timeout=3)
+    print("PASS upgrade dry-run observes an active OpenCode process without signaling or writing state")
+
+    marker.unlink(missing_ok=True)
+    term_marker.unlink(missing_ok=True)
+    runtime = start_runtime(paths, marker=marker, ANVIL_TEST_TERM_MARKER=str(term_marker))
+    graceful = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
+    check(runtime.poll() is not None, "real upgrade did not gracefully stop OpenCode")
+    check(term_marker.exists(), "real upgrade did not send SIGTERM before backup")
+    check("SIGKILL as a fallback" not in graceful.stdout, "graceful runtime shutdown unexpectedly used SIGKILL")
+    check("Start it normally when ready" in graceful.stderr, "upgrade omitted the normal runtime restart guidance")
+    check((paths["anvil_data"] / "backups").is_dir(), "backup was not created after graceful shutdown")
+    print("PASS upgrade sends SIGTERM, verifies shutdown, then creates its backup")
+
+    paths = fixture(temp / "forced")
+    env = offline_env(paths, temp / "forced", ANVIL_TEST_MODE="1", ANVIL_YES="1",
+                      ANVIL_UPGRADE_COUNTDOWN_SECONDS="0", ANVIL_OPEN_CODE_GRACE_SECONDS="0.15")
+    marker = temp / "forced-ready"
+    runtime = start_runtime(paths, marker=marker, ANVIL_TEST_IGNORE_TERM="1")
+    forced = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
+    check(runtime.poll() is not None, "SIGKILL fallback did not stop the unresponsive runtime")
+    check("using SIGKILL as a fallback" in forced.stdout, "unresponsive OpenCode did not report its SIGKILL fallback")
+    check((paths["anvil_data"] / "backups").is_dir(), "forced shutdown did not verify quiescence before backup")
+    print("PASS upgrade uses SIGKILL only after the bounded graceful timeout")
+
+    paths = fixture(temp / "unrelated")
+    env = offline_env(paths, temp / "unrelated", ANVIL_TEST_MODE="1", ANVIL_YES="1",
+                      ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    other_home = temp / "other-home"
+    other_env = env_for(paths, HOME=str(other_home), XDG_CONFIG_HOME=str(other_home / ".config"),
+                        XDG_DATA_HOME=str(other_home / ".local/share"), XDG_STATE_HOME=str(other_home / ".local/state"),
+                        ANVIL_TEST_READY=str(temp / "other-ready"))
+    unrelated = subprocess.Popen([str(paths["binary"]), "--hold"], env=other_env, text=True,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    wait_for_file(temp / "other-ready", unrelated)
+    ignored = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
+    check("active processes    0 running" in ignored.stdout, "unrelated same-executable process was treated as this Anvil runtime")
+    check(unrelated.poll() is None, "upgrade stopped an OpenCode process using different XDG data paths")
+    unrelated.terminate()
+    unrelated.wait(timeout=3)
+    print("PASS upgrade leaves a same-executable process using unrelated XDG paths untouched")
+
+    paths = fixture(temp / "preflight")
+    env = offline_env(paths, temp / "preflight", ANVIL_TEST_MODE="1", ANVIL_YES="1",
+                      ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    bad_backup = paths["anvil_data"] / "backups"
+    bad_backup.symlink_to(temp, target_is_directory=True)
+    runtime = start_runtime(paths, marker=temp / "preflight-ready")
+    failed = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env, expected=2)
+    check(runtime.poll() is None, "preflight failure stopped OpenCode")
+    check("preflight failed" in failed.stderr.casefold(), "preflight failure was not described")
+    check(not (paths["anvil_data"] / "installation.json").is_symlink(), "preflight touched installation state")
+    runtime.terminate()
+    runtime.wait(timeout=3)
+    print("PASS backup preflight failure leaves OpenCode running and live state untouched")
+
+    paths = fixture(temp / "ancestor")
+    env = offline_env(paths, temp / "ancestor", ANVIL_TEST_MODE="1", ANVIL_YES="1",
+                      ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    child = subprocess.run([str(paths["binary"]), "--run-upgrade-child"], env=env, text=True,
+                           capture_output=True, timeout=30, check=False)
+    check(child.returncode != 0, "upgrade from inside OpenCode unexpectedly succeeded")
+    check("inside OpenCode" in child.stderr, "self-ancestor upgrade did not explain the safe recovery action")
+    check(not (paths["anvil_data"] / "backups").exists(), "self-ancestor upgrade created a backup")
+    print("PASS upgrade aborts before signaling an OpenCode ancestor process")
+
+    paths = fixture(temp / "cancel")
+    env = offline_env(paths, temp / "cancel", ANVIL_TEST_MODE="1", ANVIL_YES="1",
+                      ANVIL_UPGRADE_COUNTDOWN_SECONDS="5", ANVIL_OPEN_CODE_GRACE_SECONDS="0.2")
+    runtime = start_runtime(paths, marker=temp / "cancel-ready")
+    process = subprocess.Popen(["/usr/bin/make", "--no-print-directory", "upgrade"], env=env, text=True,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    deadline = time.monotonic() + 15
+    output = ""
+    while time.monotonic() < deadline and "Stopping in 5" not in output and process.poll() is None:
+        time.sleep(0.025)
+        if process.stdout:
+            import select
+            if select.select([process.stdout], [], [], 0)[0]:
+                output += process.stdout.readline()
+    check("Stopping in 5" in output, "upgrade did not expose a cancellable countdown")
+    os.killpg(process.pid, signal.SIGINT)
+    remaining_out, remaining_err = process.communicate(timeout=5)
+    check(process.returncode != 0, "Ctrl+C during countdown did not cancel upgrade")
+    check(runtime.poll() is None, "countdown cancellation stopped OpenCode")
+    check(not (paths["anvil_data"] / "backups").exists(), "countdown cancellation created a backup")
+    check("UPGRADE_CANCELLED" in (output + remaining_out + remaining_err), "countdown cancellation was not classified")
+    runtime.terminate()
+    runtime.wait(timeout=3)
+    print("PASS user cancellation during countdown leaves OpenCode and Anvil state untouched")
+
+
 def main() -> int:
     wrapper_dir = TEST_ROOT / "candidate-wrapper"
     wrapper_dir.mkdir(parents=True, exist_ok=True)
@@ -696,6 +839,8 @@ def main() -> int:
         print("PASS make stats gives first-install guidance when OpenCode is absent")
     with tempfile.TemporaryDirectory(prefix="anvil-upgrade-rehearsal-", dir=TEST_ROOT) as name:
         rehearsal_test(pathlib.Path(name), wrapper_v2)
+    with tempfile.TemporaryDirectory(prefix="anvil-runtime-quiesce-", dir=TEST_ROOT) as name:
+        runtime_quiesce_test(pathlib.Path(name))
     with tempfile.TemporaryDirectory(prefix="anvil-reforge-idempotent-", dir=TEST_ROOT) as name:
         reforge_test(pathlib.Path(name), wrapper_v1)
     with tempfile.TemporaryDirectory(prefix="anvil-reforge-preserves-v2-", dir=TEST_ROOT) as name:

@@ -1,6 +1,6 @@
 # Releasing Anvil
 
-Anvil uses Semantic Versioning. Anvil 2.0 was the runtime/configuration migration to OpenCode 2. Starting with Anvil 2.1, Anvil product versions and OpenCode runtime majors are independent; runtime-major migration is explicit. Anvil 2.3 adds Databricks provider independence while retaining the 2.2 feature contracts and both OpenCode runtime profiles. Anvil 2.3.1 corrects runtime independence by removing OpenCode release-service availability from the Anvil upgrade path.
+Anvil uses Semantic Versioning. Anvil 2.0 was the runtime/configuration migration to OpenCode 2. Starting with Anvil 2.1, Anvil product versions and OpenCode runtime majors are independent; runtime-major migration is explicit. Anvil 2.3 adds Databricks provider independence while retaining the 2.2 feature contracts and both OpenCode runtime profiles. Anvil 2.3.1 corrects runtime independence by removing OpenCode release-service availability from the Anvil upgrade path. Anvil 2.4.0 is a MINOR release because it adds backward-compatible runtime quiescing, human presenters, and Databricks authentication orchestration while retaining the existing commands and metadata contract.
 
 ## Version bumps
 
@@ -20,5 +20,6 @@ Anvil uses Semantic Versioning. Anvil 2.0 was the runtime/configuration migratio
 7. Run `make test`; the mandatory suite must remain offline and includes OpenCode 1/2 and Databricks fixtures plus isolated upgrade and rollback lifecycle checks.
 8. If a release claim requires live OpenCode or Databricks compatibility, run and record a separate authorized smoke check; never describe fixture validation as a live service test.
 9. Verify that the implementation, tests, compatibility document, changelog, version history, and capability matrix agree.
+10. Verify that public command text and JSON output remain separate, setup authentication choices are topology-aware, and `make upgrade DRY_RUN=1` does not signal or write live state.
 
 The `make test` suite includes deterministic provider, install-double, PATH, SDK fallback, VS Code discovery, state-security, dry-run, version-documentation, harness, query-recipe, FinOps, runtime-independence, credential-boundary, and repository-hygiene checks. It denies external socket connections during local lifecycle tests while allowing loopback for isolated runtime fixtures. It rejects a `VERSION` without matching changelog, version, capability, compatibility, and migration documentation. It does not resolve external runtime releases or contact a Databricks workspace.

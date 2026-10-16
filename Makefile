@@ -20,6 +20,8 @@ help:
 	  'make stats      Show native stats, or an honest runtime fallback.' \
 	  'make databricks-setup  Configure Databricks; attempts safe CLI install, then SDK fallback.' \
 	  '  DRY_RUN=1            Preview providers and auth without changes or network access.' \
+	  '  OUTPUT=json          Emit structured machine-readable setup results.' \
+	  '  VERBOSE=1            Include provider diagnostics in human output.' \
 	  'make rollback   Restore the latest complete pre-upgrade/rebuild snapshot.' \
 	  '' \
 	  'upgrade is local/offline and never resolves or changes an OpenCode release.' \
@@ -50,13 +52,13 @@ doctor:
 	@bash scripts/doctor.sh
 
 capabilities:
-	@python3 scripts/capabilities.py --format "$(if $(FORMAT),$(FORMAT),text)"
+	@python3 scripts/capabilities.py --format "$(if $(FORMAT),$(FORMAT),text)" $(if $(filter 1 true yes,$(VERBOSE)),--verbose,)
 
 stats:
 	@bash scripts/stats.sh
 
 databricks-setup:
-	@python3 scripts/databricks.py setup $(if $(filter 1 true yes,$(DRY_RUN)),--dry-run,)
+	@python3 scripts/databricks.py setup --format "$(if $(OUTPUT),$(OUTPUT),text)" $(if $(filter 1 true yes,$(VERBOSE)),--verbose,) $(if $(filter 1 true yes,$(DRY_RUN)),--dry-run,)
 
 rollback:
 	@bash scripts/rollback.sh

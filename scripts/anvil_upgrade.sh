@@ -47,11 +47,6 @@ else
   anvil_error 'Current global config is not a supported Anvil OpenCode profile; use make reforge to rebuild it.'
   exit 1
 fi
-if ! python3 "$ROOT/scripts/active-opencode.py"; then
-  anvil_error 'Upgrade stopped before changing files so OpenCode data can be copied consistently.'
-  exit 1
-fi
-
 old_anvil_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
 import json,sys
 try: value=json.load(open(sys.argv[1],encoding="utf-8"))
@@ -65,6 +60,7 @@ tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/anvil-anvil-upgrade.XXXXXX")"
 chmod 700 -- "$tmp_root"
 backup_dir=""
 transaction_active=0
+runtime_stopped=0
 
 cleanup() {
   for target in "$ready_config" "$tmp_root"; do
@@ -87,6 +83,9 @@ on_error() {
       anvil_error "Automatic rollback failed. Verified snapshot remains at $backup_dir"
     fi
   fi
+  if (( runtime_stopped )); then
+    anvil_warn 'OpenCode remains stopped after the failed Anvil upgrade. Start it normally when ready.'
+  fi
   cleanup
   exit "$status"
 }
@@ -101,6 +100,24 @@ else
 fi
 bash "$ROOT/scripts/rehearse-upgrade.sh" "$binary" "$runtime_version" "$major" "$major"
 
+# Check backup prerequisites before interrupting the user's runtime. This is
+# read-only: backup creation itself remains after quiescence and final approval.
+if ! python3 "$ROOT/scripts/backup_preflight.py"; then
+  anvil_error 'Upgrade preflight failed; OpenCode is still running and no live files were changed.'
+  exit 1
+fi
+process_json="$(python3 "$ROOT/scripts/runtime_processes.py" --binary "$binary" --format json)"
+read -r process_count process_uncertain self_ancestor < <(python3 - "$process_json" <<'PY'
+import json,sys
+value=json.loads(sys.argv[1])
+print(value["count"], str(value["uncertain"]), str(value["self_ancestor"]))
+PY
+)
+if [[ "$process_uncertain" == True && "${DRY_RUN:-0}" != 1 ]]; then
+  anvil_error 'OpenCode process identity could not be fully verified; refusing to create a potentially inconsistent backup.'
+  exit 1
+fi
+
 printf '%s\n' 'Anvil Upgrade Plan' '────────────────────────────────'
 printf 'Anvil installed       %s\n' "$old_anvil_version"
 printf 'Anvil repository      %s\n' "$ANVIL_VERSION"
@@ -110,16 +127,31 @@ printf '  executable          %s\n' "$binary"
 printf '  installed           %s\n' "$runtime_version"
 printf '  generation          %s\n' "$major"
 printf '  action              PRESERVE EXACT VERSION\n'
+printf '  active processes    %s running\n' "$process_count"
+if [[ "$process_uncertain" == True ]]; then
+  printf '  identity check      incomplete; a real upgrade will stop safely before signaling\n'
+fi
+if [[ "$self_ancestor" == True ]]; then
+  printf '  process ancestry    upgrade is running inside OpenCode; a real upgrade will abort\n'
+fi
 printf '\nRuntime adapter\n'
 printf '  current             %s\n' "$adapter"
 printf '  target              %s\n' "$adapter"
 printf '\nNetwork required      NO\n'
 printf 'Databricks state      PRESERVE\n'
 printf 'Rehearsal             passed using the exact local runtime and copied user state\n'
+printf '\nUpgrade behavior\n'
+printf '  countdown           %ss\n' "${ANVIL_UPGRADE_COUNTDOWN_SECONDS:-5}"
+printf '  graceful shutdown   enabled (SIGTERM first)\n'
+printf '  force termination   fallback only\n'
 
 if [[ "${DRY_RUN:-0}" == 1 ]]; then
-  printf '\nNo changes performed.\n'
+  printf '\nNo changes performed.\nNo processes stopped.\nNo files changed.\n'
   exit 0
+fi
+if [[ "$self_ancestor" == True ]]; then
+  anvil_error 'This upgrade is running from inside OpenCode. Anvil cannot safely stop its own parent runtime; run the upgrade from an external terminal.'
+  exit 1
 fi
 if [[ "${ANVIL_YES:-0}" != 1 ]]; then
   if [[ ! -t 0 ]]; then
@@ -134,6 +166,23 @@ if [[ "${ANVIL_YES:-0}" != 1 ]]; then
 fi
 
 path_plan='{"file":"","line":"","added":false,"file_preexisted":false}'
+if ! python3 "$ROOT/scripts/runtime_quiesce.py" --binary "$binary" \
+    --countdown "${ANVIL_UPGRADE_COUNTDOWN_SECONDS:-5}" \
+    --grace-timeout "${ANVIL_OPEN_CODE_GRACE_SECONDS:-10}"; then
+  exit 1
+fi
+if (( process_count > 0 )); then runtime_stopped=1; fi
+post_quiesce="$(python3 "$ROOT/scripts/runtime_processes.py" --binary "$binary" --format json)"
+read -r remaining_count remaining_uncertain < <(python3 - "$post_quiesce" <<'PY'
+import json,sys
+value=json.loads(sys.argv[1])
+print(value["count"], str(value["uncertain"]))
+PY
+)
+if [[ "$remaining_uncertain" == True || "$remaining_count" != 0 ]]; then
+  anvil_error 'OpenCode could not be verified as fully stopped; no backup will be created.'
+  exit 1
+fi
 backup_dir="$(ANVIL_PREVIOUS_ANVIL_VERSION="$old_anvil_version" anvil_backup_create "$runtime_version" "$path_plan" anvil | tail -n 1)"
 python3 "$ROOT/scripts/state.py" verify "$backup_dir" >/dev/null
 if [[ "${ANVIL_TEST_FAIL_AFTER_BACKUP:-0}" == 1 ]]; then
@@ -171,3 +220,6 @@ fi
 transaction_active=0
 anvil_ok "Anvil $ANVIL_VERSION installed; OpenCode $runtime_version was preserved exactly."
 anvil_ok "Anvil-only rollback snapshot: $backup_dir"
+if (( runtime_stopped )); then
+  anvil_log 'OpenCode was stopped during the upgrade. Start it normally when ready.'
+fi

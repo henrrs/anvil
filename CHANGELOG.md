@@ -2,6 +2,35 @@
 
 Release notes for user-visible Anvil changes. See [version history](docs/versions/README.md) and [release discipline](docs/RELEASING.md).
 
+## [2.4.0] - 2026-10-16
+
+### Added
+
+- Safe OpenCode quiescing for `make upgrade`: read-only active-process reporting in dry-run, backup preflight, ancestry protection, a cancellable countdown, SIGTERM-first shutdown, bounded SIGKILL fallback, and a final quiescence check before backup.
+- Human-first Databricks setup, doctor, and capability presenters with explicit JSON and verbose diagnostics modes.
+- Local, VS Code Remote, SSH, container, WSL, and headless topology detection with centralized Databricks authentication strategy selection.
+- Official Databricks CLI OAuth U2M orchestration on local interactive terminals, and Azure CLI device-code authentication through the Python SDK for Azure workspaces in supported remote environments.
+- Bounded authentication watchdogs that stream official CLI progress and classify timeout and cancellation outcomes.
+
+### Changed
+
+- `make upgrade DRY_RUN=1` reports active OpenCode processes without stopping them or changing live state.
+- A real Anvil upgrade validates backup readiness first, stops only the exact validated runtime using the configured OpenCode data paths, then creates a consistent snapshot. OpenCode is left stopped for the user to start normally.
+- `make databricks-setup` owns supported installation, authentication, workspace identity validation, and safe provider-state updates; users no longer need an Anvil-internal CLI path.
+- Public Databricks command output now emphasizes readiness, warnings, and next actions. `OUTPUT=json` and `VERBOSE=1` remain available.
+
+### Preserved
+
+- OpenCode 1.x and 2.x compatibility, runtime independence, per-capability Databricks provider fallback, no-secret Anvil state, no IDE credential scraping, and the no-silent-remote-mutation boundary.
+
+### Release choice
+
+This is a MINOR release because it adds backward-compatible user-facing setup, authentication selection, and command-presentation capabilities while retaining the existing command surface and persisted metadata compatibility.
+
+### Validation scope
+
+- Mandatory checks use local process, CLI, SDK, and Azure CLI fakes; no real Databricks workspace, cloud login, browser, VS Code marketplace, or external LLM is contacted.
+
 ## [2.3.1] - 2026-10-16
 
 ### Fixed

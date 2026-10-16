@@ -20,6 +20,10 @@ OpenCode 2 uses plural `agents` and `plugins` fields and ordered permissions. It
 
 Callers use the central capability record rather than treating every Anvil release as one OpenCode generation. OpenCode 2 adds the local `anvil-core` plugin, native `anvil-knowledge` Reference, ordered permissions, bounded tool output, and structured stats JSON. OpenCode 1 uses its native config, commands/skills, and text stats; shared Python memory search and direct reads of explicitly named knowledge files provide the fallbacks. `scripts/capabilities.py` combines those runtime capabilities with local Databricks provider and saved-profile metadata in one text or JSON result. Inventory commands do not check authentication, identity, compute, warehouse, or system-catalog reachability.
 
+## Public command presentation
+
+Databricks domain operations return structured results. `databricks_providers/presentation.py` formats those results for people, while `--format json` returns the structured result for scripts. `VERBOSE=1` adds provider diagnostics; default output emphasizes overall readiness, warnings, and next steps. Presenters do not own provider or auth decisions. Doctor answers whether the installation is healthy; capabilities reports what provider-backed actions are locally available and whether auth has been checked.
+
 The V2 plugin uses the OpenCode 2 API to register only bounded, read-only `anvil_memory_search`. It does not add context hooks, prompt mutation, model routing, retries, memory writes, or custom compaction. Capabilities are visible through `make capabilities` and `make doctor`.
 
 ## Skills and commands
@@ -29,6 +33,8 @@ Five native lazy skills cover memory, Spark performance, Delta Lake, Databricks,
 ## Databricks capability
 
 Anvil 2.3's optional Databricks capability uses a per-capability resolver. The official CLI remains preferred for general workspace APIs, Bundles and existing execution paths. An isolated Python SDK is the headless fallback for identity, compute, warehouse, Command Execution and Statement Execution. SQL Connector and Databricks Connect are specialized providers; VS Code is assisted only. The CLI and SDK reuse supported Unified Authentication profiles. Atomic state under `$XDG_CONFIG_HOME/anvil/databricks.json` records profile, host and provider metadata only; credentials remain in supported Databricks auth storage.
+
+Databricks setup follows a small boundary: `databricks.py setup` gathers local/provider evidence, `topology.py` detects the execution context, `auth_strategy.py` chooses a documented flow, `auth.py` runs official CLI/cloud authentication with a bounded progress watchdog, provider validation checks identity, and the presenter renders the result. Azure CLI auth is restricted to Azure workspaces and routed through SDK `auth_type=azure-cli`; it does not make the CLI an Azure-auth provider. Remote AWS/GCP or headless sessions do not select loopback browser auth. The official VS Code extension remains assisted; Anvil does not automate UI or inspect private IDE credentials.
 
 CLI installation is attempted only by an explicit `make databricks-setup`; the user-local executable is downloaded from official releases and SHA-256 checked. General reforge and upgrade flows neither install Databricks clients nor probe workspace auth. Discovery remembers a verified absolute CLI path and reports whether it is visible through the current `PATH`. Provider health is revalidated when used. The integration works with OpenCode 1 and 2 and adds no plugin, MCP, or model dependency.
 
@@ -52,7 +58,7 @@ The Databricks skill references a dated official system-table snapshot, focused 
 | `make databricks-setup DRY_RUN=1` | No | No | No | No |
 | `make databricks-setup` | May, for provider installation or workspace validation | No | No OpenCode; may install Databricks CLI/SDK | No OpenCode lookup |
 
-`make upgrade` validates local runtime discovery, builds the matching Anvil config, rehearses against copied state, creates an Anvil-scoped backup, applies Anvil files, and runs local doctor. It preserves the exact OpenCode executable/version, OpenCode data/state, and Databricks preferences. `DRY_RUN=1` stops before a live backup or mutation.
+`make upgrade` validates local runtime and config, stages the Anvil target, rehearses against copied state, and checks that the backup path is safe and has enough space before it asks to stop OpenCode. Read-only process discovery identifies only the validated executable, same user, and matching configured OpenCode data roots. If the upgrade is running under a matched OpenCode ancestor, it aborts. After the cancellable countdown it sends SIGTERM, waits a bounded interval, uses SIGKILL only as a fallback, verifies that no matched process remains, then creates the Anvil-scoped backup and applies files. It preserves the exact OpenCode executable/version, OpenCode data/state, and Databricks preferences. `DRY_RUN=1` performs the discovery and reports process count without sending signals, writing runtime state, creating backups, or changing live files. OpenCode remains stopped after a real upgrade and must be started normally by the user.
 
 `make update-runtime` owns same-major runtime resolution and installation. It rehearses the new executable against the current config and copied user state, backs up runtime/config/data/state, installs the candidate, runs doctor, and rolls back on failure while retaining the installed Anvil release. `make migrate-runtime OPENCODE_MAJOR=N` is the explicit major change and also updates the Anvil config adapter required by that runtime. `make reforge` reuses the exact supported runtime already installed; only a genuinely fresh installation provisions OpenCode.
 

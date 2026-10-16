@@ -22,4 +22,6 @@ The default selection order is:
 
 The CLI is preferred when healthy. The resolver never routes SQL through Databricks Connect, and it never labels an assisted IDE operation as headless-ready. An unavailable provider is not simulated. No automatic Connect or SQL Connector package installation occurs.
 
+When Anvil state records an Azure CLI session, provider routing is restricted to the SDK because the documented `azure-cli` auth type is a Databricks SDK path. The official CLI remains independent and does not receive Azure CLI credentials. A normal Databricks CLI OAuth profile can still be reused through Unified Authentication by supported CLI/SDK providers. A CLI install failure does not make Databricks unavailable when the SDK can validate auth and provide the configured core operations.
+
 Provider API coverage is based on the [Databricks CLI](https://docs.databricks.com/aws/en/dev-tools/cli/install), [Python SDK](https://docs.databricks.com/aws/en/dev-tools/sdk-python), [SQL Connector](https://docs.databricks.com/aws/en/dev-tools/python-sql-connector), [Databricks Connect](https://docs.databricks.com/aws/en/dev-tools/databricks-connect/python/), and [VS Code extension](https://marketplace.visualstudio.com/items?itemName=databricks.databricks) documentation checked on 2026-10-16.

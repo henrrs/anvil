@@ -40,13 +40,18 @@ PROVIDER_LABELS = {
 }
 
 
-def resolve(providers: dict[str, dict[str, Any]], *, auth_valid: bool) -> dict[str, dict[str, Any]]:
+def resolve(providers: dict[str, dict[str, Any]], *, auth_valid: bool,
+            preferred_provider: str | None = None,
+            allowed_providers: set[str] | None = None) -> dict[str, dict[str, Any]]:
     """Choose a provider per capability; assisted paths never count as headless."""
     result: dict[str, dict[str, Any]] = {}
     for capability, priority in CAPABILITY_ORDER.items():
         selected = None
         assisted = None
-        for name in priority:
+        ordered = tuple(dict.fromkeys(([preferred_provider] if preferred_provider else []) + list(priority)))
+        for name in ordered:
+            if allowed_providers is not None and name not in allowed_providers:
+                continue
             state = providers.get(name, {})
             if capability not in PROVIDER_CAPABILITIES.get(name, set()):
                 continue
@@ -67,10 +72,9 @@ def resolve(providers: dict[str, dict[str, Any]], *, auth_valid: bool) -> dict[s
 
 def overall_state(providers: dict[str, dict[str, Any]], capabilities: dict[str, dict[str, Any]], *, auth_valid: bool) -> str:
     if not auth_valid:
-        if any(p.get("status") == "READY" for p in providers.values()):
-            return "NOT_CONFIGURED"
-        if any(p.get("status") == "BLOCKED" for p in providers.values()):
-            return "BLOCKED"
+        # Provider installation health and workspace authentication are
+        # distinct. Until identity is validated the integration is not set up,
+        # even if an optional CLI install was blocked.
         return "NOT_CONFIGURED"
     core = ("workspace.list", "compute.list", "warehouse.list", "python.execute", "sql.execute")
     usable = sum(capabilities.get(name, {}).get("state") in {"READY", "ASSISTED"} for name in core)

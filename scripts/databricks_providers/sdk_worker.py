@@ -8,6 +8,7 @@ import sys
 import time
 from datetime import timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
 
 def value_dict(value: Any) -> dict[str, Any]:
@@ -40,7 +41,17 @@ def main() -> int:
         from databricks.sdk.service import compute, sql as sql_service
 
         profile = request.get("profile")
-        workspace = WorkspaceClient(profile=profile) if profile else WorkspaceClient()
+        auth_type = request.get("auth_type")
+        host = request.get("host")
+        if auth_type not in (None, "azure-cli"):
+            raise ValueError("unsupported SDK authentication strategy")
+        if auth_type == "azure-cli":
+            parsed_host = urlsplit(str(host or ""))
+            if not parsed_host.scheme == "https" or not parsed_host.hostname or parsed_host.username or parsed_host.password:
+                raise ValueError("invalid Azure workspace host")
+            workspace = WorkspaceClient(host=host, auth_type="azure-cli")
+        else:
+            workspace = WorkspaceClient(profile=profile) if profile else WorkspaceClient()
         operation = request["operation"]
         payload = request.get("payload", {})
         timeout = max(5, min(int(request.get("timeout", 120)), 600))

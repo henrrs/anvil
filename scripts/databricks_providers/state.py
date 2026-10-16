@@ -49,7 +49,7 @@ def load_state() -> dict[str, Any]:
         value = json.loads(state_path().read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {"schema_version": SCHEMA_VERSION, "selected_profile": None, "workspace_host": None,
-                "providers": {}, "capabilities": {}}
+                "providers": {}, "capabilities": {}, "authentication": None}
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("Anvil Databricks provider state cannot be read") from exc
     if not isinstance(value, dict):
@@ -66,8 +66,16 @@ def load_state() -> dict[str, Any]:
     result.setdefault("workspace_host", None)
     result.setdefault("providers", {})
     result.setdefault("capabilities", {})
+    result.setdefault("authentication", None)
     if not isinstance(result["providers"], dict) or not isinstance(result["capabilities"], dict):
         raise ValueError("Anvil Databricks provider state has invalid provider records")
+    authentication = result["authentication"]
+    if authentication is not None:
+        if (not isinstance(authentication, dict)
+                or authentication.get("strategy") not in {"databricks-cli-u2m", "azure-cli-session"}
+                or authentication.get("provider") not in {"cli", "sdk"}
+                or authentication.get("cloud") not in {"azure", "aws", "gcp", "unknown"}):
+            raise ValueError("Anvil Databricks provider state has invalid authentication metadata")
     return result
 
 

@@ -29,6 +29,7 @@ def databricks_module():
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--format", choices=("json", "text"), default="text")
+    parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--binary")
     parser.add_argument("--major", type=int)
     args = parser.parse_args()
@@ -55,10 +56,11 @@ def main() -> int:
     if result.returncode:
         return result.returncode
     print()
-    print(adapter.status_text(databricks_state))
+    print(adapter.status_text(databricks_state, verbose=args.verbose))
     print("Databricks capabilities")
-    for name, value in databricks_capabilities.items():
-        print(f"  {name:<24} {value}")
+    from databricks_providers.presentation import capabilities_text
+    print("\n".join("  " + line if index else line for index, line in
+                      enumerate(capabilities_text(databricks_capabilities).splitlines())))
     return 0
 
 
