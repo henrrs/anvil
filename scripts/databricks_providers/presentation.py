@@ -28,6 +28,8 @@ def _failure_next_step(readiness: dict[str, Any]) -> str:
         return "Run make databricks-setup to validate or repair authentication."
     if category in {"WORKSPACE_NETWORK_TIMEOUT", "WORKSPACE_UNREACHABLE"}:
         return "Check workspace connectivity, then rerun make doctor."
+    if blockers and isinstance(blockers[0], dict) and blockers[0].get("scope") == "PROVIDER_SPECIFIC":
+        return "Run make databricks-setup to validate the provider and prepare its isolated fallback if needed."
     return "Review the provider or capability blocker, then rerun make doctor."
 
 
@@ -98,8 +100,16 @@ def setup_text(result: dict[str, Any], *, verbose: bool = False) -> str:
                   "", "Authentication",
                   f"  Method               {str(auth.get('strategy', 'not configured')).replace('-', ' ')}"]
         if selected_provider and selected_provider != "preferred":
+            if selected_provider == "sdk":
+                sdk_fallback = "active"
+            elif sdk.get("status") == "READY":
+                sdk_fallback = "available"
+            elif sdk.get("status") == "BLOCKED":
+                sdk_fallback = "blocked"
+            else:
+                sdk_fallback = "not installed"
             lines += ["", "Execution", f"  Primary provider     {'Databricks CLI' if selected_provider == 'cli' else 'Python SDK'}",
-                      f"  SDK fallback         {'available' if sdk.get('status') == 'READY' and selected_provider == 'cli' else 'not needed' if selected_provider == 'cli' else 'active'}"]
+                      f"  SDK fallback         {sdk_fallback}"]
         if cli.get("status") == "READY" and not cli.get("path_visible"):
             lines += ["", "Note", "  CLI is ready for Anvil. It is not on this shell's PATH; no path change is needed."]
         conflicts = result.get("environment_conflicts", [])

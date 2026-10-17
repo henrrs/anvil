@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for Anvil 2.6.0.
+Accepted for Anvil 2.6.0; amended for Anvil 2.6.1.
 
 ## Context
 
@@ -21,6 +21,9 @@ The baseline inventory-only readiness calculation was reproduced with the pre-ex
 - Permit fallback only for explicit provider-specific failures. Stop for shared auth/network failures, permission denials, invalid arguments, and unknown execution failures. Do not replay SQL or remote Python after dispatch.
 - Use bounded, operation-specific timeouts and a shared process runner that drains stdout/stderr, limits aggregate output, and terminates process groups on timeout.
 - Keep the agent-facing resource command grammar consistent and test the command examples in the Databricks skill against the parser.
+- During explicit setup, allow installation of the isolated SDK only after a normalized provider-specific CLI health failure, then rerun the same production readiness path. Do not install or cycle providers for shared authentication, network, or permission failures.
+- Persist and reuse the validated absolute SDK interpreter so a fresh process can execute the provider selected during setup.
+- Route cluster and warehouse discovery through the metadata-list timeout class without increasing its existing budget.
 
 ## Consequences
 
@@ -29,3 +32,7 @@ The baseline inventory-only readiness calculation was reproduced with the pre-ex
 - A permission denial can leave overall readiness DEGRADED while other core capabilities remain verified.
 - Existing Anvil-owned config and credentials are not rewritten. State schema 3 changes the readiness data contract without changing the command surface, so the release is MINOR rather than PATCH.
 - All mandatory regressions use local executable fixtures; a live workspace smoke test remains optional and non-destructive.
+
+## Anvil 2.6.1 amendment
+
+Real setup output showed an installed CLI timing out during cluster discovery while the existing Azure-backed profile and workspace identity remained valid. Setup correctly stayed `NOT_READY`, but did not prepare the SDK unless the CLI binary itself was missing. In addition, the SDK adapter discarded the persisted provider inventory in a clean process. The patch adds narrowly scoped setup-time SDK preparation and saved-path reuse. It preserves the 2.6.0 readiness semantics and schema, and does not increase metadata timeouts. See the [2.6.1 release notes](../versions/v2.6.1.md) and [readiness audit](../databricks/readiness.md).

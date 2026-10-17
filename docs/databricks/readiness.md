@@ -43,6 +43,8 @@ make databricks-setup
   → json_from_cli → _call_provider → resolver
   → run_cli → owned_config.child_environment → process.run
        or sdk.call → bounded SDK worker
+  → on provider-specific CLI health failure only: explicit setup may install SDK,
+    refresh provider inventory, and repeat the same production probes
   → validate current-user + clusters list + warehouses list
   → atomically promote candidate config and save schema-3 state
 
@@ -56,6 +58,14 @@ new session
 `scripts/databricks_providers/auth.py` owns explicit interactive login and local auth-session checks. `discovery.py` inventories installed providers; inventory is no longer treated as remote health. `resolver.py` decides capability provider order and records rejected candidates. `errors.py` defines shared versus provider-specific failure policy. `state.py` validates secret-free schema-3 state and writes it through fsync plus atomic replacement. `presentation.py` renders human and JSON status. `scripts/doctor.sh` invokes live read-only status for configured profiles, while lifecycle postflight sets `ANVIL_DOCTOR_LOCAL=1` to keep upgrades independent of Databricks. The Anvil skill's command examples are parser-tested.
 
 Authentication, workspace, provider, and capability evidence remain separate. An Azure CLI session does not prove Databricks authentication; identity success does not prove every provider or capability works.
+
+### 2.6.1 corrective audit
+
+A reported setup run in a WSL environment successfully validated the Azure-backed Databricks identity and workspace, then timed out after 45 seconds on the CLI `clusters list` operation. The result correctly remained `NOT_READY` and left the existing profile unchanged. Its sanitized output could not establish whether the CLI wait came from Azure token refresh, a proxy/network path, or the workspace request itself, so the release does not claim or assume one of those causes.
+
+The repository-level cause was confirmed offline: setup installed the SDK only when the CLI executable was missing, while the resolver only falls back to providers already discovered as installed. In the existing-profile setup path, a provider-specific CLI health failure therefore returned without trying to prepare the SDK. The presenter compounded this by saying the SDK fallback was “not needed” based on inventory, even when the CLI health probe had failed. A second clean-process test showed that discovery could load a recorded SDK executable, while the SDK adapter discarded that inventory and rediscovered only default paths.
+
+Anvil 2.6.1 corrects those boundaries. During the explicit setup command only, a normalized provider-specific CLI failure may trigger isolated SDK installation and a full re-run through the shared resolver. The resolver passes its validated SDK executable to the adapter, and direct SDK calls consult the saved inventory. Shared authentication, workspace-network, permission, invalid-argument, and unknown failures do not trigger installation or provider roulette. Metadata-list operations use their own timeout class; its 45-second value is unchanged.
 
 ## One production path
 
@@ -85,6 +95,8 @@ workspace list /Shared --format json
 
 Fallback is allowed only when the failure is provider-specific and retrying the same read-only operation through another installed provider is useful. This includes a CLI process timeout, invalid CLI JSON, or an unavailable/blocked provider. The resolver records the selected provider, rejected providers, fallback reason, and blocking condition.
 
+Normal runtime commands can fall back only to an already installed provider. The explicit `make databricks-setup` command may install the isolated SDK after a provider-specific CLI health failure, then repeat all required checks. CLI executable presence/version is local inventory, not provider health. A successful setup persists the selected SDK and validated absolute Python path; a clean session uses that same path. A blocked SDK installation leaves readiness unproven and reports the installation blocker.
+
 `CLI_PROCESS_TIMEOUT` is provider-specific and may fall back; it includes operation, elapsed timeout, executable, and profile in the diagnostic. `WORKSPACE_NETWORK_TIMEOUT`, `WORKSPACE_UNREACHABLE`, `AUTH_REQUIRED`, and `AUTH_INVALID` are shared blockers and stop provider selection.
 
 Authentication failures, shared workspace timeouts/unreachability, permission denials, invalid arguments, and unknown CLI execution failures stop immediately. CLI and SDK share the same workspace and credentials; trying both after a shared failure adds delay without a new chance of success. Permission failures remain attached to that capability. SQL and remote Python execution are not replayed after a request is dispatched because the completion state may be unknown.
@@ -93,12 +105,14 @@ Authentication failures, shared workspace timeouts/unreachability, permission de
 
 Timeout budgets start before process creation and include startup plus credential resolution. Process output is drained from stdout and stderr together with a 4 MB total bound. POSIX provider commands run in a new process group; timeout or overflow sends SIGTERM, waits one second, then sends SIGKILL to the group.
 
-Before 2.6, the Databricks CLI wrapper used a generic 20-second default for provider requests; setup identity checks used separate 15- and 20-second calls, and SQL had a 30-second default. 2.6 uses 5 seconds for local version/session checks, 45 seconds each for identity/provider health/metadata lists, 90 seconds of interactive-auth inactivity with a 180-second hard cap, 120 seconds for SQL and remote Python, 600 seconds as the explicit long-operation cap, and 15 seconds of worker teardown allowance. The regression suite injects short limits for hangs and uses bounded fixture delays for slow success, so no test burns the production timeout budget.
+Before 2.6, the Databricks CLI wrapper used a generic 20-second default for provider requests; setup identity checks used separate 15- and 20-second calls, and SQL had a 30-second default. 2.6 uses 5 seconds for local version/session checks and separate 45-second budgets for workspace identity, provider health, and metadata lists. These include process startup and credential resolution; 2.6.1 routes cluster and warehouse inventory through the metadata-list class without increasing its budget. Explicit authentication has a 90-second inactivity watchdog and 180-second hard cap; SQL and remote Python use 120 seconds; explicit long operations have a 600-second cap; workers have a 15-second teardown allowance. The regression suite injects short limits for hangs and uses bounded fixture delays for slow success, so no test burns the production timeout budget.
 
 | Operation | Budget |
 |---|---:|
 | CLI version and local auth-session check | 5 s |
-| Workspace identity, provider health, and metadata list request | 45 s each |
+| Workspace identity request | 45 s |
+| Provider health request | 45 s |
+| Cluster or warehouse metadata list | 45 s |
 | Explicit interactive authentication inactivity watchdog | 90 s |
 | Explicit interactive authentication hard limit | 180 s |
 | SQL statement and remote Python operation | 120 s each by default |

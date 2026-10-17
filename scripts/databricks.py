@@ -439,6 +439,7 @@ def _call_provider(capability: str, sdk_operation: str, cli_arguments: list[str]
                 value = sdk.call(sdk_operation, profile=profile,
                                  timeout=int(timeout or timeouts.seconds_for("provider_health")),
                                  config_path=str(config_path) if config_path else None,
+                                 python=inventory.get("sdk", {}).get("python"),
                                  **sdk_auth_options(profile), **(payload or {}))
             else:
                 continue
@@ -1084,7 +1085,7 @@ def _resource_capability(profile: str, host: str, name: str,
     args = action.split()
     try:
         call = json_from_cli(args, profile=profile, config_path=config_path,
-                             timeout=timeouts.seconds_for("provider_health"), with_metadata=True,
+                             timeout=timeouts.seconds_for("metadata_list"), with_metadata=True,
                              providers=providers,
                              authentication_strategy=str(authentication.get("strategy") or ""),
                              preferred_provider=preferred_provider or authentication.get("provider"))
@@ -1286,6 +1287,64 @@ def _setup_summary(providers: dict[str, dict[str, Any]], profile: str, host: str
     }
 
 
+def _prepare_sdk_fallback(providers: dict[str, dict[str, Any]], *, category: str,
+                          failure_scope: str, provider: str | None) -> tuple[dict[str, dict[str, Any]], dict[str, Any] | None, bool]:
+    """Install the SDK only when explicit setup finds a provider-specific CLI failure."""
+    policy = errors.POLICIES.get(category, {})
+    sdk = providers.get("sdk", {})
+    if (provider != "cli" or failure_scope != "PROVIDER_SPECIFIC"
+            or not policy.get("fallback_allowed") or sdk.get("status") == "READY"):
+        return providers, None, False
+
+    result = cli_install.install_sdk()
+    refreshed = provider_snapshot()
+    if refreshed.get("sdk", {}).get("status") != "READY":
+        refreshed_sdk = dict(refreshed.get("sdk", {}))
+        refreshed_sdk.update({"status": "BLOCKED",
+                              "failure": result.get("failure", "provider-unhealthy"),
+                              "message": result.get("message", "isolated SDK fallback is unavailable")})
+        refreshed["sdk"] = refreshed_sdk
+    return refreshed, result, True
+
+
+def _setup_summary_with_fallback(providers: dict[str, dict[str, Any]], profile: str,
+                                 host: str, config_path: Path,
+                                 authentication: dict[str, Any],
+                                 sdk_install_result: dict[str, Any] | None = None
+                                 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dict[str, Any] | None]:
+    """Validate setup and provision one SDK fallback after a provider-specific CLI failure."""
+    summary = _setup_summary(providers, profile, host, config_path, authentication)
+    blockers = summary.get("blockers", [])
+    blocker = next((item for item in blockers if isinstance(item, dict)
+                    and item.get("scope") == "PROVIDER_SPECIFIC"), None)
+    if not blocker:
+        return summary, providers, sdk_install_result
+
+    operation = blocker.get("operation")
+    capability_name = {"identity": "auth.status", "clusters list": "compute.list",
+                       "warehouses list": "warehouse.list"}.get(str(operation))
+    capabilities = summary.get("readiness", {}).get("capabilities", {})
+    capability = capabilities.get(capability_name, {}) if capability_name else {}
+    provider = capability.get("provider") or summary.get("readiness", {}).get(
+        "provider", {}).get("selected")
+    providers, attempted_result, attempted = _prepare_sdk_fallback(
+        providers, category=str(blocker.get("category", "")),
+        failure_scope=str(blocker.get("scope", "")), provider=provider)
+    if not attempted:
+        return summary, providers, sdk_install_result
+    sdk_install_result = attempted_result
+    if providers.get("sdk", {}).get("status") == "READY":
+        summary = _setup_summary(providers, profile, host, config_path, authentication)
+        return summary, providers, sdk_install_result
+
+    summary["providers"] = providers
+    summary["sdk_fallback_attempted"] = True
+    summary["next_step"] = (
+        "The CLI provider failed its workspace check and Anvil could not prepare the isolated SDK fallback. "
+        "Resolve the SDK installation blocker, then rerun make databricks-setup.")
+    return summary, providers, sdk_install_result
+
+
 def _candidate_identity(profile: str, host: str, config_path: Path,
                         providers: dict[str, dict[str, Any]] | None = None,
                         decision: dict[str, Any] | None = None) -> tuple[str, str]:
@@ -1382,6 +1441,8 @@ def setup(dry_run: bool = False, *, reset: bool = False) -> dict[str, Any]:
         return plan
 
     providers = provider_snapshot()
+    install_result = None
+    sdk_install_result = None
     if profile_meta and target.is_file() and not reset and not owned_config.valid_config(target):
         raise DatabricksError("CONFIG_INVALID", "Anvil's managed Databricks config is malformed; it was left unchanged")
     if profile_meta and target.is_file() and not reset:
@@ -1393,12 +1454,26 @@ def setup(dry_run: bool = False, *, reset: bool = False) -> dict[str, Any]:
                 safe_host = workspace_host(owned_record["host"])
                 authentication = (dict(prefs["authentication"])
                                   if isinstance(prefs.get("authentication"), dict) else {})
-                host, identity_provider = _candidate_identity(
-                    name, safe_host, target, providers, authentication)
+                try:
+                    host, identity_provider = _candidate_identity(
+                        name, safe_host, target, providers, authentication)
+                except DatabricksError as exc:
+                    providers, sdk_install_result, attempted = _prepare_sdk_fallback(
+                        providers, category=exc.category, failure_scope=exc.failure_scope,
+                        provider=exc.provider)
+                    if not attempted or providers.get("sdk", {}).get("status") != "READY":
+                        raise
+                    host, identity_provider = _candidate_identity(
+                        name, safe_host, target, providers, authentication)
                 authentication.setdefault("strategy", "unified-auth")
                 authentication["provider"] = identity_provider
                 authentication.setdefault("cloud", topology.workspace_cloud(host))
-                summary = _setup_summary(providers, name, host, target, authentication)
+                summary, providers, sdk_install_result = _setup_summary_with_fallback(
+                    providers, name, host, target, authentication, sdk_install_result)
+                selected_provider = (summary.get("provider_resolution") or {}).get("provider")
+                if selected_provider in {"cli", "sdk"}:
+                    authentication["provider"] = selected_provider
+                    summary["readiness"]["provider"]["selected"] = selected_provider
                 summary.update({"dry_run": False, "already_configured": True, "profile_created": False,
                                 "profile": name,
                                 "workspace_host": host, "environment": str((prefs.get("workspace") or {}).get("environment", "dev")),
@@ -1410,8 +1485,10 @@ def setup(dry_run: bool = False, *, reset: bool = False) -> dict[str, Any]:
                 if summary["overall"] not in {"READY", "DEGRADED"}:
                     summary["auth_error"] = (summary.get("blockers") or [{}])[0].get(
                         "category", "PROVIDER_UNHEALTHY")
-                    summary["next_step"] = "The existing profile was left unchanged. Review the blocker, then rerun make databricks-setup."
+                    summary.setdefault("next_step", "The existing profile was left unchanged. Review the blocker, then rerun make databricks-setup.")
+                _save_provider_snapshot(providers, sdk_install_result=sdk_install_result)
                 refreshed_state = load_preferences()
+                refreshed_state["authentication"] = authentication
                 refreshed_state["readiness"] = summary["readiness"]
                 refreshed_state["capabilities"] = summary["capabilities"]
                 refreshed_state["provider_resolution"] = summary["provider_resolution"]
@@ -1419,7 +1496,7 @@ def setup(dry_run: bool = False, *, reset: bool = False) -> dict[str, Any]:
                 return summary
             except DatabricksError as exc:
                 if exc.category not in {"AUTH_REQUIRED", "AUTH_INVALID", "IDENTITY_INVALID"}:
-                    return {
+                    failure = {
                         "overall": "NOT_READY", "dry_run": False, "already_configured": True,
                         "selected_profile": name, "profile": name, "workspace_host": owned_record["host"],
                         "providers": providers, "auth_error": exc.category,
@@ -1428,6 +1505,15 @@ def setup(dry_run: bool = False, *, reset: bool = False) -> dict[str, Any]:
                         "next_step": "The existing Anvil config was left unchanged. Review the provider error, then rerun make databricks-setup.",
                         "external_profiles_detected": len(_external_profiles()), "external_profiles_used": False,
                     }
+                    if sdk_install_result is not None:
+                        failure["sdk_fallback_attempted"] = True
+                        if providers.get("sdk", {}).get("status") != "READY":
+                            failure["next_step"] = ("The CLI provider failed its identity check and Anvil could not prepare the isolated SDK fallback. "
+                                                     "Resolve the SDK installation blocker, then rerun make databricks-setup.")
+                        else:
+                            failure["next_step"] = ("The SDK provider also failed the identity check. Review the reported authentication or workspace blocker, "
+                                                     "then rerun make databricks-setup.")
+                    return failure
 
     if not sys.stdin.isatty():
         return {"overall": "NOT_CONFIGURED", "dry_run": False, "providers": providers,
@@ -1458,8 +1544,6 @@ def setup(dry_run: bool = False, *, reset: bool = False) -> dict[str, Any]:
                 "external_profiles_used": False, "authentication": {},
                 "topology": topology.detect_topology(tty=True)}
 
-    install_result = None
-    sdk_install_result = None
     if providers["cli"].get("status") != "READY":
         install_result = cli_install.attempt_cli_install()
         providers = provider_snapshot()
@@ -1517,6 +1601,15 @@ def setup(dry_run: bool = False, *, reset: bool = False) -> dict[str, Any]:
 
     try:
         authentication, validated_host, auth_error = _authenticate_workspace(host, profile, stage, providers, decision)
+        if (not authentication and auth_error and auth_error in errors.POLICIES
+                and decision.get("provider") == "cli"):
+            providers, sdk_install_result, attempted = _prepare_sdk_fallback(
+                providers, category=auth_error,
+                failure_scope=str(errors.POLICIES[auth_error].get("scope", "")),
+                provider="cli")
+            if attempted and providers.get("sdk", {}).get("status") == "READY":
+                authentication, validated_host, auth_error = _authenticate_workspace(
+                    host, profile, stage, providers, decision)
         if not authentication or not validated_host or auth_error:
             owned_config.discard_stage(stage)
             summary = {"overall": "NOT_READY", "providers": providers,
@@ -1534,8 +1627,13 @@ def setup(dry_run: bool = False, *, reset: bool = False) -> dict[str, Any]:
                            "authentication": decision, "topology": environment_info,
                            "environment_conflicts": conflicts,
                            "next_step": "Resolve the authentication issue and rerun make databricks-setup."})
+            if sdk_install_result is not None and providers.get("sdk", {}).get("status") != "READY":
+                summary["sdk_fallback_attempted"] = True
+                summary["next_step"] = ("The CLI provider failed its identity check and Anvil could not prepare the isolated SDK fallback. "
+                                         "Resolve the SDK installation blocker, then rerun make databricks-setup.")
             return summary
-        summary = _setup_summary(providers, profile, validated_host, stage, authentication)
+        summary, providers, sdk_install_result = _setup_summary_with_fallback(
+            providers, profile, validated_host, stage, authentication, sdk_install_result)
         verified_core = summary["readiness"].get("verified_core_capabilities", [])
         if (summary["overall"] == "NOT_READY" or not verified_core
                 or summary["readiness"].get("provider", {}).get("status") != "READY"):
@@ -1549,7 +1647,8 @@ def setup(dry_run: bool = False, *, reset: bool = False) -> dict[str, Any]:
                             "authentication": authentication, "topology": environment_info,
                             "environment_conflicts": conflicts,
                             "auth_error": root_blocker.get("category", "PROVIDER_UNHEALTHY"),
-                            "next_step": "The candidate profile was not activated. Review the provider blocker, then rerun make databricks-setup."})
+                            "next_step": summary.get("next_step") or
+                            "The candidate profile was not activated. Review the provider blocker, then rerun make databricks-setup."})
             return summary
         selected_provider = (summary.get("provider_resolution") or {}).get("provider")
         if selected_provider in {"cli", "sdk"}:

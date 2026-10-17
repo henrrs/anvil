@@ -2,6 +2,19 @@
 
 Release notes for user-visible Anvil changes. See [version history](docs/versions/README.md) and [release discipline](docs/RELEASING.md).
 
+## [2.6.1] - 2026-10-16
+
+### Fixed
+
+- Explicit setup now prepares the isolated SDK after a provider-specific Databricks CLI health failure, then reruns identity and core capability probes through the production resolver. Shared authentication, workspace-network, permission, argument, and unknown failures still stop without provider roulette.
+- SDK operations now execute through the same validated absolute Python path discovered from persisted Anvil provider state, including in a clean new process.
+- Cluster and warehouse probes now use the dedicated metadata-list timeout class; the current 45-second budget is unchanged.
+- Setup output no longer says the SDK fallback is “not needed” when it is absent or blocked.
+
+### Release choice and validation
+
+This is a PATCH release. It corrects fallback provisioning and provider-path reuse without changing the command surface or persisted schema-3 readiness contract. Offline regressions reproduce the installed-CLI timeout, exercise successful and blocked SDK fallback, preserve shared-failure stopping, verify clean-process SDK use, and check metadata timeout routing. No live Databricks, Azure, or network smoke test was run.
+
 ## [2.6.0] - 2026-10-16
 
 ### Added

@@ -6,15 +6,19 @@ import json
 from pathlib import Path
 from typing import Any
 
-from . import errors, owned_config, process, timeouts
+from . import errors, owned_config, process, state as provider_state, timeouts
 from .discovery import discover_sdk
 
 
 def call(operation: str, *, profile: str | None = None, timeout: int = 120,
-         config_path: str | None = None, **payload: Any) -> Any:
-    state = {"providers": {}}
-    provider = discover_sdk(state)
-    python = provider.get("python")
+         config_path: str | None = None, python: str | None = None,
+         **payload: Any) -> Any:
+    if not python:
+        try:
+            provider = discover_sdk(provider_state.load_state())
+        except (OSError, ValueError):
+            provider = discover_sdk({"providers": {}})
+        python = provider.get("python")
     if not python:
         raise errors.DatabricksError("PROVIDER_NOT_INSTALLED", "Databricks SDK provider is unavailable",
                                      provider="sdk", operation=operation, profile=profile)

@@ -33,7 +33,7 @@ The Anvil config file is written atomically with mode `0600` inside a mode `0700
 
 `make databricks-setup RESET=1` affects only the Anvil-owned config. It backs up the previous file and activates a replacement only after identity validation. Existing general-purpose Databricks profiles and cloud authentication are not deleted or converted.
 
-Anvil 2.6 records readiness evidence separately from auth strategy and provider installation. A successful login alone cannot produce `READY`; the production adapter must also validate identity, clusters, and SQL warehouses. See the [readiness state machine](readiness.md).
+Anvil 2.6 records readiness evidence separately from auth strategy and provider installation. A successful login alone cannot produce `READY`; the production adapter must also validate identity, clusters, and SQL warehouses. In 2.6.1, explicit setup may install the isolated SDK after a provider-specific CLI health failure; authentication and workspace failures remain shared blockers. See the [readiness state machine](readiness.md).
 
 ## Official references
 

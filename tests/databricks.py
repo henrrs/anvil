@@ -692,7 +692,7 @@ def test_hung_provider_cannot_be_promoted_ready(temp: Path) -> None:
                                                     "limitation": "clusters list: CLI_PROCESS_TIMEOUT"})
         check("Root issue" in doctor_text and "timed out after 0.2s" in doctor_text
               and "discovery could not be verified" in doctor_text
-              and "rerun make doctor" in doctor_text,
+              and "make databricks-setup" in doctor_text and "fallback" in doctor_text,
               "human doctor output omitted provider timeout details, impact, or next step")
         active_path = dbx.owned_config.config_file()
         check(not active_path.exists(), f"failed candidate config was promoted to active: {active_path}")
@@ -874,6 +874,213 @@ def test_fallback_and_shared_failure_policy(temp: Path) -> None:
                   "shared network failure lost its normalized stop policy")
         else:
             raise AssertionError("shared network failure was reported as successful")
+
+
+def test_setup_installs_sdk_after_cli_health_failure(temp: Path) -> None:
+    """An installed CLI is not evidence that a provider-specific request works."""
+    config_home = temp / "setup-provider-fallback-config"
+    host = "https://workspace-a.example.invalid"
+    save_pref(config_home, profile="anvil-prod", host=host)
+    with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(config_home)}, clear=False):
+        state = dbx.load_preferences()
+        state["authentication"] = {"strategy": "azure-cli-session", "provider": "cli", "cloud": "azure"}
+        dbx.provider_state.save_state(state)
+    env = {
+        "XDG_CONFIG_HOME": str(config_home),
+        "XDG_DATA_HOME": str(temp / "setup-provider-fallback-data"),
+        "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
+        "ANVIL_DATABRICKS_SCENARIO": "clusters_timeout",
+        "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / "setup-provider-fallback-fixture-state.json"),
+        "ANVIL_DATABRICKS_EXECUTION_LOG": str(temp / "setup-provider-fallback-cli.jsonl"),
+    }
+    sdk_installed = False
+    fake_sdk_python = temp / "sdk-venv" / "bin" / "python"
+    fake_sdk_python.parent.mkdir(parents=True)
+    fake_sdk_python.write_text(f"""#!{sys.executable}
+import json, sys
+if len(sys.argv) > 1 and sys.argv[1] == "-c":
+    code = sys.argv[2] if len(sys.argv) > 2 else ""
+    if "find_spec" in code:
+        raise SystemExit(1)
+    print("0.141.0")
+    raise SystemExit(0)
+request = json.load(sys.stdin)
+operation = request.get("operation")
+host = "{host}"
+if operation == "identity":
+    value = {{"identity": {{"userName": "fixture-user"}}, "host": host}}
+elif operation == "clusters.list":
+    value = {{"clusters": []}}
+elif operation == "warehouses.list":
+    value = {{"warehouses": []}}
+else:
+    print(json.dumps({{"error": {{"category": "PROVIDER_UNHEALTHY", "summary": "unexpected fixture operation"}}}}), file=sys.stderr)
+    raise SystemExit(1)
+print(json.dumps(value))
+""", encoding="utf-8")
+    fake_sdk_python.chmod(0o700)
+    cli_only = {"cli": {"status": "READY", "installed": True,
+                         "executable": str(FIXTURE_BIN / "databricks")},
+                "sdk": {"status": "NOT_INSTALLED", "installed": False},
+                "vscode": {"status": "NOT_INSTALLED"},
+                "connect": {"status": "NOT_INSTALLED"},
+                "sql_connector": {"status": "NOT_INSTALLED"}}
+    with_sdk = {**cli_only, "sdk": {"status": "READY", "installed": True,
+                                    "python": str(fake_sdk_python), "version": "0.141.0", "isolated": True}}
+
+    def providers() -> dict[str, Any]:
+        return with_sdk if sdk_installed else cli_only
+
+    def install_sdk() -> dict[str, Any]:
+        nonlocal sdk_installed
+        sdk_installed = True
+        return {"status": "READY", "python": str(fake_sdk_python), "version": "0.141.0",
+                "isolated": True, "reused": False}
+
+    def sdk_call(operation: str, **_kwargs: Any) -> dict[str, Any]:
+        if operation == "identity":
+            return {"identity": {"userName": "fixture-user"}, "host": host}
+        if operation == "clusters.list":
+            return {"clusters": []}
+        if operation == "warehouses.list":
+            return {"warehouses": []}
+        raise AssertionError(f"unexpected SDK operation during setup: {operation}")
+
+    original = dbx.timeouts.seconds_for
+    budgets = {"workspace_identity": 1, "provider_health": 0.15,
+               "metadata_list": 0.15, "process_terminate_grace": 0.1}
+    with mock.patch.dict(os.environ, env, clear=False), \
+            mock.patch.object(dbx, "provider_snapshot", side_effect=providers), \
+            mock.patch.object(dbx.cli_install, "install_sdk", side_effect=install_sdk) as install, \
+            mock.patch.object(dbx.sdk, "call", side_effect=sdk_call) as sdk_execution, \
+            mock.patch.object(dbx.timeouts, "seconds_for",
+                              side_effect=lambda name: budgets.get(name, original(name))), \
+            contextlib.redirect_stdout(io.StringIO()):
+        before_config = dbx.owned_config.config_file().read_bytes()
+        result = dbx.setup()
+        check(install.call_count == 1,
+              "explicit setup did not prepare SDK fallback after an installed CLI timed out")
+        check(result["overall"] == "READY"
+              and result["readiness"]["provider"]["status"] == "READY"
+              and result["readiness"]["provider"]["selected"] == "sdk",
+              "setup did not revalidate core Databricks operations through the SDK fallback")
+        compute = result["readiness"]["capabilities"]["compute.list"]
+        warehouses = result["readiness"]["capabilities"]["warehouse.list"]
+        check(compute["provider"] == "sdk" and compute["fallback_reason"] == "CLI_PROCESS_TIMEOUT"
+              and warehouses["verified"] and sdk_execution.call_count >= 2,
+              "fallback did not retain the CLI blocker and validate the SDK production path")
+        check(dbx.owned_config.config_file().read_bytes() == before_config,
+              "health revalidation rewrote the existing Anvil-owned config")
+        saved = dbx.load_preferences()
+        check(saved["authentication"]["provider"] == "sdk"
+              and saved["providers"]["sdk"]["python"] == str(fake_sdk_python)
+              and saved["readiness"]["overall"] == "READY",
+              "successful fallback provider was not persisted for a clean future session")
+        rendered = dbx.presentation.setup_text(result)
+        check("SDK fallback         active" in rendered,
+              "setup presentation did not identify the validated fallback provider")
+        clean_env = {key: value for key, value in os.environ.items()
+                     if not key.upper().startswith("DATABRICKS_")}
+        clean_env.update(env)
+        clean_env["PYTHONPATH"] = ""
+        script = str(ROOT / "scripts" / "databricks.py")
+        provider_probe = subprocess.run(
+            [sys.executable, "-c",
+             "import json,sys; sys.path.insert(0, sys.argv[1]); import databricks; print(json.dumps(databricks.provider_snapshot()))",
+             str(ROOT / "scripts")], capture_output=True, text=True, env=clean_env, timeout=10, check=False)
+        check(provider_probe.returncode == 0
+              and json.loads(provider_probe.stdout)["sdk"]["status"] == "READY",
+              f"clean process did not discover the persisted SDK executable: {provider_probe.stdout}\n{provider_probe.stderr}")
+        status = subprocess.run([sys.executable, script, "status", "--format", "json"],
+                                capture_output=True, text=True, env=clean_env, timeout=20, check=False)
+        check(status.returncode == 0, f"fresh process could not load the validated SDK provider: {status.stderr}")
+        status_value = json.loads(status.stdout)
+        check(status_value["overall"] == "READY"
+              and status_value["readiness"]["provider"]["selected"] == "sdk",
+              "fresh process did not revalidate the persisted SDK fallback provider")
+        clusters = subprocess.run([sys.executable, script, "clusters", "list", "--format", "json"],
+                                  capture_output=True, text=True, env=clean_env, timeout=20, check=False)
+        check(clusters.returncode == 0 and json.loads(clusters.stdout)["profile"] == "anvil-prod",
+              f"fresh process did not route a normal operation through the persisted SDK: {clusters.stdout}\n{clusters.stderr}")
+
+
+def test_sdk_install_blocker_and_shared_failure_policy_during_setup(temp: Path) -> None:
+    config_home = temp / "sdk-install-blocked-config"
+    host = "https://workspace-a.example.invalid"
+    save_pref(config_home, profile="anvil-prod", host=host)
+    with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(config_home)}, clear=False):
+        state = dbx.load_preferences()
+        state["authentication"] = {"strategy": "azure-cli-session", "provider": "cli", "cloud": "azure"}
+        dbx.provider_state.save_state(state)
+    env = {"XDG_CONFIG_HOME": str(config_home), "XDG_DATA_HOME": str(temp / "sdk-install-blocked-data"),
+           "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
+           "ANVIL_DATABRICKS_SCENARIO": "clusters_timeout",
+           "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / "sdk-install-blocked-state.json")}
+    cli_only = {"cli": {"status": "READY", "installed": True,
+                         "executable": str(FIXTURE_BIN / "databricks")},
+                "sdk": {"status": "NOT_INSTALLED", "installed": False},
+                "vscode": {"status": "NOT_INSTALLED"},
+                "connect": {"status": "NOT_INSTALLED"},
+                "sql_connector": {"status": "NOT_INSTALLED"}}
+    original = dbx.timeouts.seconds_for
+    budgets = {"workspace_identity": 1, "provider_health": 0.15,
+               "metadata_list": 0.15, "process_terminate_grace": 0.1}
+    with mock.patch.dict(os.environ, env, clear=False), \
+            mock.patch.object(dbx, "provider_snapshot", return_value=cli_only), \
+            mock.patch.object(dbx.cli_install, "install_sdk",
+                              return_value={"status": "BLOCKED", "failure": "policy-blocked",
+                                            "message": "isolated SDK installation was blocked"}) as install, \
+            mock.patch.object(dbx.timeouts, "seconds_for",
+                              side_effect=lambda name: budgets.get(name, original(name))), \
+            contextlib.redirect_stdout(io.StringIO()):
+        result = dbx.setup()
+    rendered = dbx.presentation.setup_text(result)
+    check(install.call_count == 1 and result["overall"] == "NOT_READY"
+          and result["providers"]["sdk"]["status"] == "BLOCKED",
+          "blocked SDK installation did not retain the unready CLI result")
+    check("SDK fallback         blocked" in rendered and "SDK fallback         not needed" not in rendered
+          and "could not prepare the isolated SDK fallback" in result["next_step"],
+          "setup output concealed that the CLI fallback could not be prepared")
+
+    network_config = temp / "shared-network-setup-config"
+    save_pref(network_config, profile="anvil-prod", host=host)
+    with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(network_config)}, clear=False):
+        network_state = dbx.load_preferences()
+        network_state["authentication"] = {"strategy": "azure-cli-session", "provider": "cli", "cloud": "azure"}
+        dbx.provider_state.save_state(network_state)
+    network_env = {**env, "XDG_CONFIG_HOME": str(network_config),
+                   "XDG_DATA_HOME": str(temp / "shared-network-setup-data"),
+                   "ANVIL_DATABRICKS_SCENARIO": "workspace_network_failure",
+                   "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / "shared-network-setup-state.json")}
+    with mock.patch.dict(os.environ, network_env, clear=False), \
+            mock.patch.object(dbx, "provider_snapshot", return_value=cli_only), \
+            mock.patch.object(dbx.cli_install, "install_sdk",
+                              side_effect=AssertionError("shared workspace failure must not install/fallback providers")), \
+            contextlib.redirect_stdout(io.StringIO()):
+        result = dbx.setup()
+    check(result["overall"] == "NOT_READY"
+          and result["blockers"][0]["category"] == "WORKSPACE_NETWORK_TIMEOUT",
+          "shared network failure was not preserved as the setup blocker")
+
+
+def test_resource_discovery_uses_metadata_timeout_class() -> None:
+    original = dbx.timeouts.seconds_for
+    observed: list[str] = []
+
+    def timeout_for(name: str) -> float:
+        observed.append(name)
+        return {"metadata_list": 37, "provider_health": 19}.get(name, original(name))
+
+    providers = {"cli": {"status": "READY"}, "sdk": {"status": "NOT_INSTALLED"}}
+    with mock.patch.object(dbx.timeouts, "seconds_for", side_effect=timeout_for), \
+            mock.patch.object(dbx, "json_from_cli", return_value={
+                "value": {"clusters": []}, "provider": "cli", "latency_ms": 1,
+                "fallback_reason": None, "rejected_providers": []}) as call:
+        result = dbx._resource_capability("anvil-dev", "https://workspace-a.example.invalid",
+                                          "compute.list", providers, {"strategy": "unified-auth", "provider": "cli"})
+    check(result["verified"] and call.call_args.kwargs["timeout"] == 37
+          and "metadata_list" in observed and "provider_health" not in observed,
+          "cluster inventory used the generic provider-health budget instead of metadata-list policy")
 
 
 def test_shared_network_auth_and_partial_permission(temp: Path) -> None:
@@ -1635,6 +1842,9 @@ def main() -> int:
         test_ready_survives_a_clean_new_process(temp)
         test_empty_core_lists_and_slow_valid_provider(temp)
         test_fallback_and_shared_failure_policy(temp)
+        test_setup_installs_sdk_after_cli_health_failure(temp)
+        test_sdk_install_blocker_and_shared_failure_policy_during_setup(temp)
+        test_resource_discovery_uses_metadata_timeout_class()
         test_shared_network_auth_and_partial_permission(temp)
         test_expired_auth_invalidates_previous_ready_state(temp)
         test_process_runner_bounds_output_and_kills_child(temp)
