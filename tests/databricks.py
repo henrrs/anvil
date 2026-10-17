@@ -11,10 +11,12 @@ import hashlib
 import io as byte_io
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import urllib.error
 import zipfile
@@ -133,36 +135,29 @@ def test_cli_environment_auth_without_named_profile(temp: Path) -> None:
         "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
         "ANVIL_DATABRICKS_SCENARIO": "valid",
         "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / "environment-auth-state.json"),
+        "ANVIL_DATABRICKS_EXECUTION_LOG": str(temp / "environment-auth-execution.jsonl"),
     }
     external = Path(env["DATABRICKS_CONFIG_FILE"])
     external.write_text("[dev]\nhost = https://external.workspace.invalid\n", encoding="utf-8")
     save_pref(config_home)
-    original_run = subprocess.run
-    commands: list[tuple[list[str], dict[str, str]]] = []
-
-    def recording_run(command, *args, **kwargs):
-        if isinstance(command, (list, tuple)) and command and str(command[0]) == str(FIXTURE_BIN / "databricks"):
-            commands.append((list(command), kwargs.get("env", {})))
-        return original_run(command, *args, **kwargs)
-
-    with mock.patch.dict(os.environ, env, clear=False), \
-            mock.patch("subprocess.run", side_effect=recording_run):
+    with mock.patch.dict(os.environ, env, clear=False):
         selected, host, profiles = dbx.resolve_profile()
         check(selected == "anvil-dev" and host == "https://workspace-a.example.invalid"
               and [item["name"] for item in profiles] == ["anvil-dev"],
               "Anvil did not resolve only its own config profile")
-    check(commands, "Anvil did not invoke the isolated Databricks CLI")
-    for command, child_env in commands:
-        check(child_env.get("DATABRICKS_CONFIG_FILE") == str(config_home / "anvil" / "databricks" / "databrickscfg"),
-              f"CLI command did not use Anvil's config: {command}")
-        check(child_env.get("DATABRICKS_TOKEN") is None and child_env.get("DATABRICKS_HOST") is None,
-              "external credential overrides leaked into an Anvil child process")
-        if "--profile" in command:
-            check(child_env.get("DATABRICKS_CONFIG_PROFILE") == "anvil-dev",
-                  "Anvil child process did not select its owned profile")
+        dbx.discover_clusters()
+    calls = [json.loads(line) for line in Path(env["ANVIL_DATABRICKS_EXECUTION_LOG"]).read_text(encoding="utf-8").splitlines()]
+    check(calls, "Anvil did not invoke the isolated Databricks CLI")
+    for call in calls:
+        check(call.get("config_file") == str(config_home / "anvil" / "databricks" / "databrickscfg"),
+              f"CLI command did not use Anvil's config: {call}")
+        check(call.get("config_profile") == "anvil-dev", "Anvil CLI process did not select its owned profile")
+        check("DATABRICKS_TOKEN" not in call.get("databricks_environment_names", [])
+              and "DATABRICKS_HOST" not in call.get("databricks_environment_names", []),
+              "external credential override names leaked into an Anvil child process")
     check(external.read_text(encoding="utf-8") == "[dev]\nhost = https://external.workspace.invalid\n",
           "Anvil changed the external Databricks configuration")
-    check("secret-external-token-must-not-leak" not in repr(commands), "external token appeared in captured command environment")
+    check("secret-external-token-must-not-leak" not in repr(calls), "external token appeared in captured command environment")
 
 
 def test_sdk_environment_uses_owned_config(temp: Path) -> None:
@@ -176,11 +171,11 @@ def test_sdk_environment_uses_owned_config(temp: Path) -> None:
     def fake_run(command, **kwargs):
         observed["command"] = command
         observed["env"] = kwargs["env"]
-        return types.SimpleNamespace(returncode=0, stdout="{}", stderr="")
+        return dbx.process.ProcessResult(returncode=0, stdout="{}", stderr="", elapsed_ms=1)
 
     with mock.patch.dict(os.environ, env, clear=False), \
             mock.patch.object(dbx.sdk, "discover_sdk", return_value={"python": sys.executable}), \
-            mock.patch.object(dbx.sdk.subprocess, "run", side_effect=fake_run):
+            mock.patch.object(dbx.sdk.process, "run", side_effect=fake_run):
         dbx.sdk.call("identity", profile="anvil-dev")
     child_env = observed["env"]
     check(child_env.get("DATABRICKS_CONFIG_FILE") == str(config_home / "anvil" / "databricks" / "databrickscfg")
@@ -316,7 +311,8 @@ def test_cli_minimum_and_missing(temp: Path) -> None:
         check(value["cli_installed"] and not value["cli_supported"], "outdated CLI was accepted")
     with mock.patch.dict(os.environ, {**env, "ANVIL_DATABRICKS_CLI": "/nonexistent/databricks"}, clear=False):
         value = dbx.status()
-        check(not value["cli_installed"] and value["limitation"] == "Databricks CLI is not installed", "missing optional CLI status is unclear")
+        check(not value["cli_installed"] and value["overall"] == "NOT_CONFIGURED",
+              "missing optional CLI status incorrectly inferred workspace readiness")
 
 
 def test_cli_install_failure_survives_unsupported_binary(temp: Path) -> None:
@@ -419,8 +415,12 @@ def test_timeout_cancellation(temp: Path) -> None:
         "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / "timeout-state.json"),
     }
     log = temp / "timeout-python.jsonl"
+    timer_value = [94]
+    def advancing_time():
+        timer_value[0] += 6
+        return timer_value[0]
     with mock.patch.dict(os.environ, {**common, "ANVIL_DATABRICKS_SCENARIO": "command_timeout", "ANVIL_DATABRICKS_CALL_LOG": str(log)}, clear=False), \
-            mock.patch.object(dbx, "time", type("Timer", (), {"monotonic": staticmethod(iter([100, 106]).__next__), "sleep": staticmethod(lambda _value: None)})()):
+            mock.patch.object(dbx, "time", type("Timer", (), {"monotonic": staticmethod(advancing_time), "sleep": staticmethod(lambda _value: None)})()):
         try:
             dbx.execute_python("pass", "cluster-a", timeout=5)
         except dbx.DatabricksError as exc:
@@ -431,8 +431,12 @@ def test_timeout_cancellation(temp: Path) -> None:
     check("/api/1.2/commands/cancel" in python_calls and "/api/1.2/contexts/destroy" in python_calls, "Python timeout did not cancel and clean up")
 
     log = temp / "timeout-sql.jsonl"
+    timer_value = [94]
+    def advancing_time():
+        timer_value[0] += 6
+        return timer_value[0]
     with mock.patch.dict(os.environ, {**common, "ANVIL_DATABRICKS_SCENARIO": "sql_timeout", "ANVIL_DATABRICKS_CALL_LOG": str(log)}, clear=False), \
-            mock.patch.object(dbx, "time", type("Timer", (), {"monotonic": staticmethod(iter([100, 106]).__next__), "sleep": staticmethod(lambda _value: None)})()):
+            mock.patch.object(dbx, "time", type("Timer", (), {"monotonic": staticmethod(advancing_time), "sleep": staticmethod(lambda _value: None)})()):
         try:
             dbx.execute_sql("SELECT 1", "warehouse-a", timeout=5)
         except dbx.DatabricksError as exc:
@@ -489,7 +493,7 @@ def test_sql_execution_bounds_and_errors(temp: Path) -> None:
         try:
             dbx.execute_sql("SELECT 1", "warehouse-a")
         except dbx.DatabricksError as exc:
-            check(exc.category == "CLI_REQUEST_FAILED", "permission failure was not categorized")
+            check(exc.category == "PERMISSION_DENIED", "permission failure was not categorized")
             check("workspace-a" not in str(exc), "permission error leaked remote details")
         else:
             raise AssertionError("permission failure was reported as successful")
@@ -509,9 +513,9 @@ def test_system_catalog_discovery(temp: Path) -> None:
     with mock.patch.dict(os.environ, env, clear=False):
         state = dbx.status()
         check(state["profile_valid"] is True and state["identity_reachable"] is True, "doctor status did not validate the selected identity")
-        check(state["system_catalog_reachable"] is True, "system catalog was not checked through the running warehouse")
-        check(state["system_schemas"] == ["access", "billing", "compute", "lakeflow", "query"], "available system schemas were not reported")
-        check(not state["unavailable_system_schemas"], "available key schemas were incorrectly marked unavailable")
+        check(state["overall"] == "READY", "read-only workspace readiness did not pass")
+        check(state["system_catalog_reachable"] is None and not state["system_schemas"],
+              "readiness unexpectedly required SQL warehouse or system-catalog access")
         check(state["running_all_purpose_compute"] == 1 and state["running_sql_warehouses"] == 1, "resource counts were not reported")
         tables = dbx.execute_sql("SHOW TABLES IN system.billing", "warehouse-a")
         check({row[1] for row in tables["rows"]} == {"usage", "list_prices"}, "live system-table fixture was not returned")
@@ -521,7 +525,14 @@ def test_system_catalog_discovery(temp: Path) -> None:
     with mock.patch.dict(os.environ, denied_env, clear=False):
         denied = dbx.status()
         check(denied["profile_valid"] is True and denied["identity_reachable"] is True, "system-table permission failure invalidated a valid profile")
-        check(denied["system_catalog_reachable"] is False, "system-table permission failure was not reported as unavailable")
+        check(denied["overall"] == "READY" and denied["system_catalog_reachable"] is None,
+              "status readiness was incorrectly coupled to SQL/system-table permission")
+        try:
+            dbx.execute_sql("SELECT 1", "warehouse-a")
+        except dbx.DatabricksError as exc:
+            check(exc.category == "PERMISSION_DENIED", "SQL permission limitation did not retain its capability scope")
+        else:
+            raise AssertionError("SQL succeeded despite the permission-denied fixture")
 
 
 def test_provider_resolver_and_path_regression(temp: Path) -> None:
@@ -546,6 +557,430 @@ def test_provider_resolver_and_path_regression(temp: Path) -> None:
     check(assisted["bundles.run"]["state"] == "ASSISTED", "VS Code Bundles flow was not marked assisted")
     check(dbx.resolver.overall_state({"cli": {"status": "BLOCKED"}}, {}, auth_valid=False) == "NOT_CONFIGURED",
           "an unavailable optional provider was reported as the overall state before authentication")
+
+
+def test_documented_cli_grammar() -> None:
+    skill = (ROOT / "config" / "skills" / "anvil-databricks" / "SKILL.md").read_text(encoding="utf-8")
+    examples = skill.split("```text\n", 1)[1].split("```", 1)[0]
+    parser = dbx.build_parser()
+    parsed = [parser.parse_args(shlex.split(line)) for line in examples.splitlines() if line.strip()]
+    check(len(parsed) >= 14, "Databricks skill lost its documented canonical command examples")
+    check(parsed[2].action == "clusters" and parsed[2].resource_action == "list"
+          and parsed[2].format == "json", "canonical clusters list syntax does not parse")
+    check(parsed[11].action == "python" and parsed[11].timeout == 120,
+          "canonical Python command syntax does not parse")
+    try:
+        parser.parse_args(["clusters", "list", "--format", "yaml"])
+    except dbx.DatabricksError as exc:
+        check(exc.category == "CLI_ARGUMENT_ERROR", "invalid format was not normalized as a CLI argument error")
+    else:
+        raise AssertionError("invalid Databricks output format was accepted")
+
+
+def _fresh_setup_environment(temp: Path, *, scenario: str = "valid") -> dict[str, str]:
+    return {
+        "HOME": str(temp / f"fresh-{scenario}-home"),
+        "XDG_CONFIG_HOME": str(temp / f"fresh-{scenario}-config"),
+        "XDG_DATA_HOME": str(temp / f"fresh-{scenario}-data"),
+        "PATH": os.pathsep.join((str(Path(sys.executable).parent), "/usr/bin", "/bin")),
+        "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
+        "ANVIL_DATABRICKS_SCENARIO": scenario,
+        "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / f"fresh-{scenario}-fixture-state.json"),
+        "ANVIL_DATABRICKS_EXECUTION_LOG": str(temp / f"fresh-{scenario}-provider-execution.jsonl"),
+    }
+
+
+def _complete_fresh_setup(temp: Path, *, scenario: str = "valid") -> dict[str, Any]:
+    env = _fresh_setup_environment(temp, scenario=scenario)
+    with mock.patch.dict(os.environ, env, clear=False), \
+            mock.patch.object(dbx.sys, "stdin", TTYInput("")), \
+            mock.patch("builtins.input", side_effect=["https://workspace-a.example.invalid", "1", "y", "y"]), \
+            contextlib.redirect_stdout(io.StringIO()):
+        result = dbx.setup()
+    return result
+
+
+def test_readiness_state_machine_and_persisted_contract(temp: Path) -> None:
+    ready_at = dbx.readiness.now()
+    good_capabilities = {
+        name: {"supported": True, "available": True, "verified": True, "checked": True,
+               "provider": "cli", "validated_at": ready_at, "resource_count": 0}
+        for name in dbx.readiness.CORE_CAPABILITIES
+    }
+    authentication = {"status": "READY", "validated_at": ready_at}
+    workspace = {"status": "READY", "validated_at": ready_at}
+    provider = {"status": "READY", "selected": "cli", "validation_probe": "current-user + metadata",
+                "validated_at": ready_at}
+    cases = (
+        (False, authentication, workspace, provider, good_capabilities, "NOT_CONFIGURED", "NOT_CONFIGURED"),
+        (True, {"status": "FAILED"}, workspace, provider, good_capabilities, "CONFIGURED", "NOT_READY"),
+        (True, authentication, {"status": "FAILED"}, provider, good_capabilities, "AUTHENTICATED", "NOT_READY"),
+        (True, authentication, workspace, {"status": "FAILED"}, {}, "WORKSPACE_VALIDATED", "NOT_READY"),
+        (True, authentication, workspace, provider,
+         {**good_capabilities, "compute.list": {"checked": True, "verified": False}},
+         "CAPABILITIES_DISCOVERED", "DEGRADED"),
+        (True, authentication, workspace, provider, good_capabilities, "READY", "READY"),
+    )
+    for configured, auth_value, workspace_value, provider_value, capabilities, stage, overall in cases:
+        result = dbx.readiness.evaluate(configured=configured, authentication=auth_value,
+                                        workspace=workspace_value, provider=provider_value,
+                                        capabilities=capabilities)
+        check((result["state"], result["overall"]) == (stage, overall),
+              f"readiness transition mismatch: expected {(stage, overall)}, got {(result['state'], result['overall'])}")
+
+    state_dir = temp / "readiness-state"
+    with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(state_dir)}, clear=False):
+        ready = dbx.readiness.evaluate(configured=True, authentication=authentication,
+                                       workspace=workspace, provider=provider,
+                                       capabilities=good_capabilities)
+        dbx.provider_state.save_state({"readiness": ready})
+        invalid = json.loads(json.dumps(ready))
+        invalid["capabilities"]["compute.list"]["verified"] = False
+        try:
+            dbx.provider_state.save_state({"readiness": invalid})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("persisted READY was accepted without verified core capability evidence")
+
+
+def test_hung_provider_cannot_be_promoted_ready(temp: Path) -> None:
+    # Reproduce the baseline defect: its setup summary passed provider inventory
+    # to the resolver and treated auth_valid as a proxy for every capability.
+    legacy_inventory = {"cli": {"status": "READY"}, "sdk": {"status": "NOT_INSTALLED"}}
+    legacy_capabilities = dbx.resolver.resolve(legacy_inventory, auth_valid=True)
+    legacy_overall = dbx.resolver.overall_state(legacy_inventory, legacy_capabilities, auth_valid=True)
+    check(legacy_overall == "READY",
+          "baseline inventory-only readiness reproduction no longer represents the original false-READY behavior")
+
+    env = _fresh_setup_environment(temp, scenario="provider_hang")
+    azure_cli_bin = temp / "azure-session-bin"
+    azure_cli_bin.mkdir()
+    fake_az = azure_cli_bin / "az"
+    fake_az.write_text("#!/bin/sh\nif [ \"$1 $2\" = 'account show' ]; then printf '{\\\"id\\\":\\\"fixture-subscription\\\"}\\n'; exit 0; fi\nexit 1\n",
+                       encoding="utf-8")
+    fake_az.chmod(0o755)
+    env["PATH"] = str(azure_cli_bin) + os.pathsep + env["PATH"]
+    child_file = temp / "provider-child.pid"
+    env["ANVIL_DATABRICKS_CHILD_PID"] = str(child_file)
+    original = dbx.timeouts.seconds_for
+    budgets = {"workspace_identity": 2, "provider_health": 0.2,
+               "metadata_list": 0.2, "process_terminate_grace": 0.1}
+    def short_budget(name: str) -> float:
+        return budgets.get(name, original(name))
+    with mock.patch.dict(os.environ, env, clear=False), \
+            mock.patch.object(dbx.timeouts, "seconds_for", side_effect=short_budget), \
+            mock.patch.object(dbx.sys, "stdin", TTYInput("")), \
+            mock.patch("builtins.input", side_effect=["https://adb-1234567890123456.7.azuredatabricks.net", "1", "y", "y"]), \
+            contextlib.redirect_stdout(io.StringIO()):
+        result = dbx.setup()
+        check(result["overall"] == "NOT_READY", "setup reported READY while its production CLI provider timed out")
+        check(result["authentication"]["strategy"] == "azure-cli-session",
+              "false-READY fixture did not reproduce a healthy Azure CLI session context")
+        check(result["readiness"]["provider"]["status"] == "FAILED"
+              and result["readiness"]["provider"]["failure_category"] == "CLI_PROCESS_TIMEOUT",
+              "hung production provider did not become an explicit readiness blocker")
+        check(result["blockers"][0]["category"] == "CLI_PROCESS_TIMEOUT",
+              "setup did not expose the root provider timeout blocker")
+        human = dbx.presentation.setup_text(result)
+        check("Authentication       READY" in human and "Provider health       FAILED" in human
+              and "timed out after 0.2s" in human and "Impact" in human
+              and "make databricks-setup" in human and "Anvil has not marked this integration READY." in human,
+              "human setup output hid validated stages or failed to explain the provider timeout and repair path")
+        doctor_text = dbx.presentation.doctor_text({"overall": result["overall"],
+                                                    "readiness": result["readiness"],
+                                                    "limitation": "clusters list: CLI_PROCESS_TIMEOUT"})
+        check("Root issue" in doctor_text and "timed out after 0.2s" in doctor_text
+              and "discovery could not be verified" in doctor_text
+              and "rerun make doctor" in doctor_text,
+              "human doctor output omitted provider timeout details, impact, or next step")
+        active_path = dbx.owned_config.config_file()
+        check(not active_path.exists(), f"failed candidate config was promoted to active: {active_path}")
+        check(not dbx.provider_state.state_path().exists(), "failed candidate wrote an active provider state")
+    check(child_file.is_file(), "hung CLI fixture did not spawn its controlled child process")
+    child_pid = int(child_file.read_text(encoding="utf-8"))
+    for _ in range(20):
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("provider timeout left a child process alive or unreaped")
+
+
+def test_setup_interruption_preserves_active_configuration(temp: Path) -> None:
+    env = _fresh_setup_environment(temp)
+    with mock.patch.dict(os.environ, env, clear=False):
+        original = _complete_fresh_setup(temp)
+        check(original["overall"] == "READY", "interruption fixture did not establish a healthy active config")
+        active_path = dbx.owned_config.config_file()
+        state_path = dbx.provider_state.state_path()
+        active_before = active_path.read_bytes()
+        state_before = state_path.read_bytes()
+
+        with mock.patch.object(dbx.sys, "stdin", TTYInput("")), \
+                mock.patch("builtins.input", side_effect=["", "1", "y", "y"]), \
+                mock.patch.object(dbx, "_setup_summary", side_effect=KeyboardInterrupt), \
+                contextlib.redirect_stdout(io.StringIO()):
+            try:
+                dbx.setup(reset=True)
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("injected setup interruption was not propagated")
+
+        check(active_path.read_bytes() == active_before,
+              "interrupted candidate replaced the previously active Databricks config")
+        check(state_path.read_bytes() == state_before,
+              "interrupted candidate changed previously active readiness state")
+        pending = list(active_path.parent.glob(".databrickscfg.pending.*"))
+        check(not pending, f"interrupted setup left candidate config files behind: {pending}")
+
+
+def test_ready_survives_a_clean_new_process(temp: Path) -> None:
+    result = _complete_fresh_setup(temp)
+    check(result["overall"] == "READY" and result["readiness"]["state"] == "READY",
+          "setup did not reach the complete readiness state")
+    setup_text = dbx.presentation.setup_text(result)
+    check("Core capabilities discovered" in setup_text
+          and "same provider path used by normal Anvil sessions" in setup_text,
+          "successful setup did not state that core capabilities used the production session path")
+    original_env = _fresh_setup_environment(temp)
+    clean_env = {key: value for key, value in os.environ.items()
+                 if not key.upper().startswith("DATABRICKS_")}
+    clean_env.update(original_env)
+    clean_env["PYTHONPATH"] = ""
+    script = str(ROOT / "scripts" / "databricks.py")
+    status = subprocess.run([sys.executable, script, "status", "--format", "json"],
+                            capture_output=True, text=True, env=clean_env, timeout=20, check=False)
+    check(status.returncode == 0, f"new process status failed: {status.stderr}")
+    status_value = json.loads(status.stdout)
+    check(status_value["overall"] == "READY" and status_value["readiness"]["state"] == "READY"
+          and status_value["readiness_stale"] is False,
+          "clean new process did not reconstruct and revalidate READY state")
+    clusters = subprocess.run([sys.executable, script, "clusters", "list", "--format", "json"],
+                              capture_output=True, text=True, env=clean_env, timeout=20, check=False)
+    check(clusters.returncode == 0, f"new process could not use persisted provider configuration: {clusters.stderr}")
+    cluster_value = json.loads(clusters.stdout)
+    check(cluster_value["profile"] == "anvil-dev" and cluster_value["running"][0]["cluster_id"] == "cluster-a",
+          "new-process workspace operation did not use the persisted Anvil profile")
+
+    doctor = subprocess.run(["make", "--no-print-directory", "doctor"], cwd=ROOT,
+                            capture_output=True, text=True, env=clean_env, timeout=30, check=False)
+    check(doctor.returncode == 0 and "Overall              READY" in doctor.stdout,
+          f"public make doctor did not use the live validated readiness path: {doctor.stdout}\n{doctor.stderr}")
+
+    saved_state_path = Path(original_env["XDG_CONFIG_HOME"]) / "anvil" / "databricks.json"
+    state_before_dry_run = saved_state_path.read_bytes()
+    setup_dry_run = subprocess.run(["make", "--no-print-directory", "databricks-setup", "DRY_RUN=1", "OUTPUT=json"],
+                                   cwd=ROOT, capture_output=True, text=True, env=clean_env,
+                                   timeout=30, check=False)
+    check(setup_dry_run.returncode == 0, f"public databricks-setup dry-run failed: {setup_dry_run.stderr}")
+    plan = json.loads(setup_dry_run.stdout)
+    check(plan["dry_run"] is True and plan["profile"] == "anvil-dev"
+          and not plan["changes_performed"], "public setup dry-run lost its no-change preview contract")
+    check(saved_state_path.read_bytes() == state_before_dry_run,
+          "public setup dry-run changed persisted Databricks readiness state")
+
+    capabilities = subprocess.run(["make", "--no-print-directory", "FORMAT=json", "capabilities"], cwd=ROOT,
+                                  capture_output=True, text=True, env=clean_env, timeout=30, check=False)
+    check(capabilities.returncode == 0, f"public make capabilities failed: {capabilities.stderr}")
+    capability_value = json.loads(capabilities.stdout)
+    check(capability_value["databricks_capabilities"]["overall"] == "READY"
+          and capability_value["databricks_capabilities"]["capabilities"]["compute.list"]["verified"],
+          "public local capabilities did not report the persisted recent evidence")
+
+
+def test_empty_core_lists_and_slow_valid_provider(temp: Path) -> None:
+    for scenario, capability in (("empty_clusters", "compute.list"), ("empty_warehouses", "warehouse.list")):
+        config_home = temp / f"{scenario}-config"
+        config_home.mkdir()
+        save_pref(config_home)
+        env = {"XDG_CONFIG_HOME": str(config_home),
+               "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
+               "ANVIL_DATABRICKS_SCENARIO": scenario,
+               "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / f"{scenario}-state.json")}
+        with mock.patch.dict(os.environ, env, clear=False):
+            state = dbx.status()
+            item = state["readiness"]["capabilities"][capability]
+            check(state["overall"] == "READY" and item["available"] is True
+                  and item["verified"] is True and item["resource_count"] == 0,
+                  f"successful empty {capability} response was treated as failure")
+            public = dbx.capabilities(state)["capabilities"][capability]
+            check(public["supported"] is True and public["available"] is True
+                  and public["verified"] is True and public["resource_count"] == 0,
+                  f"three-dimensional {capability} status lost empty-list evidence")
+
+    config_home = temp / "slow-config"
+    config_home.mkdir()
+    save_pref(config_home)
+    env = {"XDG_CONFIG_HOME": str(config_home), "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
+           "ANVIL_DATABRICKS_SCENARIO": "clusters_slow", "ANVIL_DATABRICKS_DELAY_SECONDS": "0.15",
+           "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / "slow-state.json")}
+    original = dbx.timeouts.seconds_for
+    with mock.patch.dict(os.environ, env, clear=False), \
+            mock.patch.object(dbx.timeouts, "seconds_for",
+                              side_effect=lambda name: 0.5 if name in {"workspace_identity", "provider_health", "metadata_list"} else original(name)):
+        state = dbx.status()
+        check(state["overall"] == "READY" and state["readiness"]["capabilities"]["compute.list"]["verified"],
+              "slow but bounded provider response was rejected prematurely")
+
+
+def test_fallback_and_shared_failure_policy(temp: Path) -> None:
+    config_home = temp / "fallback-config"
+    config_home.mkdir()
+    save_pref(config_home)
+    providers = {"cli": {"status": "READY", "executable": str(FIXTURE_BIN / "databricks")},
+                 "sdk": {"status": "READY", "python": sys.executable}}
+
+    def cli_timeout(*_args: Any, **_kwargs: Any):
+        raise dbx.DatabricksError("CLI_PROCESS_TIMEOUT", "bounded fixture timeout", provider="cli",
+                                  operation="clusters list", profile="anvil-dev", timeout_seconds=0.1)
+    with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(config_home)}, clear=False), \
+            mock.patch.object(dbx, "run_cli", side_effect=cli_timeout), \
+            mock.patch.object(dbx.sdk, "call", return_value={"clusters": []}) as sdk_call:
+        routed = dbx.json_from_cli(["clusters", "list"], profile="anvil-dev", timeout=0.1,
+                                   providers=providers, authentication_strategy="unified-auth",
+                                   preferred_provider="cli", with_metadata=True)
+    check(routed["provider"] == "sdk" and routed["fallback_reason"] == "CLI_PROCESS_TIMEOUT"
+          and routed["rejected_providers"][0]["provider"] == "cli" and sdk_call.call_count == 1,
+          "provider-specific CLI timeout did not use and explain SDK fallback")
+
+    malformed_env = {"XDG_CONFIG_HOME": str(config_home),
+                     "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
+                     "ANVIL_DATABRICKS_SCENARIO": "malformed_clusters",
+                     "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / "malformed-output-state.json")}
+    with mock.patch.dict(os.environ, malformed_env, clear=False), \
+            mock.patch.object(dbx.sdk, "call", return_value={"clusters": [{"cluster_id": "sdk-cluster"}]}) as sdk_call:
+        routed = dbx.json_from_cli(["clusters", "list"], profile="anvil-dev", timeout=2,
+                                   providers=providers, authentication_strategy="unified-auth",
+                                   preferred_provider="cli", with_metadata=True)
+    check(routed["provider"] == "sdk" and routed["fallback_reason"] == "CLI_OUTPUT_INVALID"
+          and routed["value"]["clusters"][0]["cluster_id"] == "sdk-cluster" and sdk_call.call_count == 1,
+          "actual CLI fixture malformed JSON did not take the normalized SDK fallback")
+
+    def network_timeout(*_args: Any, **_kwargs: Any):
+        raise dbx.DatabricksError("WORKSPACE_NETWORK_TIMEOUT", "shared fixture network failure", provider="cli")
+    with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(config_home)}, clear=False), \
+            mock.patch.object(dbx, "run_cli", side_effect=network_timeout), \
+            mock.patch.object(dbx.sdk, "call", side_effect=AssertionError("shared network failure triggered provider roulette")):
+        try:
+            dbx.json_from_cli(["clusters", "list"], profile="anvil-dev", timeout=0.1,
+                              providers=providers, authentication_strategy="unified-auth",
+                              preferred_provider="cli")
+        except dbx.DatabricksError as exc:
+            check(exc.category == "WORKSPACE_NETWORK_TIMEOUT" and not exc.fallback_allowed,
+                  "shared network failure lost its normalized stop policy")
+        else:
+            raise AssertionError("shared network failure was reported as successful")
+
+
+def test_shared_network_auth_and_partial_permission(temp: Path) -> None:
+    for scenario, expected_auth in (("workspace_network_failure", "UNKNOWN"), ("auth_invalid", "FAILED")):
+        config_home = temp / f"{scenario}-config"
+        config_home.mkdir()
+        save_pref(config_home)
+        log = temp / f"{scenario}-execution.jsonl"
+        env = {"XDG_CONFIG_HOME": str(config_home), "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
+               "ANVIL_DATABRICKS_SCENARIO": scenario,
+               "ANVIL_DATABRICKS_EXECUTION_LOG": str(log),
+               "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / f"{scenario}-state.json")}
+        with mock.patch.dict(os.environ, env, clear=False):
+            state = dbx.status()
+            check(state["overall"] == "NOT_READY"
+                  and state["readiness"]["authentication"]["status"] == expected_auth,
+                  f"{scenario} incorrectly reported a healthy workspace")
+            calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+            check(not any(item["args"][:2] == ["auth", "login"] for item in calls),
+                  f"{scenario} unexpectedly started interactive authentication")
+            if scenario == "workspace_network_failure":
+                check(state["readiness"]["blockers"][0]["category"] == "WORKSPACE_NETWORK_TIMEOUT"
+                      and len(calls) == 1,
+                      "shared network blocker did not stop sibling provider/capability probes")
+
+    config_home = temp / "permission-config"
+    config_home.mkdir()
+    save_pref(config_home)
+    env = {"XDG_CONFIG_HOME": str(config_home), "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
+           "ANVIL_DATABRICKS_SCENARIO": "permission_denied_clusters",
+           "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / "permission-state.json")}
+    with mock.patch.dict(os.environ, env, clear=False):
+        state = dbx.status()
+        compute = state["readiness"]["capabilities"]["compute.list"]
+        warehouse = state["readiness"]["capabilities"]["warehouse.list"]
+        check(state["overall"] == "DEGRADED" and state["readiness"]["provider"]["status"] == "READY"
+              and compute["failure_category"] == "PERMISSION_DENIED" and not compute["available"]
+              and warehouse["verified"],
+              "capability permission denial incorrectly invalidated auth/provider or erased partial access")
+
+
+def test_expired_auth_invalidates_previous_ready_state(temp: Path) -> None:
+    env = _fresh_setup_environment(temp)
+    with mock.patch.dict(os.environ, env, clear=False):
+        setup_result = _complete_fresh_setup(temp)
+        check(setup_result["overall"] == "READY", "auth-expiry fixture did not start READY")
+        stale_env = {**env, "ANVIL_DATABRICKS_SCENARIO": "auth_invalid"}
+        with mock.patch.dict(os.environ, stale_env, clear=False):
+            state = dbx.status()
+            check(state["overall"] == "NOT_READY"
+                  and state["readiness"]["authentication"]["status"] == "FAILED"
+                  and state["readiness"]["authentication"]["failure_category"] == "AUTH_INVALID",
+                  "expired workspace authentication left cached readiness READY")
+            persisted = dbx.provider_state.load_state()["readiness"]
+            check(persisted["overall"] == "NOT_READY"
+                  and persisted["authentication"]["status"] == "FAILED",
+                  "auth-expiry status failure was not persisted to invalidate old READY evidence")
+            with mock.patch.object(dbx.sdk, "call", side_effect=AssertionError("invalid auth triggered provider roulette")):
+                try:
+                    dbx.json_from_cli(["clusters", "list"], profile="anvil-dev", timeout=2,
+                                      providers={"cli": {"status": "READY", "executable": str(FIXTURE_BIN / "databricks")},
+                                                 "sdk": {"status": "READY", "python": sys.executable}},
+                                      authentication_strategy="unified-auth", preferred_provider="cli")
+                except dbx.DatabricksError as exc:
+                    check(exc.category == "AUTH_INVALID" and not exc.fallback_allowed,
+                          "expired auth did not return the normalized shared-auth failure")
+                else:
+                    raise AssertionError("expired auth was reported as a successful cluster operation")
+
+
+def test_process_runner_bounds_output_and_kills_child(temp: Path) -> None:
+    oversized = "import sys; sys.stdout.write('a' * 2500000); sys.stderr.write('b' * 2000000)"
+    try:
+        dbx.process.run([sys.executable, "-c", oversized], env=os.environ, timeout=5)
+    except dbx.process.ProcessFailure as exc:
+        check(exc.category == "CLI_OUTPUT_INVALID", "oversized subprocess output had the wrong category")
+    else:
+        raise AssertionError("process runner accepted output beyond its aggregate bound")
+
+    config_home = temp / "process-config"
+    config_home.mkdir()
+    save_pref(config_home)
+    child_file = temp / "runner-child.pid"
+    env = {"XDG_CONFIG_HOME": str(config_home), "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
+           "ANVIL_DATABRICKS_SCENARIO": "provider_hang", "ANVIL_DATABRICKS_CHILD_PID": str(child_file),
+           "ANVIL_DATABRICKS_FIXTURE_STATE": str(temp / "runner-state.json")}
+    with mock.patch.dict(os.environ, env, clear=False):
+        try:
+            dbx.json_from_cli(["clusters", "list"], profile="anvil-dev", timeout=0.2)
+        except dbx.DatabricksError as exc:
+            check(exc.category == "CLI_PROCESS_TIMEOUT" and exc.provider == "cli"
+                  and exc.operation == "clusters list" and exc.timeout_seconds == 0.2
+                  and exc.executable == str(FIXTURE_BIN / "databricks")
+                  and "0.2s" in str(exc) and "anvil-dev" in str(exc)
+                  and "PROVIDER_SPECIFIC" in str(exc),
+                  "provider timeout lacked normalized executable-operation context")
+        else:
+            raise AssertionError("hung provider command unexpectedly completed")
+    child_pid = int(child_file.read_text(encoding="utf-8"))
+    for _ in range(20):
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("subprocess timeout left its spawned child alive or unreaped")
 
     binary = temp / "installed" / "databricks"
     binary.parent.mkdir()
@@ -585,7 +1020,7 @@ def test_provider_state_dry_run_and_installer(temp: Path) -> None:
         legacy_path.write_text(json.dumps({"schema_version": 1, "selected_profile": "engineering",
                                            "workspace_host": "https://workspace-a.example.invalid"}), encoding="utf-8")
         old = dbx.provider_state.load_state()
-        check(old["schema_version"] == 2 and old["selected_profile"] == "engineering", "2.2 provider preferences did not migrate")
+        check(old["schema_version"] == 3 and old["selected_profile"] == "engineering", "legacy provider preferences did not migrate to schema 3")
         dbx.provider_state.save_state(old)
         check(legacy_path.stat().st_mode & 0o777 == 0o600, "provider state file is not private")
         check(legacy_path.parent.stat().st_mode & 0o777 == 0o700, "provider state directory is not private")
@@ -696,7 +1131,8 @@ def test_topology_auth_strategy_and_presenters() -> None:
                      "topology": {"kind": "vscode_remote"}, "authentication": {"strategy": "vscode-assisted"},
                      "next_step": "Sign in with the Databricks VS Code extension, then run make databricks-setup again."}
     remote_text = dbx.presentation.setup_text(remote_result)
-    check("vscode remote" in remote_text and "Next step" in remote_text and "READY" not in remote_text,
+    check("vscode remote" in remote_text and "Next step" in remote_text
+          and "Status                 READY" not in remote_text,
           "remote no-auth output is not actionable or falsely ready")
     with mock.patch.object(dbx, "setup", return_value=result), mock.patch.object(sys, "argv", ["databricks.py", "setup", "--format", "json"]), contextlib.redirect_stdout(io.StringIO()) as output:
         check(dbx.main() == 0, "JSON setup presenter failed")
@@ -777,7 +1213,7 @@ def test_setup_auth_orchestration_fakes() -> None:
     with mock.patch.dict(os.environ, {"PATH": "/usr/bin:/bin", "ANVIL_DATABRICKS_CLI": cli["executable"]}, clear=False), \
             mock.patch.object(dbx, "cli_provider", return_value=cli), \
             mock.patch.object(dbx, "sdk_provider", return_value={"status": "NOT_INSTALLED"}), \
-            mock.patch.object(dbx, "validate_selected_profile", side_effect=[dbx.DatabricksError("AUTH_REQUIRED", "no auth"), host]), \
+            mock.patch.object(dbx, "_candidate_identity", side_effect=[dbx.DatabricksError("AUTH_REQUIRED", "no auth"), (host, "cli")]) as candidate_identity, \
             mock.patch.object(dbx.auth_executor, "run_databricks_login", return_value={"status": "READY"}) as login:
         auth, selected_host, error = dbx._authenticate_workspace(host, "anvil-dev", config_path,
             {"cli": cli, "sdk": {"status": "NOT_INSTALLED"}}, decision)
@@ -786,33 +1222,26 @@ def test_setup_auth_orchestration_fakes() -> None:
     check(login.call_args.args[:3] == (cli["executable"], host, "anvil-dev")
           and login.call_args.kwargs["config_path"] == str(config_path),
           "OAuth did not use the selected Anvil profile and staged config")
+    check(candidate_identity.call_args.args[2] == config_path,
+          "candidate identity validation did not use the staged Anvil config")
 
     azure_host = "https://adb-123.azuredatabricks.net"
     azure_path = stage_dir / "azure-databrickscfg"
     azure_path.write_text("[anvil-dev]\nhost = " + azure_host + "\n", encoding="utf-8")
     sdk_only = {"cli": {"status": "NOT_INSTALLED"}, "sdk": {"status": "READY", "python": sys.executable}}
     remote_env = {"PATH": "/usr/bin:/bin", "VSCODE_AGENT_FOLDER": "/remote/.vscode-server"}
-    calls = 0
-    def sdk_identity(_operation, *, profile, config_path=None, **_kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise RuntimeError("not logged in")
-        return {"identity": {"userName": "fixture-user"}, "host": azure_host}
     with mock.patch.dict(os.environ, remote_env, clear=True), \
             mock.patch.object(dbx, "cli_provider", return_value={"status": "NOT_INSTALLED"}), \
             mock.patch.object(dbx, "sdk_provider", return_value=sdk_only["sdk"]), \
             mock.patch.object(dbx.shutil, "which", side_effect=lambda name: "/usr/bin/az" if name == "az" else None), \
             mock.patch.object(dbx.auth_executor, "run_azure_device_login", return_value={"status": "READY"}) as device_login, \
-            mock.patch.object(dbx.sdk, "call", side_effect=sdk_identity) as sdk_call:
+            mock.patch.object(dbx, "_candidate_identity", side_effect=[dbx.DatabricksError("AUTH_REQUIRED", "not logged in"), (azure_host, "sdk")]) as candidate_identity:
         auth, selected_host, error = dbx._authenticate_workspace(azure_host, "anvil-dev", azure_path,
             sdk_only, {"strategy": "azure-cli-device-code", "provider": "sdk", "auth_required": True})
     check((selected_host, error) == (azure_host, None) and auth["strategy"] == "azure-cli-device-code"
           and device_login.call_count == 1, "remote Azure device-code login was not followed by profile validation")
-    check(sdk_call.call_args.kwargs["profile"] == "anvil-dev"
-          and sdk_call.call_args.kwargs["config_path"] == str(azure_path)
-          and "auth_type" not in sdk_call.call_args.kwargs,
-          "SDK validation did not reuse the Anvil profile/config boundary")
+    check(candidate_identity.call_args.args[:3] == ("anvil-dev", azure_host, azure_path),
+          "identity validation did not reuse the Anvil profile/config boundary")
     check("auth_type = azure-cli" in azure_path.read_text(encoding="utf-8"),
           "Azure CLI authentication was not set on the Anvil-owned profile")
 
@@ -878,6 +1307,7 @@ def test_sdk_fallback_routes_core_operations(temp: Path) -> None:
     with mock.patch.dict(os.environ, env, clear=False), \
             mock.patch.object(dbx, "cli_provider", return_value=blocked_cli), \
             mock.patch.object(dbx, "sdk_provider", return_value=ready_sdk), \
+            mock.patch.object(dbx, "provider_snapshot", return_value=setup_providers), \
             mock.patch.object(dbx.sdk, "call", side_effect=fake_sdk):
         with mock.patch.object(dbx, "provider_snapshot", return_value=setup_providers), \
                 mock.patch.object(dbx.cli_install, "attempt_cli_install", return_value={"status": "BLOCKED", "failure": "policy-blocked"}) as install, \
@@ -1021,7 +1451,9 @@ def test_sdk_worker_uses_pinned_official_api_contracts() -> None:
         request.setdefault("profile", "anvil-dev")
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with mock.patch.dict(sys.modules, modules), mock.patch("sys.stdin", io.StringIO(json.dumps(request))), \
+        owned_config_path = str(Path(tempfile.gettempdir()) / "anvil-sdk-worker-owned-config")
+        with mock.patch.dict(os.environ, {"DATABRICKS_CONFIG_FILE": owned_config_path}, clear=False), \
+                mock.patch.dict(sys.modules, modules), mock.patch("sys.stdin", io.StringIO(json.dumps(request))), \
                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = sdk_worker.main()
             check(code == expected_code, f"SDK worker returned an unexpected result for {request['operation']}: {stderr.getvalue()}")
@@ -1046,7 +1478,9 @@ def test_sdk_worker_uses_pinned_official_api_contracts() -> None:
           "SDK SQL parameters were not converted to the official typed request model")
     identity = invoke({"operation": "identity", "payload": {}})
     check(identity["identity"]["userName"] == "fixture-user"
-          and client_configurations[-1] == {"profile": "anvil-dev"},
+          and client_configurations[-1] == {
+              "profile": "anvil-dev", "config_file": str(Path(tempfile.gettempdir()) / "anvil-sdk-worker-owned-config"),
+              "http_timeout_seconds": 60, "retry_timeout_seconds": 120},
           "SDK worker did not use the Anvil-owned Unified Authentication profile")
     invoke({"operation": "identity", "profile": "dev", "payload": {}}, expected_code=1)
 
@@ -1167,10 +1601,11 @@ def test_repository_harness_and_legacy_scan() -> None:
     check("--sensitive" not in adapter and "auth token" not in adapter.casefold() and "auth env" not in adapter.casefold(), "Databricks adapter requests sensitive credential output")
 
     prior_release = (ROOT / "docs" / "versions" / "v2.2.md").read_text(encoding="utf-8")
-    current_release = (ROOT / "docs" / "versions" / "v2.3.md").read_text(encoding="utf-8")
+    current_release = (ROOT / "docs" / "versions" / "v2.6.0.md").read_text(encoding="utf-8")
     check("| Anvil 2.1 `AGENTS.md` | 4,790 | 1,198 | Baseline |" in prior_release, "old harness size is missing from the release report")
     check("| Anvil 2.2 `AGENTS.md` | 3,710 | 928 | 22.5% fewer bytes |" in prior_release, "historical 2.2 harness size is missing from its release report")
-    check(f"| Anvil 2.3 | {agents_size:,} | {round(agents_size / 4):,} |" in current_release, "current harness size/token estimate does not match the release report")
+    check(f"| Anvil 2.6 | {agents_size:,} | {round(agents_size / 4):,} |" in current_release,
+          "current harness size/token estimate does not match the release report")
 
 
 def main() -> int:
@@ -1193,6 +1628,16 @@ def main() -> int:
         test_sql_execution_bounds_and_errors(temp)
         test_system_catalog_discovery(temp)
         test_provider_resolver_and_path_regression(temp)
+        test_documented_cli_grammar()
+        test_readiness_state_machine_and_persisted_contract(temp)
+        test_hung_provider_cannot_be_promoted_ready(temp)
+        test_setup_interruption_preserves_active_configuration(temp)
+        test_ready_survives_a_clean_new_process(temp)
+        test_empty_core_lists_and_slow_valid_provider(temp)
+        test_fallback_and_shared_failure_policy(temp)
+        test_shared_network_auth_and_partial_permission(temp)
+        test_expired_auth_invalidates_previous_ready_state(temp)
+        test_process_runner_bounds_output_and_kills_child(temp)
         test_provider_state_dry_run_and_installer(temp)
         test_topology_auth_strategy_and_presenters()
         test_auth_executor_fakes(temp)

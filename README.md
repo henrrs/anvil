@@ -4,7 +4,7 @@
 >
 > **Better harness. Better execution.**
 
-Anvil 2.4.0 adds safe runtime quiescing, human-first command output, and topology-aware Databricks onboarding while keeping OpenCode 1/2 and provider-independent support.
+Anvil 2.6.0 makes Databricks readiness a verified runtime contract while keeping OpenCode 1/2 and provider-independent support.
 
 ```bash
 # First installation
@@ -36,7 +36,7 @@ make migrate-runtime OPENCODE_MAJOR=2 DRY_RUN=1
 make migrate-runtime OPENCODE_MAJOR=2
 ```
 
-Use `make inspect` to review the current setup before changing it. Use `make capabilities` to see local runtime features and provider availability; authentication and workspace reachability are not checked by inventory commands. Use `make rollback` to restore the latest verified snapshot according to its recorded scope. `make upgrade` upgrades Anvil without changing the OpenCode executable/version. Use `make update-runtime` for an explicit same-major runtime update and `make migrate-runtime OPENCODE_MAJOR=N` for an explicit major change.
+Use `make inspect` to review the current setup before changing it. Use `make capabilities` to see local runtime features and Databricks Supported / Available / Verified status; it does not contact a workspace. `make doctor` revalidates a configured Databricks profile with read-only identity, cluster-list, and warehouse-list calls. With no Anvil profile, doctor remains local and reports Databricks as not configured. Use `make rollback` to restore the latest verified snapshot according to its recorded scope. `make upgrade` upgrades Anvil without changing the OpenCode executable/version. Use `make update-runtime` for an explicit same-major runtime update and `make migrate-runtime OPENCODE_MAJOR=N` for an explicit major change.
 
 **Anvil — A lean, model-agnostic OpenCode harness designed to maximize reliable task completion while minimizing unnecessary context and token usage.**
 
@@ -83,7 +83,7 @@ Use `make databricks-setup DRY_RUN=1` to inspect the proposed actions and local 
 
 Human-readable output is the default for setup, doctor, and capabilities. Use `make databricks-setup OUTPUT=json` for the full structured result or `VERBOSE=1` for local provider diagnostics. Provider installation and workspace authentication happen only after explicitly running `make databricks-setup`.
 
-Anvil discovers a previously verified CLI by its absolute path even if a later shell has a different `PATH`. `make doctor` and `make capabilities` report PATH visibility, provider health, and the active provider per capability. Databricks capabilities still preserve Anvil 2.2's running-compute checks, bounded Python/SQL results, system-table read-only behavior, and no-silent-mutation rules. See [Databricks setup and provider docs](docs/databricks/README.md).
+Anvil discovers a previously verified CLI by its absolute path even if a later shell has a different `PATH`. `make doctor` reports live provider health and its last validation; `make capabilities` reports local inventory and cached capability evidence, which becomes stale after 15 minutes. Databricks setup reaches READY only after a production-path current-user check and verified cluster and warehouse list calls. Empty lists are valid; setup does not need running compute or SQL access. The wrapper keeps bounded Python/SQL results, system-table read-only behavior, and no-silent-mutation rules. See [Databricks setup, readiness, and provider docs](docs/databricks/README.md).
 
 Backups live under `$XDG_DATA_HOME/anvil/backups/` (default `~/.local/share/anvil/backups/`). Each snapshot records its scope. An Anvil-only backup restores config and Anvil metadata while preserving OpenCode executable/data/state; a runtime backup also includes OpenCode config, executable, data, and state. Runtime archives may contain sensitive session or authentication state.
 
@@ -111,4 +111,4 @@ Anvil configures one model-neutral `anvil` primary agent. No model is pinned; se
 
 ## Version history
 
-See the [Anvil 2.4.0 release notes](docs/versions/v2.4.0.md), [runtime capability matrix](docs/versions/README.md), [V1 history](docs/versions/v1.md), [V2 release notes](docs/versions/v2.md), [Anvil 2.1 release notes](docs/versions/v2.1.md), [Anvil 2.2 release notes](docs/versions/v2.2.md), [Anvil 2.3 release notes](docs/versions/v2.3.md), [runtime compatibility](docs/runtime-compatibility.md), [V1-to-V2 migration guide](docs/migrations/v1-to-v2.md), [Anvil 2.0-to-2.1 migration guide](docs/migrations/v2-to-v2.1.md), [Anvil 2.1-to-2.2 migration guide](docs/migrations/v2.1-to-v2.2.md), [Anvil 2.2-to-2.3 migration guide](docs/migrations/v2.2-to-v2.3.md), [2.3-to-2.3.1 migration guide](docs/migrations/v2.3-to-v2.3.1.md), [2.3.1-to-2.4.0 migration guide](docs/migrations/v2.3.1-to-v2.4.0.md), [memory behavior](docs/memory.md), and [OpenCode compatibility](docs/opencode-compatibility.md).
+See the [Anvil 2.6.0 release notes](docs/versions/v2.6.0.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [V1 history](docs/versions/v1.md), [V2 release notes](docs/versions/v2.md), [Anvil 2.1 release notes](docs/versions/v2.1.md), [Anvil 2.2 release notes](docs/versions/v2.2.md), [Anvil 2.3 release notes](docs/versions/v2.3.md), [runtime compatibility](docs/runtime-compatibility.md), [V1-to-V2 migration guide](docs/migrations/v1-to-v2.md), [Anvil 2.0-to-2.1 migration guide](docs/migrations/v2-to-v2.1.md), [Anvil 2.1-to-2.2 migration guide](docs/migrations/v2.1-to-v2.2.md), [Anvil 2.2-to-2.3 migration guide](docs/migrations/v2.2-to-v2.3.md), [2.3-to-2.3.1 migration guide](docs/migrations/v2.3-to-v2.3.1.md), [2.3.1-to-2.4.0 migration guide](docs/migrations/v2.3.1-to-v2.4.0.md), [2.4.0-to-2.5.0 migration guide](docs/migrations/v2.4.0-to-v2.5.0.md), [memory behavior](docs/memory.md), and [OpenCode compatibility](docs/opencode-compatibility.md).

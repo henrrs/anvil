@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import select
+import signal
 import shutil
 import subprocess
 import sys
@@ -12,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import owned_config
+from . import owned_config, process, timeouts
 
 
 def azure_cli_status(timeout: float = 5) -> tuple[bool, bool]:
@@ -20,18 +21,18 @@ def azure_cli_status(timeout: float = 5) -> tuple[bool, bool]:
     if not executable:
         return False, False
     try:
-        result = subprocess.run([executable, "account", "show", "--only-show-errors", "--output", "json"],
-                                capture_output=True, text=True, timeout=timeout, check=False,
-                                env=owned_config.azure_login_environment())
+        result = process.run([executable, "account", "show", "--only-show-errors", "--output", "json"],
+                             timeout=timeout, env=owned_config.azure_login_environment())
         value = json.loads(result.stdout) if result.returncode == 0 else None
         return True, isinstance(value, dict) and bool(value.get("id"))
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+    except (OSError, subprocess.SubprocessError, process.ProcessFailure, json.JSONDecodeError):
         return True, False
 
 
 def _timeout() -> float:
     try:
-        return max(10.0, min(180.0, float(os.environ.get("ANVIL_AUTH_TIMEOUT", "90"))))
+        return max(10.0, min(timeouts.seconds_for("interactive_auth_idle"),
+                             float(os.environ.get("ANVIL_AUTH_TIMEOUT", "90"))))
     except ValueError:
         return 90.0
 
@@ -47,8 +48,10 @@ def _run_interactive(command: list[str], timeout: float, *, env: dict[str, str] 
     import pty
 
     master, slave = pty.openpty()
+    started = time.monotonic()
     try:
-        process = subprocess.Popen(command, stdin=None, stdout=slave, stderr=slave, close_fds=True, env=env)
+        process = subprocess.Popen(command, stdin=None, stdout=slave, stderr=slave, close_fds=True, env=env,
+                                   start_new_session=True)
     except BaseException:
         os.close(master)
         os.close(slave)
@@ -79,20 +82,31 @@ def _run_interactive(command: list[str], timeout: float, *, env: dict[str, str] 
             code = process.poll()
             if code is not None and not open_pty:
                 return {"returncode": code}
-            if time.monotonic() - last_progress >= timeout:
-                process.terminate()
+            idle_too_long = time.monotonic() - last_progress >= timeout
+            total_too_long = time.monotonic() - started >= timeouts.seconds_for("interactive_auth_max")
+            if idle_too_long or total_too_long:
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
                 try:
                     process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    process.kill()
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                     process.wait(timeout=2)
                 return {"timeout": True}
     except KeyboardInterrupt:
         try:
-            process.send_signal(2)
+            os.killpg(process.pid, signal.SIGINT)
             process.wait(timeout=2)
         except (OSError, subprocess.TimeoutExpired):
-            process.kill()
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             process.wait(timeout=2)
         raise
     finally:

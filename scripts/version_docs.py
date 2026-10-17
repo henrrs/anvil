@@ -28,6 +28,7 @@ def main() -> int:
         "docs/migrations/v2.2-to-v2.3.md": ["make databricks-setup", "DRY_RUN=1", "SDK fallback", "rollback", "OpenCode major"],
         "docs/migrations/v2.3-to-v2.3.1.md": ["make upgrade", "make update-runtime", "OpenCode release endpoint", "Network required NO", "rollback"],
         "docs/migrations/v2.3.1-to-v2.4.0.md": ["make upgrade DRY_RUN=1", "SIGTERM", "SIGKILL", "make databricks-setup", "OUTPUT=json", "external terminal"],
+        "docs/migrations/v2.5.0-to-v2.6.0.md": ["make upgrade", "make doctor", "make capabilities", "schema 3", "read-only"],
         "docs/runtime-compatibility.md": ["1.18.18", "2.0.0", "opencode-v1", "opencode-v2", "offline profile fixture", "minimum supported CLI", "1.0.0", "make update-runtime", "exact validated OpenCode executable"],
         "docs/RELEASING.md": ["PATCH", "MINOR", "MAJOR", "make test", "offline", "runtime compatibility", "runtime independence"],
         "docs/opencode-compatibility.md": ["dist-tag", "migrate-v1", "npm", "OpenCode 1.x and 2.x", "local CLI fixtures"],
@@ -40,6 +41,8 @@ def main() -> int:
         "docs/databricks/finops.md": ["Evidence Confidence Score", "shared all-purpose", "not a total cloud bill"],
         "docs/databricks/security.md": ["token", "system-table", "silently", "credential"],
         "docs/databricks/testing.md": ["offline", "tests/fixtures/bin/databricks", "do not resolve/download OpenCode", "topology-aware auth selection", "human/JSON presentation"],
+        "docs/databricks/readiness.md": ["CONFIGURED", "AUTHENTICATED", "WORKSPACE_VALIDATED", "CAPABILITIES_DISCOVERED", "CLI_PROCESS_TIMEOUT", "15 minutes", "process-group"],
+        "docs/decisions/ADR-0013-databricks-readiness-provider-validation.md": ["same production provider", "schema-3", "permission denials", "MINOR"],
     }
     errors = []
     for relative, phrases in required.items():

@@ -42,32 +42,90 @@ PROVIDER_LABELS = {
 
 def resolve(providers: dict[str, dict[str, Any]], *, auth_valid: bool,
             preferred_provider: str | None = None,
-            allowed_providers: set[str] | None = None) -> dict[str, dict[str, Any]]:
+            allowed_providers: set[str] | None = None,
+            provider_failures: dict[str, str] | None = None) -> dict[str, dict[str, Any]]:
     """Choose a provider per capability; assisted paths never count as headless."""
     result: dict[str, dict[str, Any]] = {}
     for capability, priority in CAPABILITY_ORDER.items():
         selected = None
         assisted = None
         ordered = tuple(dict.fromkeys(([preferred_provider] if preferred_provider else []) + list(priority)))
+        rejected: list[dict[str, str]] = []
         for name in ordered:
             if allowed_providers is not None and name not in allowed_providers:
+                if capability in PROVIDER_CAPABILITIES.get(name, set()):
+                    rejected.append({"provider": name, "reason": "blocked by selected authentication strategy"})
                 continue
             state = providers.get(name, {})
             if capability not in PROVIDER_CAPABILITIES.get(name, set()):
                 continue
             if name in {"cli", "sdk", "sql_connector", "connect"}:
-                if state.get("status") == "READY" and auth_valid:
+                provider_failure = (provider_failures or {}).get(name)
+                if state.get("status") == "READY" and auth_valid and not provider_failure:
                     selected = name
                     break
+                rejected.append({"provider": name,
+                                 "reason": provider_failure or str(state.get("failure") or state.get("status", "unavailable"))})
             elif name == "vscode" and state.get("status") == "AVAILABLE":
                 assisted = name
         if selected:
-            result[capability] = {"provider": selected, "state": "READY", "headless": True}
+            fallback_reason = (rejected[0]["reason"] if rejected
+                               and rejected[0]["provider"] == priority[0] else None)
+            result[capability] = {"provider": selected, "state": "READY", "headless": True,
+                                  "capability": capability, "selected_provider": selected,
+                                  "fallback_reason": fallback_reason,
+                                  "rejected_providers": rejected, "blocking_condition": None}
         elif assisted:
-            result[capability] = {"provider": assisted, "state": "ASSISTED", "headless": False}
+            result[capability] = {"provider": assisted, "state": "ASSISTED", "headless": False,
+                                  "capability": capability, "selected_provider": assisted,
+                                  "fallback_reason": None, "rejected_providers": rejected,
+                                  "blocking_condition": None}
         else:
-            result[capability] = {"provider": None, "state": "UNAVAILABLE", "headless": False}
+            result[capability] = {"provider": None, "state": "UNAVAILABLE", "headless": False,
+                                  "capability": capability, "selected_provider": None,
+                                  "fallback_reason": None, "rejected_providers": rejected,
+                                  "blocking_condition": (provider_failures or {}).get(
+                                      next((name for name in priority if name in (provider_failures or {})), ""))
+                                  or (rejected[0]["reason"] if rejected else "no compatible provider installed")}
     return result
+
+
+def candidates(capability: str, providers: dict[str, dict[str, Any]], *,
+               preferred_provider: str | None = None,
+               allowed_providers: set[str] | None = None) -> list[str]:
+    """Return a deterministic ordered list of installed, capable providers."""
+    priority = CAPABILITY_ORDER.get(capability, ())
+    ordered = tuple(dict.fromkeys(([preferred_provider] if preferred_provider else []) + list(priority)))
+    return [name for name in ordered
+            if (allowed_providers is None or name in allowed_providers)
+            and capability in PROVIDER_CAPABILITIES.get(name, set())
+            and providers.get(name, {}).get("status") == "READY"]
+
+
+def candidate_rejections(capability: str, providers: dict[str, dict[str, Any]], *,
+                         preferred_provider: str | None = None,
+                         allowed_providers: set[str] | None = None) -> list[dict[str, str]]:
+    """Explain capable providers excluded before any remote call is made."""
+    priority = CAPABILITY_ORDER.get(capability, ())
+    ordered = tuple(dict.fromkeys(([preferred_provider] if preferred_provider else []) + list(priority)))
+    rejected: list[dict[str, str]] = []
+    for name in ordered:
+        if capability not in PROVIDER_CAPABILITIES.get(name, set()):
+            continue
+        if allowed_providers is not None and name not in allowed_providers:
+            rejected.append({"provider": name, "category": "PROVIDER_BLOCKED",
+                             "reason": "not allowed by the selected authentication strategy"})
+            continue
+        state = providers.get(name, {})
+        if state.get("status") == "READY":
+            continue
+        status = str(state.get("status", "UNKNOWN"))
+        category = ("PROVIDER_NOT_INSTALLED" if status in {"NOT_INSTALLED", "UNKNOWN"}
+                    else "PROVIDER_BLOCKED" if status == "BLOCKED"
+                    else "PROVIDER_UNHEALTHY")
+        rejected.append({"provider": name, "category": category,
+                         "reason": str(state.get("failure") or status)})
+    return rejected
 
 
 def overall_state(providers: dict[str, dict[str, Any]], capabilities: dict[str, dict[str, Any]], *, auth_valid: bool) -> str:

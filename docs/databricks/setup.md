@@ -1,6 +1,6 @@
 # Databricks setup
 
-`make databricks-setup` is the explicit opt-in to configure Anvil's Databricks integration. Normal `make reforge`, `make upgrade`, `make doctor`, and `make capabilities` do not install Databricks clients or authenticate to a workspace.
+`make databricks-setup` is the explicit opt-in to configure Anvil's Databricks integration and interactive authentication. Normal `make reforge`, `make upgrade`, `make doctor`, and `make capabilities` do not install Databricks clients. Doctor performs bounded, read-only workspace checks only when an Anvil profile exists; capabilities remains local.
 
 ## Anvil-owned configuration
 
@@ -20,8 +20,9 @@ The flow is:
 2. prepare a supported CLI and/or isolated SDK during this explicit setup command;
 3. stage a private Anvil profile without replacing the active config;
 4. detect cloud and execution topology, then choose an authentication strategy;
-5. validate the staged profile and current user through the CLI or SDK;
-6. atomically activate the config and save non-secret ownership/provider metadata.
+5. validate the staged profile and current user through the production CLI/SDK adapter;
+6. list clusters and warehouses through that same adapter and validate their response shapes;
+7. atomically activate the config and save non-secret readiness/provider metadata only when core readiness is proven.
 
 If the active Anvil config is malformed, setup leaves it unchanged and reports `CONFIG_INVALID`. `make databricks-setup RESET=1` stages a clean Anvil config, validates it, keeps a private timestamped backup, and replaces only the Anvil-owned config. An existing config at Anvil's managed path without ownership metadata is ambiguous and is never overwritten, even with reset.
 
@@ -41,10 +42,10 @@ make databricks-setup
 make databricks-setup RESET=1
 ```
 
-Dry-run performs bounded local discovery and reports the Anvil-owned profile it plans to create. It does not contact GitHub, PyPI, Azure, or Databricks; install tools; authenticate; change `PATH`; or write Anvil state/config. It may report the number of external profiles for diagnostics but never uses them. A healthy owned profile is revalidated on repeat setup without another login or config rewrite.
+Dry-run performs bounded local discovery and reports the Anvil-owned profile it plans to create. It does not contact GitHub, PyPI, Azure, or Databricks; install tools; authenticate; change `PATH`; or write Anvil state/config. It may report the number of external profiles for diagnostics but never uses them. A healthy owned profile is revalidated on repeat setup without another login or config rewrite. A new profile is not activated as READY if identity or core resource discovery fails. Setup does not require a running cluster, SQL warehouse, or system-table access; an empty list is a successful result.
 
 Human-readable output is the default. Use `make databricks-setup OUTPUT=json` for structured results or `make databricks-setup VERBOSE=1` for local provider diagnostics. A CLI outside `PATH` is still usable by Anvil.
 
 ## Setup outcomes
 
-`READY` means an Anvil-owned profile validated the current identity and at least one core provider is healthy. `DEGRADED` means identity is valid but some capabilities lack a provider. `NOT_CONFIGURED` means workspace/authentication is still needed. A CLI binary by itself does not complete onboarding. Reforge and upgrade never install Databricks tools or probe workspace authentication.
+`READY` means current-user identity, workspace reachability, provider health, `clusters list`, and `warehouses list` all passed. `DEGRADED` means some core capability is usable but another is blocked, for example by a permission denial. `NOT_READY` means a required shared/provider check failed or no core capability was verified. `NOT_CONFIGURED` means no Anvil-owned workspace profile exists. A CLI binary or login state alone does not complete onboarding. Reforge and upgrade never install Databricks tools or probe workspace authentication.

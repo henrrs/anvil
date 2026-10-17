@@ -308,7 +308,7 @@ if [[ "${ANVIL_TEST_FAIL_DOCTOR:-0}" == 1 ]]; then
   anvil_error 'Injected post-upgrade doctor failure.'
   doctor_status=1
 else
-  bash "$ROOT/scripts/doctor.sh" || doctor_status=$?
+ANVIL_DOCTOR_LOCAL=1 bash "$ROOT/scripts/doctor.sh" || doctor_status=$?
 fi
 if (( doctor_status == 1 || doctor_status > 2 )); then
   anvil_error 'Post-upgrade doctor reported a broken installation.'

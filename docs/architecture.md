@@ -18,11 +18,11 @@ OpenCode 2 uses plural `agents` and `plugins` fields and ordered permissions. It
 
 ## Capabilities and progressive enhancement
 
-Callers use the central capability record rather than treating every Anvil release as one OpenCode generation. OpenCode 2 adds the local `anvil-core` plugin, native `anvil-knowledge` Reference, ordered permissions, bounded tool output, and structured stats JSON. OpenCode 1 uses its native config, commands/skills, and text stats; shared Python memory search and direct reads of explicitly named knowledge files provide the fallbacks. `scripts/capabilities.py` combines those runtime capabilities with local Databricks provider and saved-profile metadata in one text or JSON result. Inventory commands do not check authentication, identity, compute, warehouse, or system-catalog reachability.
+Callers use the central capability record rather than treating every Anvil release as one OpenCode generation. OpenCode 2 adds the local `anvil-core` plugin, native `anvil-knowledge` Reference, ordered permissions, bounded tool output, and structured stats JSON. OpenCode 1 uses its native config, commands/skills, and text stats; shared Python memory search and direct reads of explicitly named knowledge files provide the fallbacks. `scripts/capabilities.py` combines those runtime capabilities with local Databricks provider and saved-profile metadata in one text or JSON result. Inventory commands do not contact Databricks; they show cached capability evidence and mark it stale after 15 minutes.
 
 ## Public command presentation
 
-Databricks domain operations return structured results. `databricks_providers/presentation.py` formats those results for people, while `--format json` returns the structured result for scripts. `VERBOSE=1` adds provider diagnostics; default output emphasizes overall readiness, warnings, and next steps. Presenters do not own provider or auth decisions. Doctor answers whether the installation is healthy; capabilities reports what provider-backed actions are locally available and whether auth has been checked.
+Databricks domain operations return structured results. `databricks_providers/presentation.py` formats those results for people, while `--format json` returns the structured result for scripts. `VERBOSE=1` adds provider diagnostics; default output emphasizes readiness, warnings, and next steps. Presenters do not own provider or auth decisions. Setup, `status`, and doctor consume the same readiness engine. Doctor performs bounded, read-only identity and core-list requests when a profile exists; with no Anvil profile it remains local and reports `NOT_CONFIGURED`. Capabilities remains local and reports Supported, Available, and Verified separately.
 
 The V2 plugin uses the OpenCode 2 API to register only bounded, read-only `anvil_memory_search`. It does not add context hooks, prompt mutation, model routing, retries, memory writes, or custom compaction. Capabilities are visible through `make capabilities` and `make doctor`.
 
@@ -32,11 +32,24 @@ Five native lazy skills cover memory, Spark performance, Delta Lake, Databricks,
 
 ## Databricks capability
 
-Anvil 2.5's optional Databricks capability uses a per-capability resolver with an Anvil-owned configuration boundary. Setup gathers a workspace URL and environment label, stages `${XDG_CONFIG_HOME:-$HOME/.config}/anvil/databricks/databrickscfg`, creates an `anvil-*` profile, resolves cloud and topology, authenticates, validates the staged profile, and only then atomically activates it. External `.databrickscfg` profiles are diagnostic-only; they are never adopted, modified, or reauthenticated by Anvil. Existing Anvil provider metadata is stored separately in `anvil/databricks.json` and records profile ownership, workspace, authentication strategy, and provider without credentials.
+Anvil 2.6's optional Databricks capability uses a per-capability resolver with an Anvil-owned configuration boundary. Setup gathers a workspace URL and environment label, stages `${XDG_CONFIG_HOME:-$HOME/.config}/anvil/databricks/databrickscfg`, creates an `anvil-*` profile, resolves cloud and topology, authenticates, validates the staged profile, and only then atomically activates it. External `.databrickscfg` profiles are diagnostic-only; they are never adopted, modified, or reauthenticated by Anvil. Existing Anvil provider metadata is stored separately in `anvil/databricks.json` and records profile ownership, workspace, authentication strategy, and provider without credentials.
 
 The CLI and Python SDK run with the same `DATABRICKS_CONFIG_FILE` and selected `DATABRICKS_CONFIG_PROFILE`. The shared environment wrapper removes inherited `DATABRICKS_*` values from Anvil child processes, so a user token or host override cannot silently supersede the selected Anvil profile. Azure workspaces prefer an existing Azure CLI session; remote contexts can use device-code login and local contexts can use Azure CLI interactive login. Databricks CLI OAuth U2M remains a supported fallback where topology permits it. Native CLI/SDK credential storage owns the resulting credentials. An optional SQL Connector uses its own supported OAuth U2M path because it does not consume the shared SDK profile; it remains a specialized provider. Databricks Connect is also specialized, and VS Code is assisted only.
 
-Databricks setup follows composable boundaries: `owned_config.py` owns config paths, environment isolation, staging and atomic writes; `topology.py` detects the execution context; `auth_strategy.py` selects a documented flow; `auth.py` runs official CLI/cloud authentication with a bounded progress watchdog; provider validation checks identity; and the presenter renders the result. Azure CLI auth is restricted to Azure workspaces and is configured as `auth_type=azure-cli` in the Anvil profile for supported Unified Authentication providers. Remote AWS/GCP or headless sessions do not select loopback browser auth. The official VS Code extension remains assisted; Anvil does not automate UI or inspect private IDE credentials.
+Databricks setup follows composable boundaries: `owned_config.py` owns config paths, environment isolation, staging and atomic writes; `topology.py` detects the execution context; `auth_strategy.py` selects a documented flow; `auth.py` runs official CLI/cloud authentication with a bounded progress watchdog; `readiness.py` advances explicit readiness states; and the presenter renders the result. Setup and a later session share `json_from_cli`, the deterministic resolver, normalized errors, the child environment, operation-specific timeouts, and bounded process runner. READY requires identity validation plus verified cluster-list and warehouse-list results; running compute and SQL/system-table access are not required. Azure CLI auth is restricted to Azure workspaces and is configured as `auth_type=azure-cli` in the Anvil profile for supported Unified Authentication providers. Remote AWS/GCP or headless sessions do not select loopback browser auth. The official VS Code extension remains assisted; Anvil does not automate UI or inspect private IDE credentials.
+
+Readiness advances only with evidence at each transition:
+
+```text
+CONFIGURED
+  → AUTHENTICATED
+  → WORKSPACE_VALIDATED
+  → PROVIDER_VALIDATED
+  → CAPABILITIES_DISCOVERED
+  → READY
+```
+
+Configuration validation proves the Anvil-owned profile and host; authentication validation proves the intended credentials work; workspace validation requires a current-user response for that host; provider validation requires a production adapter call; capability discovery verifies both cluster and warehouse lists. A successful empty list is valid. Permissions remain attached to the individual capability. See the [readiness contract](databricks/readiness.md) for error scopes, fallback rules, freshness, and timeout budgets.
 
 CLI installation is attempted only by an explicit `make databricks-setup`; the user-local executable is downloaded from official releases and SHA-256 checked. General reforge and upgrade flows neither install Databricks clients nor probe workspace auth. Discovery remembers a verified absolute CLI path and reports whether it is visible through the current `PATH`. Provider health is revalidated when used. The integration works with OpenCode 1 and 2 and adds no plugin, MCP, or model dependency.
 
@@ -53,7 +66,7 @@ The Databricks skill references a dated official system-table snapshot, focused 
 | `make upgrade` | No | No; config and Anvil metadata only | No | No |
 | `make update-runtime` | Yes | Yes | Yes | Yes, same major |
 | `make migrate-runtime OPENCODE_MAJOR=N` | Yes | Yes | Yes | Yes, requested major |
-| `make doctor` | No | No | No | No |
+| `make doctor` | Conditional* | No | No | No |
 | `make capabilities` | No | No | No | No |
 | `make stats` | No | No | No | No |
 | `make rollback` | No | Only when the selected backup has runtime scope | No | No |
@@ -64,7 +77,9 @@ The Databricks skill references a dated official system-table snapshot, focused 
 
 `make update-runtime` owns same-major runtime resolution and installation. It rehearses the new executable against the current config and copied user state, backs up runtime/config/data/state, installs the candidate, runs doctor, and rolls back on failure while retaining the installed Anvil release. `make migrate-runtime OPENCODE_MAJOR=N` is the explicit major change and also updates the Anvil config adapter required by that runtime. `make reforge` reuses the exact supported runtime already installed; only a genuinely fresh installation provisions OpenCode.
 
-`make inspect`, `make doctor`, and `make capabilities` use central local runtime discovery and local Databricks provider inventory. Authentication or workspace reachability is checked only by an explicit operation that requires it. Network-dependent runtime behavior is limited to fresh provisioning, `update-runtime`, and `migrate-runtime`.
+`make inspect`, `make doctor`, and `make capabilities` use central local runtime discovery. Doctor also probes Databricks read-only when an Anvil-owned profile is configured; without one, it stays local. `make capabilities` uses only local inventory and cached readiness evidence. Network-dependent runtime behavior is limited to fresh provisioning, `update-runtime`, and `migrate-runtime`; Databricks doctor requests are separate read-only workspace checks.
+
+`*` `make doctor` makes bounded read-only identity, cluster-list, and warehouse-list requests only when an Anvil Databricks profile exists. See the [readiness contract](databricks/readiness.md) for state transitions, fallback rules, and operation timeouts.
 
 ## Backup and rollback boundary
 

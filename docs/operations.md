@@ -4,7 +4,7 @@
 
 `make inspect` reports local Anvil/OpenCode versions, the absolute executable, runtime adapter and compatibility, PATH readiness, local provider inventory, config paths, agents, skills, plugins, MCPs and commands, and current workspace overrides. It does not contact release services or a Databricks workspace.
 
-`make capabilities` answers which features are available on the detected runtime. `FORMAT=json make capabilities` emits machine-readable JSON. `make doctor` answers whether the installed Anvil/runtime combination is healthy.
+`make capabilities` answers which features are available on the detected runtime. `FORMAT=json make capabilities` emits machine-readable JSON. `make doctor` answers whether the installed Anvil/runtime combination and configured Databricks integration are healthy. Doctor performs read-only identity and core metadata requests only when an Anvil-owned Databricks profile exists; with no profile it stays local.
 
 ## Upgrade Anvil
 
@@ -15,7 +15,7 @@ make upgrade
 make doctor
 ```
 
-`make upgrade` upgrades Anvil only and preserves the exact validated OpenCode executable and version. It uses local runtime discovery, builds the matching Anvil config, and rehearses with the local runtime against copied config, OpenCode data/state, and Anvil Markdown memory under a temporary HOME/XDG tree. It does not resolve a release, download or install OpenCode, edit `PATH`, or change OpenCode data/state. It creates an Anvil-scoped backup, applies Anvil files and metadata, and runs local doctor. Failed postflight checks restore Anvil config/metadata while leaving OpenCode untouched.
+`make upgrade` upgrades Anvil only and preserves the exact validated OpenCode executable and version. It uses local runtime discovery, builds the matching Anvil config, and rehearses with the local runtime against copied config, OpenCode data/state, and Anvil Markdown memory under a temporary HOME/XDG tree. It does not resolve a release, download or install OpenCode, edit `PATH`, contact Databricks, or change OpenCode data/state. It creates an Anvil-scoped backup, applies Anvil files and metadata, and runs doctor in local-only postflight mode. Failed postflight checks restore Anvil config/metadata while leaving OpenCode untouched.
 
 `make upgrade DRY_RUN=1` is fully local and stops after rehearsal before a live backup or file change. It prints `Network required NO` and `PRESERVE EXACT VERSION`. Set `ANVIL_YES=1` only for reviewed non-interactive runs.
 
@@ -49,7 +49,7 @@ OpenCode 1 stable candidates come from official GitHub releases and are checked 
 
 ## Doctor and stats
 
-`make doctor` checks Anvil release metadata, local runtime support/profile, matching config adapter, agent policy, commands/skills, memory, knowledge access, source-registry validity/drift, migration metadata, local Databricks provider inventory, and visible project overrides. Databricks authentication, identity, compute, warehouses, and system catalog are reported as not checked. Doctor does not use OpenCode release services or contact a workspace. It reports `HEALTHY`, `WARNING`, or `BROKEN` with exit codes `0`, `2`, and `1`. A supported older Anvil install is reported as `UPGRADE AVAILABLE` with exit code `0`.
+`make doctor` checks Anvil release metadata, local runtime support/profile, matching config adapter, agent policy, commands/skills, memory, knowledge access, source-registry validity/drift, migration metadata, Databricks readiness, and visible project overrides. With a configured Anvil profile it validates current identity, cluster listing, and warehouse listing using bounded read-only calls. A missing profile is reported as `NOT_CONFIGURED` without network access. Doctor does not use OpenCode release services. Lifecycle postflight sets `ANVIL_DOCTOR_LOCAL=1` to avoid workspace requests. It reports `HEALTHY`, `WARNING`, or `BROKEN` for the Anvil/runtime installation with exit codes `0`, `2`, and `1`; Databricks readiness is printed as its own domain result. A supported older Anvil install is reported as `UPGRADE AVAILABLE` with exit code `0`.
 
 `make stats` uses the detected runtime's native output. OpenCode 1 provides terminal text; OpenCode 2 provides structured JSON that Anvil formats. If stats are unavailable or fail, Anvil prints a notice and exits successfully without inventing token or cost values. No separate usage database is created.
 

@@ -5,6 +5,32 @@ from __future__ import annotations
 from typing import Any
 
 
+def _failure_impact(readiness: dict[str, Any]) -> str | None:
+    auth = readiness.get("authentication") if isinstance(readiness.get("authentication"), dict) else {}
+    workspace = readiness.get("workspace") if isinstance(readiness.get("workspace"), dict) else {}
+    if auth.get("status") != "READY" or workspace.get("status") != "READY":
+        return "Workspace identity and core resource availability could not be verified."
+    capabilities = readiness.get("capabilities") if isinstance(readiness.get("capabilities"), dict) else {}
+    labels = {"compute.list": "cluster discovery", "warehouse.list": "SQL warehouse discovery"}
+    blocked = [label for name, label in labels.items()
+               if not (isinstance(capabilities.get(name), dict)
+                       and capabilities[name].get("verified") is True)]
+    if not blocked:
+        return None
+    label = blocked[0][0].upper() + blocked[0][1:]
+    return f"{', '.join([label, *blocked[1:]])} could not be verified."
+
+
+def _failure_next_step(readiness: dict[str, Any]) -> str:
+    blockers = readiness.get("blockers") if isinstance(readiness.get("blockers"), list) else []
+    category = str(blockers[0].get("category", "")) if blockers and isinstance(blockers[0], dict) else ""
+    if category in {"AUTH_REQUIRED", "AUTH_INVALID", "AUTH_TIMEOUT", "AUTH_CANCELLED"}:
+        return "Run make databricks-setup to validate or repair authentication."
+    if category in {"WORKSPACE_NETWORK_TIMEOUT", "WORKSPACE_UNREACHABLE"}:
+        return "Check workspace connectivity, then rerun make doctor."
+    return "Review the provider or capability blocker, then rerun make doctor."
+
+
 def _cli_state(result: dict[str, Any]) -> str:
     providers = result.get("providers", {})
     return str(providers.get("cli", {}).get("status", "NOT_INSTALLED"))
@@ -19,6 +45,7 @@ def setup_text(result: dict[str, Any], *, verbose: bool = False) -> str:
     sdk = providers.get("sdk", {})
     vscode = providers.get("vscode", {})
     overall = result.get("overall", "NOT_CONFIGURED")
+    readiness = result.get("readiness") if isinstance(result.get("readiness"), dict) else {}
     topology = result.get("topology", {}).get("kind", "unknown")
     workspace = result.get("workspace_host") or "not configured"
     profile = result.get("profile") or result.get("selected_profile") or "anvil-dev"
@@ -47,15 +74,29 @@ def setup_text(result: dict[str, Any], *, verbose: bool = False) -> str:
         lines.append("")
         if overall == "READY":
             lines += ["✓ Anvil-owned profile ready", "✓ Authentication validated", "✓ Workspace identity validated",
-                      "✓ Databricks provider ready"]
+                      "✓ Databricks provider ready", "✓ Core capabilities discovered"]
+            lines += ["", "This configuration was verified through the same provider path used by normal Anvil sessions."]
         elif overall == "DEGRADED":
             lines += ["✓ Anvil-owned profile ready", "✓ Authentication validated", "✓ Workspace identity validated",
                       "Databricks providers are partially available"]
         else:
-            lines += ["Databricks is not configured yet."]
-        selected_provider = auth.get("provider") or ("cli" if cli.get("status") == "READY" else "sdk" if sdk.get("status") == "READY" else None)
-        lines += ["", "Authentication", f"  Method               {str(auth.get('strategy', 'not configured')).replace('-', ' ')}",
-                  f"  Status               {'READY' if overall in {'READY', 'DEGRADED'} else 'NOT_CONFIGURED'}"]
+            lines += ["Anvil has not marked this integration READY."]
+        provider_record = readiness.get("provider") if isinstance(readiness.get("provider"), dict) else {}
+        selected_provider = (provider_record.get("selected") or auth.get("provider")
+                             or ("cli" if cli.get("status") == "READY" else
+                                 "sdk" if sdk.get("status") == "READY" else None))
+        authentication_record = readiness.get("authentication") if isinstance(readiness.get("authentication"), dict) else {}
+        workspace_record = readiness.get("workspace") if isinstance(readiness.get("workspace"), dict) else {}
+        configuration_record = readiness.get("configuration") if isinstance(readiness.get("configuration"), dict) else {}
+        lines += ["", "Readiness",
+                  f"  Configuration        {configuration_record.get('status', 'READY' if result.get('profile') else 'NOT_CONFIGURED')}",
+                  f"  Authentication       {authentication_record.get('status', 'READY' if overall in {'READY', 'DEGRADED'} else 'NOT_VALIDATED')}",
+                  f"  Workspace             {workspace_record.get('status', 'READY' if overall in {'READY', 'DEGRADED'} else 'NOT_VALIDATED')}",
+                  f"  Primary provider      {'Databricks CLI' if selected_provider == 'cli' else 'Python SDK' if selected_provider == 'sdk' else 'none'}",
+                  f"  Provider health       {provider_record.get('status', 'READY' if overall in {'READY', 'DEGRADED'} else 'NOT_VALIDATED')}",
+                  f"  Core capabilities     {'READY' if overall == 'READY' else 'PARTIAL' if overall == 'DEGRADED' else 'NOT_VERIFIED'}",
+                  "", "Authentication",
+                  f"  Method               {str(auth.get('strategy', 'not configured')).replace('-', ' ')}"]
         if selected_provider and selected_provider != "preferred":
             lines += ["", "Execution", f"  Primary provider     {'Databricks CLI' if selected_provider == 'cli' else 'Python SDK'}",
                       f"  SDK fallback         {'available' if sdk.get('status') == 'READY' and selected_provider == 'cli' else 'not needed' if selected_provider == 'cli' else 'active'}"]
@@ -66,10 +107,23 @@ def setup_text(result: dict[str, Any], *, verbose: bool = False) -> str:
             lines += ["", "Environment isolation", "  External DATABRICKS_* settings isolated:",
                       "  " + ", ".join(conflicts)]
         next_step = result.get("next_step")
+        blockers = result.get("blockers") or readiness.get("blockers") or []
+        if blockers and isinstance(blockers[0], dict):
+            blocker = blockers[0]
+            lines += ["", "Root issue", f"  {blocker.get('summary') or blocker.get('category', 'Readiness check failed')}" ]
+            impact = _failure_impact(readiness)
+            if impact:
+                lines += ["", "Impact", f"  {impact}"]
+            if not next_step:
+                next_step = _failure_next_step(readiness)
         if next_step:
             lines += ["", "Next step", f"  {next_step}"]
-        if result.get("auth_error"):
-            category = str(result["auth_error"])
+        auth_error = result.get("auth_error")
+        if auth_error and (not readiness or auth_error in {
+                "AUTH_CANCELLED", "AUTH_TIMEOUT", "AUTH_REQUIRED", "AUTH_INVALID",
+                "AUTH_PROVIDER_UNAVAILABLE", "IDENTITY_INVALID", "PROFILE_INVALID",
+                "PROFILE_VALIDATION_FAILED", "WORKSPACE_UNREACHABLE"}):
+            category = str(auth_error)
             message = {
                 "AUTH_CANCELLED": "Authentication was cancelled.",
                 "AUTH_TIMEOUT": "The supported login flow did not complete before its timeout.",
@@ -145,25 +199,45 @@ def setup_error_text(category: str) -> str:
 
 def doctor_text(value: dict[str, Any], *, verbose: bool = False) -> str:
     overall = value.get("overall", "NOT_CONFIGURED")
-    if value.get("auth_checked") is False:
-        status = "not checked (local inventory only)"
-    elif value.get("profile_valid") is True:
-        status = "valid"
-    else:
-        status = "not configured"
+    readiness = value.get("readiness") if isinstance(value.get("readiness"), dict) else {}
+    authentication = readiness.get("authentication") if isinstance(readiness.get("authentication"), dict) else {}
+    workspace = readiness.get("workspace") if isinstance(readiness.get("workspace"), dict) else {}
+    provider_state = readiness.get("provider") if isinstance(readiness.get("provider"), dict) else {}
+    configuration = readiness.get("configuration") if isinstance(readiness.get("configuration"), dict) else {}
     profile = value.get("selected_profile")
-    lines = ["Databricks", f"  Status               {overall}", "", "Anvil configuration",
-             f"  Profile              {profile or 'not configured'}",
-             f"  Workspace            {'configured' if value.get('workspace_host') else 'not configured'}",
-             f"  Authentication       {value.get('authentication_strategy') or status}"]
+    primary = provider_state.get("selected") or ("cli" if value.get("cli_supported") else
+                                                   "sdk" if value.get("sdk_installed") else "none")
+    primary_label = {"cli": "Databricks CLI", "sdk": "Python SDK", "none": "none"}.get(primary, str(primary))
+    if value.get("auth_checked") is False:
+        auth_status = "NOT_CHECKED"
+    else:
+        auth_status = authentication.get("status", "NOT_CONFIGURED")
+    workspace_status = workspace.get("status", "NOT_CHECKED" if value.get("auth_checked") is False else "NOT_VALIDATED")
+    provider_health = provider_state.get("status", "NOT_CHECKED" if value.get("auth_checked") is False else "NOT_VALIDATED")
+    last_validation = readiness.get("validated_at") or value.get("last_validation") or "not validated"
+    overall_label = "STALE / UNHEALTHY" if overall == "STALE" else str(overall)
+    lines = ["Databricks", f"  Overall              {overall_label}", "",
+             "Readiness", f"  Configuration        {configuration.get('status', 'NOT_CONFIGURED')}",
+             f"  Authentication       {auth_status}", f"  Workspace             {workspace_status}",
+             f"  Primary provider      {primary_label}", f"  Provider health       {provider_health}",
+             f"  Last validation       {last_validation}", "",
+             "Anvil configuration", f"  Profile               {profile or 'not configured'}",
+             f"  Workspace             {'configured' if value.get('workspace_host') else 'not configured'}",
+             f"  Authentication method {value.get('authentication_strategy') or 'not configured'}"]
+    if value.get("readiness_stale"):
+        lines.append("  Readiness             cached result is stale; rerun Databricks status to validate it")
     if value.get("limitation"):
         lines.append(f"  Note                 {value['limitation']}")
+    blockers = readiness.get("blockers") if isinstance(readiness.get("blockers"), list) else []
+    if blockers and isinstance(blockers[0], dict):
+        blocker = blockers[0]
+        lines += ["", "Root issue", f"  {blocker.get('summary') or blocker.get('category', 'Readiness check failed')}" ]
+        impact = _failure_impact(readiness)
+        if impact:
+            lines += ["", "Impact", f"  {impact}", "", "Next step", f"  {_failure_next_step(readiness)}"]
     lines += ["", "External profiles",
               f"  Detected             {value.get('external_profiles_detected', 0)}",
               f"  Used by Anvil        {'YES' if value.get('external_profiles_used') else 'NO'}"]
-    provider = "Databricks CLI" if value.get("cli_supported") else "Python SDK" if value.get("sdk_installed") else "none"
-    if provider != "none":
-        lines.append(f"  Primary provider     {provider}")
     if value.get("cli_supported") and not value.get("cli_path_visible"):
         lines.append("  PATH                 CLI is ready for Anvil; direct shell PATH access is optional")
     if verbose:

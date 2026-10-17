@@ -8,11 +8,11 @@ import json
 import os
 import platform
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
+from . import owned_config, process, timeouts
 from .state import data_root
 
 
@@ -45,7 +45,8 @@ def _check_cli(path: str, *, discovered_by: str) -> dict[str, Any]:
             result["path_visible"] = bool(path_command and Path(path_command).resolve() == Path(absolute))
             result["discovered_by"] = discovered_by
             return result
-        result = subprocess.run([absolute, "-v"], capture_output=True, text=True, timeout=5, check=False)
+        result = process.run([absolute, "-v"], timeout=timeouts.seconds_for("cli_version"),
+                             env=owned_config.child_environment())
         output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
         version = parse_version(output)
         path_command = shutil.which("databricks")
@@ -65,7 +66,7 @@ def _check_cli(path: str, *, discovered_by: str) -> dict[str, Any]:
                    "absolute_usable": status == "READY"}
         _CLI_CACHE[cache_key] = dict(checked)
         return checked
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, process.ProcessFailure, ValueError):
         return {"status": "BROKEN", "installed": True, "executable": str(executable),
                 "version": None, "discovered_by": discovered_by, "path_visible": False,
                 "absolute_usable": False}
@@ -118,9 +119,9 @@ def discover_cli(state: dict[str, Any]) -> dict[str, Any]:
 
 def python_version(python: str) -> str | None:
     try:
-        result = subprocess.run([python, "-c", "import importlib.metadata as m; print(m.version('databricks-sdk'))"],
-                                capture_output=True, text=True, timeout=8, check=False)
-    except (OSError, subprocess.SubprocessError):
+        result = process.run([python, "-c", "import importlib.metadata as m; print(m.version('databricks-sdk'))"],
+                             timeout=8, env=owned_config.child_environment())
+    except (OSError, process.ProcessFailure, ValueError):
         return None
     if result.returncode:
         return None
@@ -162,8 +163,9 @@ def discover_sdk(state: dict[str, Any]) -> dict[str, Any]:
 def _module_available(python: str, module: str) -> bool:
     code = "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec(sys.argv[1]) else 1)"
     try:
-        return subprocess.run([python, "-c", code, module], capture_output=True, timeout=8, check=False).returncode == 0
-    except (OSError, subprocess.SubprocessError):
+        return process.run([python, "-c", code, module], timeout=8,
+                           env=owned_config.child_environment()).returncode == 0
+    except (OSError, process.ProcessFailure, ValueError):
         return False
 
 
@@ -179,8 +181,9 @@ def _vscode() -> dict[str, Any]:
         _VSCODE_CACHE = (key, result)
         return dict(result)
     try:
-        result = subprocess.run([code, "--list-extensions"], capture_output=True, text=True, timeout=12, check=False)
-    except (OSError, subprocess.SubprocessError):
+        result = process.run([code, "--list-extensions"], timeout=12,
+                             env=owned_config.child_environment())
+    except (OSError, process.ProcessFailure, ValueError):
         result = {"status": "UNKNOWN", "available": True, "extension": "UNKNOWN", "code": str(Path(code).resolve())}
         _VSCODE_CACHE = (key, result)
         return dict(result)

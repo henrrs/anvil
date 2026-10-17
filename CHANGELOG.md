@@ -2,6 +2,34 @@
 
 Release notes for user-visible Anvil changes. See [version history](docs/versions/README.md) and [release discipline](docs/RELEASING.md).
 
+## [2.6.0] - 2026-10-16
+
+### Added
+
+- One Databricks readiness state machine for setup, status, and doctor, with explicit configuration, authentication, workspace, provider, and core-capability evidence.
+- Cross-session production-path validation for the current-user, cluster-list, and warehouse-list operations before a new profile can become active and READY.
+- Provider error scopes and deterministic CLI-to-SDK fallback only for provider-specific failures; shared authentication, network, and permission failures retain their root cause.
+- Operation-specific timeout policies, bounded subprocess output, process-group cleanup, fresh readiness timestamps, and a 15-minute local readiness freshness window.
+- A stable JSON command grammar documented by the Databricks skill and parser contract tests.
+
+### Changed
+
+- Databricks provider state moves to schema 3 and validates that READY includes fresh identity/provider evidence and verified clusters/warehouses checks; legacy state migrates lazily without rewriting credentials.
+- `make doctor` performs the same read-only Databricks readiness probe as `databricks.py status` when an Anvil profile exists. With no profile, it remains local and reports NOT_CONFIGURED.
+- `make capabilities` keeps local-only behavior and distinguishes Supported, Available, and Verified, marking cached evidence stale after its freshness window.
+- Provider status and operation failures now retain capability-specific blockers instead of converting every failure into an authentication or network diagnosis.
+
+### Fixed
+
+- Setup can no longer report READY from profile existence, auth strategy, or current-user identity alone when a fresh session cannot list the mandatory core resources.
+- A timed-out provider process and its child processes are terminated, and failed candidate configuration is not promoted.
+- Empty cluster and warehouse lists count as verified successful results; a permission failure on one list does not invalidate authentication or another working capability.
+- SDK calls explicitly load the Anvil-owned config file and profile, so ambient Databricks config selectors cannot hijack a clean session.
+
+### Release choice and validation
+
+This is a MINOR release because Databricks readiness semantics and persisted state schema are made explicit while existing commands remain compatible and legacy metadata is migrated lazily. Offline regression coverage includes clean-process revalidation, false-READY prevention, process cleanup, empty results, shared-failure propagation, selective fallback, permission-scoped partial readiness, and the documented command grammar. No live Databricks workspace or cloud login was used.
+
 ## [2.5.0] - 2026-10-16
 
 ### Added

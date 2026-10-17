@@ -48,8 +48,21 @@ def main() -> int:
         finally:
             connection.close()
     except Exception as exc:
-        category = type(exc).__name__
-        print(json.dumps({"error": category + ": SQL query failed; check permissions, authentication, and network access"}), file=sys.stderr)
+        exception_type = type(exc).__name__
+        vendor_code = getattr(exc, "error_code", None)
+        status_code = getattr(exc, "status_code", None)
+        if vendor_code == "PERMISSION_DENIED" or status_code == 403 or exception_type == "PermissionDenied":
+            category = "PERMISSION_DENIED"
+        elif vendor_code in {"UNAUTHENTICATED", "INVALID_ACCESS_TOKEN"} or status_code == 401:
+            category = "AUTH_INVALID"
+        elif exception_type in {"ReadTimeout", "ConnectTimeout", "TimeoutError"}:
+            category = "WORKSPACE_NETWORK_TIMEOUT"
+        elif exception_type == "ConnectionError" or (isinstance(status_code, int) and status_code >= 500):
+            category = "WORKSPACE_UNREACHABLE"
+        else:
+            category = "PROVIDER_UNHEALTHY"
+        print(json.dumps({"error": {"category": category, "summary": "SQL Connector request failed"}}),
+              file=sys.stderr)
         return 1
 
 

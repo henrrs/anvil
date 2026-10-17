@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 FORBIDDEN_KEYS = {
     "token", "access_token", "refresh_token", "password", "client_secret",
     "secret", "credential", "credentials", "signed_url", "signedurl",
@@ -44,13 +44,48 @@ def _validate_secret_free(value: Any) -> None:
             _validate_secret_free(child)
 
 
+def _validate_readiness(readiness: Any) -> None:
+    stages = {"NOT_CONFIGURED", "CONFIGURED", "AUTHENTICATED", "WORKSPACE_VALIDATED",
+              "PROVIDER_VALIDATED", "CAPABILITIES_DISCOVERED", "READY"}
+    overall = {"NOT_CONFIGURED", "NOT_READY", "DEGRADED", "READY", "STALE"}
+    if (not isinstance(readiness, dict)
+            or readiness.get("state") not in stages
+            or readiness.get("overall") not in overall
+            or not isinstance(readiness.get("validated_at"), str)
+            or not isinstance(readiness.get("authentication"), dict)
+            or not isinstance(readiness.get("workspace"), dict)
+            or not isinstance(readiness.get("provider"), dict)
+            or not isinstance(readiness.get("capabilities"), dict)):
+        raise ValueError("Anvil Databricks provider state has invalid readiness metadata")
+    if readiness.get("overall") == "READY":
+        provider_record = readiness["provider"]
+        capabilities = readiness["capabilities"]
+        verified = all(
+            isinstance(capabilities.get(name), dict)
+            and capabilities[name].get("checked") is True
+            and capabilities[name].get("verified") is True
+            and isinstance(capabilities[name].get("provider"), str)
+            and isinstance(capabilities[name].get("validated_at"), str)
+            for name in ("compute.list", "warehouse.list")
+        )
+        if (readiness.get("state") != "READY"
+                or readiness.get("authentication", {}).get("status") != "READY"
+                or readiness.get("workspace", {}).get("status") != "READY"
+                or provider_record.get("status") != "READY"
+                or provider_record.get("selected") not in {"cli", "sdk"}
+                or not isinstance(provider_record.get("validation_probe"), str)
+                or not isinstance(provider_record.get("validated_at"), str)
+                or not verified):
+            raise ValueError("READY Databricks state requires fresh provider and core capability validation evidence")
+
+
 def load_state() -> dict[str, Any]:
     try:
         value = json.loads(state_path().read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {"schema_version": SCHEMA_VERSION, "selected_profile": None, "workspace_host": None,
                 "providers": {}, "capabilities": {}, "authentication": None,
-                "profile": None, "workspace": None}
+                "profile": None, "workspace": None, "readiness": None}
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("Anvil Databricks provider state cannot be read") from exc
     if not isinstance(value, dict):
@@ -70,6 +105,7 @@ def load_state() -> dict[str, Any]:
     result.setdefault("authentication", None)
     result.setdefault("profile", None)
     result.setdefault("workspace", None)
+    result.setdefault("readiness", None)
     if not isinstance(result["providers"], dict) or not isinstance(result["capabilities"], dict):
         raise ValueError("Anvil Databricks provider state has invalid provider records")
     authentication = result["authentication"]
@@ -93,6 +129,9 @@ def load_state() -> dict[str, Any]:
         if (not isinstance(workspace, dict) or not isinstance(workspace.get("host"), str)
                 or not isinstance(workspace.get("environment"), str)):
             raise ValueError("Anvil Databricks provider state has invalid workspace metadata")
+    readiness = result["readiness"]
+    if readiness is not None:
+        _validate_readiness(readiness)
     return result
 
 
@@ -103,6 +142,8 @@ def save_state(value: dict[str, Any]) -> Path:
     result["schema_version"] = SCHEMA_VERSION
     result["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     _validate_secret_free(result)
+    if result.get("readiness") is not None:
+        _validate_readiness(result["readiness"])
     path = state_path()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(path.parent, 0o700)
@@ -116,6 +157,11 @@ def save_state(value: dict[str, Any]) -> Path:
             os.fsync(stream.fileno())
         os.replace(temporary, path)
         os.chmod(path, 0o600)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     except BaseException:
         try:
             os.unlink(temporary)

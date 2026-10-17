@@ -232,7 +232,7 @@ if [[ "$runtime_action" == install ]]; then recorded_binary="$ANVIL_INSTALLED_BI
 python3 "$ROOT/scripts/runtime_state.py" record --binary "$recorded_binary" >/dev/null
 
 doctor_status=0
-bash "$ROOT/scripts/doctor.sh" || doctor_status=$?
+ANVIL_DOCTOR_LOCAL=1 bash "$ROOT/scripts/doctor.sh" || doctor_status=$?
 if (( doctor_status == 1 || doctor_status > 2 )); then
   anvil_error 'Postflight doctor reported a broken installation.'
   false

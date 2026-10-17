@@ -7,6 +7,8 @@ import json
 import os
 import sys
 import configparser
+import time
+import subprocess
 from pathlib import Path
 
 
@@ -74,6 +76,23 @@ def output(value) -> None:
         print(json.dumps(value))
 
 
+def log_execution() -> None:
+    log_path = os.environ.get("ANVIL_DATABRICKS_EXECUTION_LOG")
+    if not log_path:
+        return
+    row = {"args": args, "config_file": os.environ.get("DATABRICKS_CONFIG_FILE"),
+           "config_profile": os.environ.get("DATABRICKS_CONFIG_PROFILE"),
+           "databricks_environment_names": sorted(key for key in os.environ
+                                                   if key.upper().startswith("DATABRICKS_"))}
+    path = Path(log_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(row) + "\n")
+
+
+log_execution()
+
+
 def profiles():
     parser = configparser.ConfigParser(interpolation=None, strict=False)
     parser.optionxform = str.lower
@@ -134,17 +153,59 @@ if args[:2] == ["auth", "login"]:
 
 if args[:3] == ["current-user", "me", "--output"]:
     if scenario == "auth_required" and not read_state("auth_login"):
-        print("authentication required", file=sys.stderr)
+        print(json.dumps({"error_code": "AUTH_REQUIRED"}), file=sys.stderr)
+        raise SystemExit(1)
+    if scenario == "auth_invalid":
+        print(json.dumps({"error_code": "INVALID_ACCESS_TOKEN"}), file=sys.stderr)
+        raise SystemExit(1)
+    if scenario == "workspace_network_failure":
+        print(json.dumps({"error_code": "WORKSPACE_NETWORK_TIMEOUT"}), file=sys.stderr)
         raise SystemExit(1)
     output(fixture("auth/current-user.json"))
     raise SystemExit(0)
 
 if args[:2] == ["clusters", "list"]:
+    if scenario == "auth_invalid":
+        print(json.dumps({"error_code": "INVALID_ACCESS_TOKEN"}), file=sys.stderr)
+        raise SystemExit(1)
+    if scenario in {"provider_hang", "clusters_timeout"}:
+        if scenario == "provider_hang":
+            child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(3600)"])
+            pid_path = os.environ.get("ANVIL_DATABRICKS_CHILD_PID")
+            if pid_path:
+                Path(pid_path).write_text(str(child.pid), encoding="utf-8")
+        time.sleep(float(os.environ.get("ANVIL_DATABRICKS_HANG_SECONDS", "3600")))
+    if scenario == "clusters_slow":
+        time.sleep(float(os.environ.get("ANVIL_DATABRICKS_DELAY_SECONDS", "0.1")))
+    if scenario == "permission_denied_clusters":
+        print(json.dumps({"error_code": "PERMISSION_DENIED"}), file=sys.stderr)
+        raise SystemExit(1)
+    if scenario == "malformed_clusters":
+        print("{not-json")
+        raise SystemExit(0)
+    if scenario == "empty_clusters":
+        output({"clusters": []})
+        raise SystemExit(0)
+    if scenario == "stderr_warning":
+        print("fixture warning", file=sys.stderr)
+        output(fixture("clusters/single.json"))
+        raise SystemExit(0)
     name = "multiple.json" if scenario == "multiple_clusters" else "stopped.json" if scenario == "stopped_cluster" else "single.json"
     output(fixture(f"clusters/{name}"))
     raise SystemExit(0)
 
 if args[:2] == ["warehouses", "list"]:
+    if scenario == "auth_invalid":
+        print(json.dumps({"error_code": "INVALID_ACCESS_TOKEN"}), file=sys.stderr)
+        raise SystemExit(1)
+    if scenario in {"provider_hang", "warehouses_timeout"}:
+        time.sleep(float(os.environ.get("ANVIL_DATABRICKS_HANG_SECONDS", "3600")))
+    if scenario == "permission_denied_warehouses":
+        print(json.dumps({"error_code": "PERMISSION_DENIED"}), file=sys.stderr)
+        raise SystemExit(1)
+    if scenario == "empty_warehouses":
+        output({"warehouses": []})
+        raise SystemExit(0)
     name = "multiple.json" if scenario == "multiple_warehouses" else "stopped.json" if scenario == "stopped_warehouse" else "single.json"
     output(fixture(f"warehouses/{name}"))
     raise SystemExit(0)

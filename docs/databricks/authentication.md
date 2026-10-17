@@ -21,6 +21,8 @@ The resolver evaluates workspace cloud, execution topology, available providers,
 
 The Databricks SQL Connector is a specialized provider with its own OAuth U2M flow; it does not consume the shared Anvil SDK profile, so Anvil does not use it as an Azure CLI-auth fallback. The CLI and SDK remain the primary profile-aware providers.
 
+An Azure CLI session is only an available credential source; it does not prove Databricks workspace authentication. Anvil validates the intended identity against the configured workspace, then separately validates the selected CLI/SDK provider and core list capabilities. Normal resource commands never launch browser or device-code login. If authentication has expired, Anvil reports `AUTH_REQUIRED` or `AUTH_INVALID` and directs the user to the explicit `make databricks-setup` flow.
+
 ## Environment isolation
 
 Anvil child processes receive the Anvil config path and, when selected, the `anvil-*` profile. All inherited `DATABRICKS_*` variables are removed from Databricks CLI, SDK, SQL Connector, and Azure login child environments where appropriate. Anvil never mutates the user's parent shell. Doctor and setup may list conflicting variable names such as `DATABRICKS_TOKEN`, but never print their values.
@@ -30,6 +32,8 @@ Anvil child processes receive the Anvil config path and, when selected, the `anv
 The Anvil config file is written atomically with mode `0600` inside a mode `0700` directory. Anvil rejects plaintext token/password/client-secret fields and does not enable Databricks CLI plaintext auth storage. Databricks CLI 1.0 and later use native OS secure credential storage for OAuth U2M tokens by default; Azure CLI owns its own credential cache. Anvil state at `${XDG_CONFIG_HOME:-$HOME/.config}/anvil/databricks.json` stores only the workspace host, environment, profile name/path/ownership, authentication strategy, provider metadata, and capability resolution. It never stores tokens, passwords, client secrets, signed URLs, device codes, or raw identity payloads.
 
 `make databricks-setup RESET=1` affects only the Anvil-owned config. It backs up the previous file and activates a replacement only after identity validation. Existing general-purpose Databricks profiles and cloud authentication are not deleted or converted.
+
+Anvil 2.6 records readiness evidence separately from auth strategy and provider installation. A successful login alone cannot produce `READY`; the production adapter must also validate identity, clusters, and SQL warehouses. See the [readiness state machine](readiness.md).
 
 ## Official references
 

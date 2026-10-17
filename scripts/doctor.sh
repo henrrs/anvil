@@ -29,7 +29,11 @@ PY
 fi
 
 printf '%s\n' 'Anvil Doctor' '────────────'
-databricks_status="$(python3 "$ROOT/scripts/databricks.py" status --local --format text 2>/dev/null || true)"
+databricks_local_args=()
+if [[ "${ANVIL_DOCTOR_LOCAL:-0}" == 1 ]]; then
+  databricks_local_args+=(--local)
+fi
+databricks_status="$(python3 "$ROOT/scripts/databricks.py" status "${databricks_local_args[@]}" --format text 2>/dev/null || true)"
 printf '%s\n' "$databricks_status"
 printf 'Anvil version          %s' "$expected_anvil"
 if [[ "$recorded_anvil" == "$expected_anvil" ]]; then

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import itertools
+import os
 import sys
 import time
 from datetime import timedelta
@@ -42,10 +43,13 @@ def main() -> int:
         profile = request.get("profile")
         if not isinstance(profile, str) or not profile.startswith("anvil-"):
             raise ValueError("SDK operations require an Anvil-owned profile")
-        workspace = WorkspaceClient(profile=profile)
         operation = request["operation"]
         payload = request.get("payload", {})
         timeout = max(5, min(int(request.get("timeout", 120)), 600))
+        workspace = WorkspaceClient(profile=profile,
+                                    config_file=os.environ.get("DATABRICKS_CONFIG_FILE"),
+                                    http_timeout_seconds=min(timeout, 60),
+                                    retry_timeout_seconds=timeout)
         if operation == "identity":
             identity = value_dict(workspace.current_user.me())
             print(json.dumps({"identity": identity, "host": workspace.config.host}))
@@ -122,17 +126,27 @@ def main() -> int:
             return 0
         raise ValueError("unsupported SDK operation")
     except Exception as exc:
-        message = str(exc)
-        # SDK exception text can embed workspace identifiers or request data.
-        # Emit only an error class and a short generic diagnostic.
-        category = type(exc).__name__
-        if "timed out" in message.casefold():
-            detail = message[:160]
-        elif category in {"ValueError", "KeyError"}:
-            detail = "invalid SDK operation input"
+        exception_type = type(exc).__name__
+        vendor_code = getattr(exc, "error_code", None)
+        status_code = getattr(exc, "status_code", None)
+        category = None
+        if isinstance(exc, ValueError | KeyError):
+            category = "CLI_ARGUMENT_ERROR"
+        elif vendor_code == "PERMISSION_DENIED" or status_code == 403 or exception_type == "PermissionDenied":
+            category = "PERMISSION_DENIED"
+        elif vendor_code in {"UNAUTHENTICATED", "INVALID_ACCESS_TOKEN"} or status_code == 401 or exception_type in {
+                "Unauthenticated", "UnauthenticatedError", "InvalidAccessTokenError"}:
+            category = "AUTH_INVALID"
+        elif exception_type in {"ReadTimeout", "ConnectTimeout", "DeadlineExceeded", "RequestTimeout", "TimeoutError"}:
+            category = "WORKSPACE_NETWORK_TIMEOUT"
+        elif exception_type in {"ConnectionError", "ServiceUnavailable"} or (isinstance(status_code, int) and status_code >= 500):
+            category = "WORKSPACE_UNREACHABLE"
         else:
-            detail = "Databricks SDK request failed; check authentication, permissions, and network access"
-        print(json.dumps({"error": f"{category}: {detail}"}), file=sys.stderr)
+            category = "PROVIDER_UNHEALTHY"
+        # Never return the SDK exception message; it can contain host,
+        # workspace identifiers, request data, or credential details.
+        print(json.dumps({"error": {"category": category, "summary": "Databricks SDK request failed"}}),
+              file=sys.stderr)
         return 1
 
 

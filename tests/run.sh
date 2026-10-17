@@ -57,7 +57,11 @@ assert "@bash scripts/anvil_upgrade.sh" in makefile, "make upgrade does not use 
 assert "@bash scripts/upgrade.sh --update-runtime" in makefile, "same-major runtime update target is missing"
 for forbidden in ("install-opencode.sh", "opencode_release.py", "opencode_v1_release.py", "latest-version"):
     assert forbidden not in upgrade, f"Anvil-only upgrade imports runtime resolver/installer: {forbidden}"
-assert "--local" in (root/"scripts/doctor.sh").read_text(encoding="utf-8")
+doctor=(root/"scripts/doctor.sh").read_text(encoding="utf-8")
+assert '"$ROOT/scripts/databricks.py" status' in doctor and "--format text" in doctor
+assert "ANVIL_DOCTOR_LOCAL" in doctor, "doctor has no local-only mode for lifecycle postflight"
+for name in ("scripts/anvil_upgrade.sh", "scripts/reforge.sh", "scripts/upgrade.sh", "scripts/rehearse-upgrade.sh"):
+    assert "ANVIL_DOCTOR_LOCAL=1" in (root/name).read_text(encoding="utf-8"), f"{name} may contact Databricks during lifecycle validation"
 assert "local_status()" in (root/"scripts/databricks.py").read_text(encoding="utf-8")
 print("OK local Anvil-upgrade dependency boundary and tracked-file hygiene")
 PY

@@ -17,6 +17,25 @@ Use Anvil's Databricks capability adapter at `${XDG_CONFIG_HOME:-$HOME/.config}/
 ## Execution and safety
 
 - For workspace metadata, use the adapter's read-only `clusters list|get`, `warehouses list|get`, `jobs list|get`, `pipelines list|get`, and `workspace list [PATH]` commands. It routes each request to the CLI or SDK and returns structured JSON. Confirm IDs and names from live results before using them.
+- The adapter command grammar is stable. Put common options after the resource arguments; resource commands return JSON by default, and `--format json`, `--profile PROFILE`, and `--timeout SECONDS` are accepted consistently.
+
+```text
+status --format json
+profiles --format json
+clusters list --format json
+clusters get CLUSTER_ID --format json
+warehouses list --format json
+warehouses get WAREHOUSE_ID --format json
+jobs list --format json
+jobs get JOB_ID --format json
+pipelines list --format json
+pipelines get PIPELINE_ID --format json
+workspace list /Shared --format json
+python --cluster-id CLUSTER_ID --timeout 120 --format json
+sql --warehouse-id WAREHOUSE_ID --timeout 120 --format json "SELECT 1"
+system-catalog --warehouse-id WAREHOUSE_ID --schema billing --format json
+```
+
 - Run remote Python only when the user clearly asks for remote execution. Review its effects; ask before running destructive or externally visible code. The helper creates, polls, bounds, cancels on timeout, and destroys a command context.
 - Run SQL on a selected SQL warehouse. The helper uses Statement Execution with inline results capped at 100 rows and 1 MB, polls terminal state, and rejects statements that appear to mutate data or configuration unless the user has approved them and `--allow-mutation` is passed.
 - Never start, stop, resize, edit, or delete compute, warehouses, jobs, pipelines, permissions, or system schemas without direct approval. Do not create compute automatically.
