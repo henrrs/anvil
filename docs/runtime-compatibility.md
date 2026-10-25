@@ -1,7 +1,7 @@
 # Anvil runtime compatibility
 
 **Official runtime release metadata last checked:** 2026-10-16 (UTC)
-**Anvil release:** `2.7.0`
+**Anvil release:** `2.7.1`
 **Policy:** OpenCode 1.x and 2.x supported; default major `1`; automatic major upgrade disabled.
 
 | Anvil | OpenCode runtime | Minimum | Offline profile fixture | Adapter | Support |
@@ -9,7 +9,7 @@
 | 2.7.x | 1.x | 1.18.18 | 1.18.18 | `opencode-v1` | Supported |
 | 2.7.x | 2.x | 2.0.0 | 2.0.0 | `opencode-v2` | Supported |
 
-The 2.7.0 mandatory suite validates both adapter contracts using checked-in local CLI fixtures and denies external network access across the isolated test suite. It adds fresh HOME/XDG lifecycle journeys, partial/corrupt-state reporting, SDK missing-pip and venv-path checks, safe worker diagnostics, and offline communication/artifact regression coverage. It does not download or claim to smoke-test a live OpenCode release. The last recorded official candidate resolution in the preceding runtime release documentation was OpenCode 1 `1.19.3` and OpenCode 2 `2.0.31`; use the official release references below to revalidate live candidates before future releases.
+The 2.7.1 mandatory suite validates both adapter contracts using checked-in local CLI fixtures and denies external network access across the isolated test suite. It adds fresh HOME/XDG lifecycle journeys, partial/corrupt-state reporting, SDK missing-pip and venv-path checks, safe worker diagnostics, offline communication/artifact regression coverage, and upgrades from prior 2.6.x config profiles on both runtime adapters. It does not download or claim to smoke-test a live OpenCode release. The last recorded official candidate resolution in the preceding runtime release documentation was OpenCode 1 `1.19.3` and OpenCode 2 `2.0.31`; use the official release references below to revalidate live candidates before future releases.
 
 ## Common and runtime-specific capabilities
 

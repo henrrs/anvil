@@ -71,12 +71,12 @@ if ! python3 "$ROOT/scripts/active-opencode.py"; then
 fi
 
 old_config="$ANVIL_CONFIG_DIR/opencode.jsonc"
-if python3 "$ROOT/scripts/configure.py" audit-v1 "$old_config" >/dev/null 2>&1; then
+if python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$old_config" >/dev/null 2>&1; then
   from_generation=1
-  python3 "$ROOT/scripts/configure.py" audit-v1 "$old_config"
-elif python3 "$ROOT/scripts/configure.py" audit "$old_config" >/dev/null 2>&1; then
+  python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$old_config"
+elif python3 "$ROOT/scripts/configure.py" audit-compatible "$old_config" >/dev/null 2>&1; then
   from_generation=2
-  python3 "$ROOT/scripts/configure.py" audit "$old_config"
+  python3 "$ROOT/scripts/configure.py" audit-compatible "$old_config"
 else
   anvil_error 'Current global config is neither the supported Anvil V1 baseline nor a valid Anvil V2 config.'
   exit 1

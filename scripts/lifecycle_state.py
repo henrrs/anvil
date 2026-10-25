@@ -47,10 +47,11 @@ def _read_json(path: Path) -> tuple[dict[str, Any] | None, bool]:
     return (value, isinstance(value, dict))
 
 
-def _audit_config(path: Path) -> int | None:
+def _audit_config(path: Path, *, allow_older_skill_set: bool = False) -> int | None:
     if not path.is_file():
         return None
-    for command, major in (("audit-v1", 1), ("audit", 2)):
+    suffix = "-compatible" if allow_older_skill_set else ""
+    for command, major in ((f"audit-v1{suffix}", 1), (f"audit{suffix}", 2)):
         result = subprocess.run([sys.executable, str(ROOT / "scripts" / "configure.py"), command, str(path)],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         if result.returncode == 0:
@@ -86,7 +87,8 @@ def evaluate() -> dict[str, Any]:
     record, record_valid = _read_json(locations["record"])
     runtime_saved, runtime_state_valid = _read_json(locations["runtime_state"])
     config_path = locations["config"] / "opencode.jsonc"
-    config_major = _audit_config(config_path)
+    recorded_version = record.get("anvil_version") if isinstance(record, dict) else None
+    config_major = _audit_config(config_path, allow_older_skill_set=recorded_version != repository_version)
     runtime_result = runtime_state.discover()
     runtime = runtime_result.get("runtime") or {}
     runtime_usable = bool(runtime.get("usable") and runtime.get("supported"))

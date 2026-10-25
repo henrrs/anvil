@@ -115,9 +115,11 @@ PY
 fi
 
 config_major=""
-if python3 "$ROOT/scripts/configure.py" audit-v1 "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
+audit_suffix=""
+if [[ "$recorded_anvil" != "$expected_anvil" ]]; then audit_suffix="-compatible"; fi
+if python3 "$ROOT/scripts/configure.py" "audit-v1${audit_suffix}" "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
   config_major=1
-elif python3 "$ROOT/scripts/configure.py" audit "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
+elif python3 "$ROOT/scripts/configure.py" "audit${audit_suffix}" "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
   config_major=2
 else
   anvil_error 'Global config is neither a valid Anvil OpenCode 1 profile nor a valid OpenCode 2 profile.'

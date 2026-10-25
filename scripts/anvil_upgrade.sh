@@ -34,12 +34,12 @@ if [[ "$supported" != True ]]; then
   exit 1
 fi
 
-if python3 "$ROOT/scripts/configure.py" audit-v1 "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
+if python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
   from_generation=1
-  python3 "$ROOT/scripts/configure.py" audit-v1 "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null
-elif python3 "$ROOT/scripts/configure.py" audit "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
+  python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null
+elif python3 "$ROOT/scripts/configure.py" audit-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
   from_generation=2
-  python3 "$ROOT/scripts/configure.py" audit "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null
+  python3 "$ROOT/scripts/configure.py" audit-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null
 else
   anvil_error 'Current global config is not a supported Anvil OpenCode profile; use make reforge to rebuild it.'
   exit 1

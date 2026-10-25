@@ -13,10 +13,11 @@ from pathlib import Path
 from typing import Any
 
 
-SKILLS = {
+BASELINE_SKILLS = {
     "anvil-memory", "anvil-spark-performance", "anvil-delta-lake",
-    "anvil-databricks", "anvil-data-ingestion", "anvil-communication",
+    "anvil-databricks", "anvil-data-ingestion",
 }
+SKILLS = BASELINE_SKILLS | {"anvil-communication"}
 COMMANDS = {"remember", "recall", "distill", "review"}
 BUILTINS = {"build", "plan", "general", "explore"}
 PROTECTED_SHELL = (
@@ -283,7 +284,7 @@ def build(source: Path, destination: Path, prior_config_dir: Path | None, preser
     os.replace(temporary, output)
 
 
-def _audit_v1(path: Path) -> list[str]:
+def _audit_v1(path: Path, *, allow_older_skill_set: bool = False) -> list[str]:
     """Retain the precise V1 baseline check for upgrade detection and regression fixtures."""
     errors: list[str] = []
     try:
@@ -322,8 +323,11 @@ def _audit_v1(path: Path) -> list[str]:
     if not isinstance(shell, dict) or shell.get("*") != "allow" or any(shell.get(pattern) != "ask" for pattern in PROTECTED_SHELL):
         errors.append("V1 destructive Git shell prompts are missing")
     skill = permission.get("skill", {})
-    if not isinstance(skill, dict) or skill.get("*") != "deny" or {k for k, v in skill.items() if k != "*" and v == "allow"} != SKILLS:
-        errors.append("V1 skill allowlist does not match the shipped set")
+    allowed_skills = {k for k, v in skill.items() if k != "*" and v == "allow"} if isinstance(skill, dict) else set()
+    skills_valid = (BASELINE_SKILLS <= allowed_skills <= SKILLS
+                    if allow_older_skill_set else allowed_skills == SKILLS)
+    if not isinstance(skill, dict) or skill.get("*") != "deny" or not skills_valid:
+        errors.append("V1 skill allowlist does not match a supported Anvil profile")
     if data.get("mcp") not in ({}, None):
         errors.append("V1 global MCP config is not empty")
     if data.get("plugin") not in ([], None):
@@ -334,7 +338,7 @@ def _audit_v1(path: Path) -> list[str]:
     return errors
 
 
-def audit(path: Path) -> list[str]:
+def audit(path: Path, *, allow_older_skill_set: bool = False) -> list[str]:
     errors: list[str] = []
     try:
         data = parse_jsonc(path.read_text(encoding="utf-8"), str(path))
@@ -376,8 +380,10 @@ def audit(path: Path) -> list[str]:
         if rules.get((action, "*")) != "allow":
             errors.append(f"Anvil core action {action} is not allowed")
     allowed_skills = {resource for (action, resource), effect in rules.items() if action == "skill" and resource != "*" and effect == "allow"}
-    if rules.get(("skill", "*")) != "deny" or allowed_skills != SKILLS:
-        errors.append("Anvil skill allowlist does not match the shipped skill set")
+    skills_valid = (BASELINE_SKILLS <= allowed_skills <= SKILLS
+                    if allow_older_skill_set else allowed_skills == SKILLS)
+    if rules.get(("skill", "*")) != "deny" or not skills_valid:
+        errors.append("Anvil skill allowlist does not match a supported Anvil profile")
     mcp = data.get("mcp", {})
     if not isinstance(mcp, dict) or mcp.get("servers", {}) != {} or set(mcp) - {"servers"}:
         errors.append("managed global MCP server config is not empty")
@@ -410,16 +416,30 @@ def main() -> int:
     p_audit.add_argument("config", type=Path)
     p_v1 = sub.add_parser("audit-v1")
     p_v1.add_argument("config", type=Path)
+    p_audit_compatible = sub.add_parser("audit-compatible")
+    p_audit_compatible.add_argument("config", type=Path)
+    p_v1_compatible = sub.add_parser("audit-v1-compatible")
+    p_v1_compatible.add_argument("config", type=Path)
     args = parser.parse_args()
     try:
         if args.action == "build":
             build(args.source, args.destination, args.prior_config_dir, args.preserve_cli, args.major)
             return 0
-        errors = _audit_v1(args.config) if args.action == "audit-v1" else audit(args.config)
+        if args.action in {"audit-v1", "audit-v1-compatible"}:
+            errors = _audit_v1(args.config, allow_older_skill_set=args.action.endswith("-compatible"))
+        else:
+            errors = audit(args.config, allow_older_skill_set=args.action == "audit-compatible")
         for error in errors:
             print(f"ERROR {error}")
         if not errors:
-            print("OK config meets the native OpenCode 2 Anvil baseline")
+            if args.action == "audit-v1-compatible":
+                print("OK config meets a supported OpenCode 1 Anvil profile")
+            elif args.action == "audit-compatible":
+                print("OK config meets a supported OpenCode 2 Anvil profile")
+            elif args.action == "audit-v1":
+                print("OK config meets the current OpenCode 1 Anvil baseline")
+            else:
+                print("OK config meets the native OpenCode 2 Anvil baseline")
         return 1 if errors else 0
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)

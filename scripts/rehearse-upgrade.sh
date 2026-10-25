@@ -50,9 +50,9 @@ else
   exit 1
 fi
 if [[ "$source_major" == 1 ]]; then
-  python3 "$ROOT/scripts/configure.py" audit-v1 "$tmp_root/v1-config/opencode.jsonc"
+  python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$tmp_root/v1-config/opencode.jsonc"
 else
-  python3 "$ROOT/scripts/configure.py" audit "$tmp_root/v1-config/opencode.jsonc"
+  python3 "$ROOT/scripts/configure.py" audit-compatible "$tmp_root/v1-config/opencode.jsonc"
 fi
 if [[ -d "$ANVIL_DATA_HOME/opencode" ]]; then
   mkdir -p -- "$test_data_home/opencode"

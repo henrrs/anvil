@@ -754,10 +754,22 @@ def upgrade_test(
 
 def upgrade_preserves_v1_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
     paths = fixture(temp)
+    config = json.loads((paths["config"] / "opencode.jsonc").read_text(encoding="utf-8"))
+    config["agent"]["anvil"]["permission"]["skill"].pop("anvil-communication")
+    write_json(paths["config"] / "opencode.jsonc", config)
+    installation = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
+    installation["anvil_version"] = "2.6.1"
+    write_json(paths["anvil_data"] / "installation.json", installation)
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper), ANVIL_YES="1")
+    before_inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
+    check("Status                INSTALLED" in before_inspect.stdout,
+          "a valid Anvil 2.6.1 OpenCode 1 profile was treated as corrupted by the 2.7 repository")
+    before_doctor = run(["/usr/bin/make", "--no-print-directory", "doctor"], env)
+    check("Status: UPGRADE AVAILABLE" in before_doctor.stdout,
+          "doctor did not recognize an older Anvil profile with a newly added skill missing")
     before_data = tree_hash(paths["data_opencode"])
     before_state = tree_hash(paths["state_opencode"])
     original_binary = file_hash(paths["binary"])
-    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper), ANVIL_YES="1")
     proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
     installed = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
     config = json.loads((paths["config"] / "opencode.jsonc").read_text(encoding="utf-8"))
@@ -782,6 +794,15 @@ def upgrade_preserves_v1_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
 def upgrade_preserves_v2_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
     paths = fixture(temp)
     use_v2_profile(paths, temp, wrapper)
+    config = json.loads((paths["config"] / "opencode.jsonc").read_text(encoding="utf-8"))
+    config["agents"]["anvil"]["permissions"] = [
+        rule for rule in config["agents"]["anvil"]["permissions"]
+        if not (rule.get("action") == "skill" and rule.get("resource") == "anvil-communication")
+    ]
+    write_json(paths["config"] / "opencode.jsonc", config)
+    installation = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
+    installation["anvil_version"] = "2.6.1"
+    write_json(paths["anvil_data"] / "installation.json", installation)
     before_data = tree_hash(paths["data_opencode"])
     before_state = tree_hash(paths["state_opencode"])
     original_binary = file_hash(paths["binary"])

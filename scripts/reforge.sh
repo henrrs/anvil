@@ -43,9 +43,9 @@ print(f"{value.get('anvil_version','')}\t{value.get('version','')}")
 PY
 )
 fi
-if python3 "$ROOT/scripts/configure.py" audit-v1 "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
+if python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
   from_generation=1
-elif python3 "$ROOT/scripts/configure.py" audit "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
+elif python3 "$ROOT/scripts/configure.py" audit-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
   from_generation=2
 fi
 
