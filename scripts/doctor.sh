@@ -6,6 +6,9 @@ source "$ROOT/scripts/lib/common.sh"
 anvil_need python3
 
 expected_anvil="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").strip())' "$ROOT/VERSION")"
+lifecycle_json="$(python3 "$ROOT/scripts/lifecycle_state.py" inspect --format json)"
+lifecycle_status="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["lifecycle"])' <<<"$lifecycle_json")"
+lifecycle_text="$(python3 "$ROOT/scripts/lifecycle_state.py" inspect)"
 policy_json="$(python3 "$ROOT/scripts/runtime.py" policy)"
 read -r policy_major policy_majors automatic_major_upgrade < <(python3 - "$policy_json" <<'PY'
 import json,sys
@@ -29,11 +32,14 @@ PY
 fi
 
 printf '%s\n' 'Anvil Doctor' '────────────'
+printf '%s\n' "$lifecycle_text"
+printf '\n'
 databricks_local_args=()
 if [[ "${ANVIL_DOCTOR_LOCAL:-0}" == 1 ]]; then
   databricks_local_args+=(--local)
 fi
-databricks_status="$(python3 "$ROOT/scripts/databricks.py" status "${databricks_local_args[@]}" --format text 2>/dev/null || true)"
+databricks_probe_status=0
+databricks_status="$(python3 "$ROOT/scripts/databricks.py" status "${databricks_local_args[@]}" --format text 2>&1)" || databricks_probe_status=$?
 printf '%s\n' "$databricks_status"
 printf 'Anvil version          %s' "$expected_anvil"
 if [[ "$recorded_anvil" == "$expected_anvil" ]]; then
@@ -52,9 +58,22 @@ if [[ -z "$binary" || ! -x "$binary" ]]; then
   else
     anvil_warn 'Release documentation does not match this checkout.'
   fi
-  anvil_warn "Anvil can be configured on first use; run 'make reforge' to install the approved runtime."
-  printf '\nStatus: NOT INSTALLED\n'
-  exit 0
+  if (( databricks_probe_status != 0 )); then
+    anvil_warn "Databricks status could not be completed (exit $databricks_probe_status)."
+  fi
+  case "$lifecycle_status" in
+    CORRUPTED)
+      anvil_error 'Managed Anvil state is corrupted; review the lifecycle findings above before using it.'
+      printf '\nStatus: BROKEN\n'
+      exit 1 ;;
+    PARTIALLY_INSTALLED)
+      printf '\nStatus: PARTIALLY INSTALLED\n'
+      exit 2 ;;
+    *)
+      anvil_warn "Anvil can be configured on first use; run 'make reforge' to install the approved runtime."
+      printf '\nStatus: NOT INSTALLED\n'
+      exit 0 ;;
+  esac
 fi
 
 capability_json="$(python3 "$ROOT/scripts/runtime.py" capabilities --binary "$binary")"
@@ -69,8 +88,16 @@ printf 'OpenCode runtime        %s (%s)\n' "${major:-unknown}" "${major:+opencod
 printf 'Approved policy major   %s\n' "$policy_major"
 printf 'Supported majors        %s\n' "$policy_majors"
 printf 'Major auto-upgrade      %s\n' "$( [[ "$automatic_major_upgrade" == True ]] && printf 'YES' || printf 'NO')"
+if [[ "$lifecycle_status" == PARTIALLY_INSTALLED && ! -f "$ANVIL_CONFIG_DIR/opencode.jsonc" ]]; then
+  anvil_warn "OpenCode $normalized is present but the managed Anvil config is missing. Run 'make reforge' to complete installation."
+  printf '\nStatus: PARTIALLY INSTALLED\n'
+  exit 2
+fi
 broken=0
 warning=0
+if [[ "$lifecycle_status" == CORRUPTED ]]; then broken=1; fi
+if [[ "$lifecycle_status" == DEGRADED ]]; then warning=1; fi
+if (( databricks_probe_status != 0 )); then warning=1; fi
 if [[ "$supported" != True ]]; then
   anvil_error "OpenCode runtime major ${major:-unknown} is not supported by this Anvil release."
   broken=1

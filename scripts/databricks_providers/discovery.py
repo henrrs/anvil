@@ -139,7 +139,11 @@ def discover_sdk(state: dict[str, Any]) -> dict[str, Any]:
     seen: set[str] = set()
     for python, source in candidates:
         try:
-            absolute = str(Path(python).expanduser().resolve(strict=True))
+            # Keep the invocation path. Resolving venv/bin/python can replace
+            # the environment entrypoint with its system-interpreter target.
+            absolute = str(Path(python).expanduser().absolute())
+            if not Path(absolute).is_file() or not os.access(absolute, os.X_OK):
+                continue
         except OSError:
             continue
         if absolute in seen:

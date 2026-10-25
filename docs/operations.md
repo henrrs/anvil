@@ -2,7 +2,7 @@
 
 ## Inspect before changing state
 
-`make inspect` reports local Anvil/OpenCode versions, the absolute executable, runtime adapter and compatibility, PATH readiness, local provider inventory, config paths, agents, skills, plugins, MCPs and commands, and current workspace overrides. It does not contact release services or a Databricks workspace.
+`make inspect` reports the shared Anvil lifecycle state, local Anvil/OpenCode versions, the absolute executable, runtime adapter and compatibility, PATH readiness, local provider inventory, config paths, agents, skills, plugins, MCPs and commands, and current workspace overrides. It does not contact release services or a Databricks workspace. A fresh clone is a supported state; inspect reports `NOT_INSTALLED`, while incomplete or malformed managed artifacts are identified as partial or corrupted.
 
 `make capabilities` answers which features are available on the detected runtime. `FORMAT=json make capabilities` emits machine-readable JSON. `make doctor` answers whether the installed Anvil/runtime combination and configured Databricks integration are healthy. Doctor performs read-only identity and core metadata requests only when an Anvil-owned Databricks profile exists; with no profile it stays local.
 
@@ -66,6 +66,8 @@ make rollback
 ```
 
 Rollback selects the newest valid backup, verifies checksums, and confirms it belongs to the current home/XDG paths. The snapshot scope determines what is restored: Anvil-only rollback restores Anvil config/metadata and preserves OpenCode executable/data/state; runtime rollback restores the saved config, installer directory/binary, OpenCode data, and state instead of attempting an in-place database downgrade.
+
+If no verified snapshot exists, rollback reports that prerequisite and directs first-time users to `make reforge` or installed users to create a snapshot with `make upgrade`/`make reforge` before rollback.
 
 Before restoring, rollback archives current Anvil Markdown memory separately under `$XDG_DATA_HOME/anvil/memory-backups/` and leaves the live memory directory intact. Knowledge, source registry, and backup history remain under the Anvil data root.
 

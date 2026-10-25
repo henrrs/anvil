@@ -54,10 +54,7 @@ on_error() {
 trap on_error ERR INT TERM
 trap cleanup_temp EXIT
 
-if [[ ! -f "$ANVIL_CONFIG_DIR/opencode.jsonc" ]]; then
-  anvil_error 'No installed Anvil configuration found; use make reforge for a clean installation.'
-  exit 1
-fi
+anvil_require_installed
 if [[ -L "$ANVIL_CONFIG_DIR" || -L "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_BIN" ]]; then
   anvil_error 'Managed config/install paths must not be symlinks.'
   exit 1

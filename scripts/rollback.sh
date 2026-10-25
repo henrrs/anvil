@@ -22,7 +22,7 @@ if (( internal )) && [[ "${ANVIL_INTERNAL_MODE:-0}" != 1 ]]; then
 fi
 
 if [[ -z "$backup" ]]; then
-  backup="$(python3 "$ROOT/scripts/state.py" latest "$ANVIL_BACKUP_ROOT")"
+  backup="$(anvil_lifecycle_state latest-backup)"
 fi
 backup_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$backup")"
 backup_root_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$ANVIL_BACKUP_ROOT")"

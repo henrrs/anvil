@@ -4,6 +4,8 @@
 
 OpenCode owns providers, model selection, authentication, sessions, TUI, filesystem and shell execution, runtime state, and native compaction. Anvil owns the user-global harness, lifecycle safety, allowlisted skills, explicit Markdown memory, source registry, and runtime-independent task workflows.
 
+`scripts/lifecycle_state.py` is the shared local evaluator for Anvil-managed config, installation metadata, runtime, memory, and verified backups. Inspect and doctor present its lifecycle state; upgrade, runtime update/migration, and rollback use it for lifecycle preconditions. Databricks readiness remains a separate optional integration state. The public command surface and exit behavior are documented in the [command contract matrix](command-contracts.md).
+
 Anvil's product release is independent of the OpenCode major. `config/runtime-policy.json` records supported runtime majors, minimum versions, the first-install default, and the prohibition on automatic major upgrades. `scripts/runtime.py` centralizes runtime inspection and capability reporting. The V1 and V2 config templates live beside each other; common `AGENTS.md`, commands, skills, memory helpers and source registry are shared.
 
 The managed config lives at `$XDG_CONFIG_HOME/opencode` (default `~/.config/opencode`). OpenCode data is under `$XDG_DATA_HOME/opencode`; state is under `$XDG_STATE_HOME/opencode`. Anvil memory, knowledge, source registry, installation metadata and backups are separate under `$XDG_DATA_HOME/anvil`. The knowledge directory is not the memory store.

@@ -35,9 +35,12 @@ def bounded_collection(items: Any, key: str, limit: int = 200) -> dict[str, Any]
 
 
 def main() -> int:
+    phase = "initialization"
+    operation: str | None = None
     try:
         request = json.load(sys.stdin)
         from databricks.sdk import WorkspaceClient
+        from databricks.sdk.core import Config
         from databricks.sdk.service import compute, sql as sql_service
 
         profile = request.get("profile")
@@ -46,43 +49,54 @@ def main() -> int:
         operation = request["operation"]
         payload = request.get("payload", {})
         timeout = max(5, min(int(request.get("timeout", 120)), 600))
-        workspace = WorkspaceClient(profile=profile,
-                                    config_file=os.environ.get("DATABRICKS_CONFIG_FILE"),
-                                    http_timeout_seconds=min(timeout, 60),
-                                    retry_timeout_seconds=timeout)
+        config_file = os.environ.get("DATABRICKS_CONFIG_FILE")
+        if not config_file:
+            raise ValueError("SDK operations require the explicit Anvil-owned config file")
+        phase = "authentication_configuration"
+        config = Config(profile=profile, config_file=config_file,
+                        http_timeout_seconds=min(timeout, 60), retry_timeout_seconds=timeout)
+        workspace = WorkspaceClient(config=config)
+
+        def emit(value: Any) -> int:
+            nonlocal phase
+            phase = "response_parsing"
+            print(json.dumps(value))
+            return 0
+
         if operation == "identity":
+            phase = "request"
             identity = value_dict(workspace.current_user.me())
-            print(json.dumps({"identity": identity, "host": workspace.config.host}))
-            return 0
+            return emit({"identity": identity, "host": workspace.config.host})
         if operation == "clusters.list":
-            print(json.dumps(bounded_collection(workspace.clusters.list(), "clusters")))
-            return 0
+            phase = "request"
+            return emit(bounded_collection(workspace.clusters.list(), "clusters"))
         if operation == "warehouses.list":
-            print(json.dumps(bounded_collection(workspace.warehouses.list(), "warehouses")))
-            return 0
+            phase = "request"
+            return emit(bounded_collection(workspace.warehouses.list(), "warehouses"))
         if operation == "clusters.get":
-            print(json.dumps(value_dict(workspace.clusters.get(cluster_id=payload["cluster_id"]))))
-            return 0
+            phase = "request"
+            return emit(value_dict(workspace.clusters.get(cluster_id=payload["cluster_id"])))
         if operation == "warehouses.get":
-            print(json.dumps(value_dict(workspace.warehouses.get(id=payload["warehouse_id"]))))
-            return 0
+            phase = "request"
+            return emit(value_dict(workspace.warehouses.get(id=payload["warehouse_id"])))
         if operation == "jobs.list":
-            print(json.dumps(bounded_collection(workspace.jobs.list(limit=200, expand_tasks=False), "jobs")))
-            return 0
+            phase = "request"
+            return emit(bounded_collection(workspace.jobs.list(limit=200, expand_tasks=False), "jobs"))
         if operation == "jobs.get":
+            phase = "request"
             job = workspace.jobs.get(job_id=int(payload["job_id"]))
-            print(json.dumps(value_dict(job)))
-            return 0
+            return emit(value_dict(job))
         if operation == "pipelines.list":
-            print(json.dumps(bounded_collection(workspace.pipelines.list_pipelines(max_results=100), "pipelines")))
-            return 0
+            phase = "request"
+            return emit(bounded_collection(workspace.pipelines.list_pipelines(max_results=100), "pipelines"))
         if operation == "pipelines.get":
-            print(json.dumps(value_dict(workspace.pipelines.get(pipeline_id=payload["pipeline_id"]))))
-            return 0
+            phase = "request"
+            return emit(value_dict(workspace.pipelines.get(pipeline_id=payload["pipeline_id"])))
         if operation == "workspace.list":
-            print(json.dumps(bounded_collection(workspace.workspace.list(path=payload.get("path") or "/"), "objects")))
-            return 0
+            phase = "request"
+            return emit(bounded_collection(workspace.workspace.list(path=payload.get("path") or "/"), "objects"))
         if operation == "python.execute":
+            phase = "request"
             cluster_id = payload["cluster_id"]
             context = workspace.command_execution.create_and_wait(cluster_id=cluster_id, language=compute.Language.PYTHON,
                                                                     timeout=timedelta(seconds=min(timeout, 120)))
@@ -94,8 +108,7 @@ def main() -> int:
                                                               language=compute.Language.PYTHON, command=payload["code"])
                 command_id = getattr(getattr(waiter, "response", None), "id", None)
                 result = waiter.result(timeout=timedelta(seconds=timeout))
-                print(json.dumps(value_dict(result)))
-                return 0
+                return emit(value_dict(result))
             except TimeoutError:
                 if command_id:
                     workspace.command_execution.cancel(cluster_id=cluster_id, context_id=context_id, command_id=command_id)
@@ -103,6 +116,7 @@ def main() -> int:
             finally:
                 workspace.command_execution.destroy(cluster_id=cluster_id, context_id=context_id)
         if operation == "sql.execute":
+            phase = "request"
             api = workspace.statement_execution
             parameters = [sql_service.StatementParameterListItem(
                 name=item["name"], type=item.get("type"),
@@ -122,8 +136,7 @@ def main() -> int:
                     raise RuntimeError("SQL statement timed out; cancellation was requested")
                 time.sleep(1)
                 response = api.get_statement(response.statement_id)
-            print(json.dumps(value_dict(response)))
-            return 0
+            return emit(value_dict(response))
         raise ValueError("unsupported SDK operation")
     except Exception as exc:
         exception_type = type(exc).__name__
@@ -145,7 +158,18 @@ def main() -> int:
             category = "PROVIDER_UNHEALTHY"
         # Never return the SDK exception message; it can contain host,
         # workspace identifiers, request data, or credential details.
-        print(json.dumps({"error": {"category": category, "summary": "Databricks SDK request failed"}}),
+        if category in {"AUTH_REQUIRED", "AUTH_INVALID"}:
+            phase = "authentication_configuration"
+        status = status_code if isinstance(status_code, int) and 400 <= status_code <= 599 else None
+        failure_scope = ("SHARED_DEPENDENCY" if category in {"AUTH_REQUIRED", "AUTH_INVALID", "WORKSPACE_NETWORK_TIMEOUT", "WORKSPACE_UNREACHABLE"}
+                         else "CAPABILITY" if category == "PERMISSION_DENIED" else "PROVIDER_SPECIFIC")
+        retryable = category in {"WORKSPACE_NETWORK_TIMEOUT", "WORKSPACE_UNREACHABLE"} or bool(status and status >= 500)
+        operation_value = operation if isinstance(operation, str) and operation.replace(".", "").islower() else None
+        print(json.dumps({"error": {"category": category, "summary": "Databricks SDK request failed",
+                                     "phase": phase, "operation": operation_value,
+                                     "exception_category": exception_type,
+                                     "normalized_status": status,
+                                     "retryable": retryable, "failure_scope": failure_scope}}),
               file=sys.stderr)
         return 1
 

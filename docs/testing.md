@@ -1,6 +1,6 @@
 # Testing
 
-`make test` requires Bash, Python 3.11+, `tar`, and the standard system utilities used by Anvil. It makes no external OpenCode, Databricks, or model calls. Local OpenCode 1/2 fixtures and a fake Databricks CLI validate runtime and adapter contracts; all lifecycle paths use temporary HOME/XDG roots. Windows users can run the suite under WSL.
+`make test` requires Bash, Python 3.11+, `tar`, and the standard system utilities used by Anvil. It makes no external OpenCode, Databricks, or model calls. Local OpenCode 1/2 fixtures and a fake Databricks CLI validate runtime and adapter contracts. The entire suite runs with temporary HOME and XDG roots, a constrained PATH, no Python user site, and cleared external Databricks selectors. Windows users can run the suite under WSL.
 
 ## Offline runtime and configuration checks
 
@@ -16,7 +16,7 @@ No fixture contacts a real Databricks workspace. Passing these tests validates t
 
 V1-format Markdown fixtures are searched with `PATH` deliberately lacking `rg`; tests verify the original file hash remains unchanged. Memory tests cover validation, status/confidence/aliases, accent-insensitive multilingual retrieval, bounded results, explicit writes, provenance, duplicates, source freshness warnings, and no-write search behavior. `/distill` fixtures cover documentation/code/test corroboration, stale docs versus active behavior, unreferenced legacy code, policy/implementation conflicts, historical claims, source drift, idempotency, and unavailable images.
 
-Lifecycle checks use local OpenCode wrappers and isolated HOME/XDG trees. They cover first-install runtime policy, repeated reforge, Anvil upgrade preserving OpenCode 1, dry runs, explicit runtime migration, verified rollback, provider conversion, opaque data/state restoration, and memory preservation. Failure injection covers candidate validation, rehearsal, backup creation, failures before mutation, post-config failure, and doctor failure after upgrade.
+Lifecycle checks use local OpenCode wrappers and isolated HOME/XDG trees. They cover the fresh-repository public command matrix before and after reforge, partial/corrupt lifecycle states, missing memory, offline runtime-operation blockers, rollback guidance with no snapshot, repeated reforge, Anvil upgrade preserving OpenCode 1, dry runs, explicit runtime migration, verified rollback, provider conversion, opaque data/state restoration, and memory preservation. Failure injection covers candidate validation, rehearsal, backup creation, failures before mutation, post-config failure, and doctor failure after upgrade. Databricks tests simulate missing pip and a venv interpreter symlink, and exercise safe phase diagnostics through the real SDK worker subprocess boundary.
 
 ## Release, harness, and stats checks
 

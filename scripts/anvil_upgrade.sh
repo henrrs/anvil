@@ -10,10 +10,7 @@ anvil_need python3 tar cp mv install chmod date
 [[ $# == 0 ]] || { anvil_error 'make upgrade accepts DRY_RUN=1 only; use make update-runtime or make migrate-runtime for OpenCode changes.'; exit 2; }
 ANVIL_VERSION="$(cat "$ROOT/VERSION")"
 
-if [[ ! -f "$ANVIL_CONFIG_DIR/opencode.jsonc" ]]; then
-  anvil_error 'No installed Anvil configuration found; use make reforge for a first installation.'
-  exit 1
-fi
+anvil_require_installed
 if [[ -L "$ANVIL_CONFIG_DIR" || -L "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_BIN" ]] || \
    ! anvil_safe_managed_path "$ANVIL_CONFIG_DIR" "$ANVIL_CONFIG_DIR" || \
    [[ "$ANVIL_INSTALL_ROOT" != "$ANVIL_HOME_DIR/.opencode" || "$ANVIL_INSTALL_ROOT" == / || "$ANVIL_INSTALL_ROOT" == "$ANVIL_HOME_DIR" ]]; then

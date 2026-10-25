@@ -17,6 +17,34 @@ version_v1_min="${6#opencode }"
 version_v1_min="${version_v1_min#v}"
 tmp_root="$7"
 
+# Every test subprocess gets a clean user and XDG namespace. Keep only the
+# selected Python runtime plus standard system tools on PATH; developer tools,
+# Databricks profiles, and user-site packages must not influence the suite.
+mkdir -p -- "$tmp_root/test-home" "$tmp_root/test-config" "$tmp_root/test-data" \
+  "$tmp_root/test-cache" "$tmp_root/test-state"
+python3_dir="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.executable).parent)')"
+export PATH="$python3_dir:/usr/bin:/bin"
+export HOME="$tmp_root/test-home"
+export XDG_CONFIG_HOME="$tmp_root/test-config"
+export XDG_DATA_HOME="$tmp_root/test-data"
+export XDG_CACHE_HOME="$tmp_root/test-cache"
+export XDG_STATE_HOME="$tmp_root/test-state"
+export PYTHONNOUSERSITE=1
+unset PYTHONHOME PYTHONPATH VIRTUAL_ENV CONDA_PREFIX
+for variable_name in ${!DATABRICKS_@}; do unset "$variable_name"; done
+export PYTHONPATH="$ROOT/tests/fixtures/network-denied"
+export ANVIL_NETWORK_GUARD_LOG="$tmp_root/test-network-attempts.log"
+python3 - "$tmp_root" <<'PY' || { printf 'FAIL test HOME/XDG isolation\n' >&2; exit 1; }
+import os,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+assert Path(os.environ["HOME"]) == root / "test-home"
+for key, name in (("XDG_CONFIG_HOME","test-config"),("XDG_DATA_HOME","test-data"),
+                  ("XDG_CACHE_HOME","test-cache"),("XDG_STATE_HOME","test-state")):
+    assert Path(os.environ[key]) == root / name
+assert not any(key.startswith("DATABRICKS_") for key in os.environ)
+PY
+
 pass() { printf 'PASS %s\n' "$*"; }
 fail() { printf 'FAIL %s\n' "$*" >&2; exit 1; }
 
@@ -223,5 +251,11 @@ contains_stats="$(python3 -c 'import sys; print(int("total tokens    135" in sys
 [[ "$contains_stats" == 1 ]] || fail 'stats summary fields'
 pass 'Native OpenCode statistics are rendered from structured JSON'
 
+python3 - "$ANVIL_NETWORK_GUARD_LOG" <<'PY' || fail 'unexpected external network attempt in offline suite'
+import sys
+from pathlib import Path
+path=Path(sys.argv[1])
+assert not path.exists() or not path.read_text(encoding="utf-8").strip(), "offline suite attempted an external network connection"
+PY
 printf '\nAll Anvil offline checks passed.\n'
 printf 'Isolation: runtime and lifecycle fixture calls used temporary HOME and XDG roots; no external runtime, Databricks, or model service was used.\n'

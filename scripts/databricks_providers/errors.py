@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -47,7 +48,8 @@ class DatabricksError(RuntimeError):
                  operation: str | None = None, profile: str | None = None,
                  executable: str | None = None,
                  timeout_seconds: float | None = None, elapsed_ms: int | None = None,
-                 failure_scope: str | None = None, fallback_allowed: bool | None = None):
+                 failure_scope: str | None = None, fallback_allowed: bool | None = None,
+                 diagnostics: dict[str, Any] | None = None):
         super().__init__(message)
         self.category = category
         self.provider = provider
@@ -60,6 +62,36 @@ class DatabricksError(RuntimeError):
         self.failure_scope = failure_scope or policy.get("scope", "OPERATION")
         self.fallback_allowed = (policy.get("fallback_allowed", False)
                                  if fallback_allowed is None else fallback_allowed)
+        self.diagnostics = safe_diagnostics(diagnostics or {})
+
+
+_SAFE_PHASES = {"initialization", "authentication_configuration", "request", "response_parsing"}
+_SAFE_SCOPES = {"PROVIDER_SPECIFIC", "SHARED_DEPENDENCY", "CAPABILITY", "CONFIGURATION", "OPERATION", "UNKNOWN"}
+
+
+def safe_diagnostics(value: Any) -> dict[str, Any]:
+    """Copy only known, non-secret SDK failure fields across the worker boundary."""
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    phase = value.get("phase")
+    if isinstance(phase, str) and phase in _SAFE_PHASES:
+        result["phase"] = phase
+    operation = value.get("operation")
+    if isinstance(operation, str) and re.fullmatch(r"[a-z.]{1,48}", operation):
+        result["operation"] = operation
+    exception_category = value.get("exception_category")
+    if isinstance(exception_category, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9]{0,63}", exception_category):
+        result["exception_category"] = exception_category
+    status = value.get("normalized_status")
+    if isinstance(status, int) and 400 <= status <= 599:
+        result["normalized_status"] = status
+    if isinstance(value.get("retryable"), bool):
+        result["retryable"] = value["retryable"]
+    scope = value.get("failure_scope")
+    if isinstance(scope, str) and scope in _SAFE_SCOPES:
+        result["failure_scope"] = scope
+    return result
 
 
 def vendor_category(value: Any) -> str | None:

@@ -22,6 +22,7 @@ if SCRIPT_DIR not in sys.path:
 from databricks_providers import discovery, resolver, state as provider_state  # noqa: E402
 from databricks_providers import auth as auth_executor, auth_strategy, cli_install, owned_config, sdk, sql_connector as discovery_sql_connector  # noqa: E402
 from databricks_providers import errors, presentation, process, readiness, timeouts, topology  # noqa: E402
+import public_errors  # noqa: E402
 
 
 MINIMUM_CLI = (1, 0, 0)
@@ -1125,6 +1126,7 @@ def _resource_capability(profile: str, host: str, name: str,
             "failure_category": exc.category, "failure_scope": exc.failure_scope,
             "fallback_allowed": exc.fallback_allowed, "blocked_by": exc.category,
             "diagnostic_summary": str(exc), "executable": exc.executable,
+            "diagnostics": exc.diagnostics,
             "timeout_seconds": exc.timeout_seconds, "elapsed_ms": exc.elapsed_ms,
             "rejected_providers": getattr(exc, "rejected_providers", []),
         }
@@ -1189,6 +1191,8 @@ def _probe_readiness(profile: str, host: str, config_path: Path | None,
         }
         blocker = {"category": category, "scope": exc.failure_scope,
                    "operation": "identity", "summary": str(exc)}
+        if exc.diagnostics:
+            blocker["diagnostics"] = exc.diagnostics
         capabilities = {
             "compute.list": {"supported": True, "available": None, "verified": False,
                              "checked": True, "resource_count": None, "blocked_by": category,
@@ -1219,11 +1223,14 @@ def _probe_readiness(profile: str, host: str, config_path: Path | None,
         if check.get("verified"):
             preferred = check.get("provider") or preferred
         elif check.get("failure_category"):
-            blockers.append({"category": check["failure_category"],
-                             "scope": check.get("failure_scope", "CAPABILITY"),
-                             "operation": check["operation"],
-                             "summary": check.get("diagnostic_summary") or
-                             f"{check['operation']} was not verified"})
+            blocker = {"category": check["failure_category"],
+                       "scope": check.get("failure_scope", "CAPABILITY"),
+                       "operation": check["operation"],
+                       "summary": check.get("diagnostic_summary") or
+                       f"{check['operation']} was not verified"}
+            if check.get("diagnostics"):
+                blocker["diagnostics"] = check["diagnostics"]
+            blockers.append(blocker)
             if check.get("failure_scope") == "SHARED_DEPENDENCY":
                 workspace_check.update({"status": "FAILED",
                                         "failure_category": check["failure_category"],
@@ -1879,7 +1886,7 @@ def local_status() -> dict[str, Any]:
     cap_map = resolver.resolve_local(providers)
     value["resolved_capabilities"] = cap_map
     cached = prefs.get("readiness") if isinstance(prefs.get("readiness"), dict) else None
-    stale = readiness.is_stale(cached) if cached else True
+    stale = readiness.is_stale(cached) if cached else False
     value["readiness"] = cached
     value["readiness_stale"] = stale
     value["capability_health"] = (cached or {}).get("capabilities", {})
@@ -2124,4 +2131,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(public_errors.run_public(main, command="Databricks command"))

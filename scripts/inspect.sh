@@ -23,6 +23,8 @@ PY
 )"
 
 printf '%s\n' 'Anvil Inspect (read-only)' '────────────────────────'
+python3 "$ROOT/scripts/lifecycle_state.py" inspect
+printf '\n'
 printf 'Anvil repository       %s\n' "$anvil_version"
 printf 'Anvil installed        %s\n' "$installed_anvil"
 printf 'OpenCode installed     %s\n' "${installed:-False}"

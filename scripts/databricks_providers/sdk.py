@@ -46,8 +46,11 @@ def call(operation: str, *, profile: str | None = None, timeout: int = 120,
         category = record.get("category") if isinstance(record, dict) else None
         if category not in errors.POLICIES:
             category = "PROVIDER_UNHEALTHY"
+        diagnostics = errors.safe_diagnostics(record)
+        diagnostics.setdefault("operation", operation)
         raise errors.DatabricksError(category, f"Databricks SDK {operation} operation failed",
-                                     provider="sdk", operation=operation, profile=profile, executable=str(python))
+                                     provider="sdk", operation=operation, profile=profile, executable=str(python),
+                                     diagnostics=diagnostics)
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError as exc:

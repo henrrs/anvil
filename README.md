@@ -4,7 +4,7 @@
 >
 > **Better harness. Better execution.**
 
-Anvil 2.6.1 strengthens Databricks provider recovery while keeping OpenCode 1/2 and provider-independent support.
+Anvil 2.6.2 hardens fresh installation, public command reliability, and Databricks SDK bootstrap while keeping OpenCode 1/2 support.
 
 ```bash
 # First installation
@@ -65,9 +65,9 @@ Luna / Terra / Sol / Astra / Sonnet / other models
 
 Prerequisites: Linux or macOS, Bash, Python 3.11+, and `tar`. A fresh install may need access to the official OpenCode release source. Existing supported runtimes can be reused without downloading OpenCode. Windows users can run Anvil under WSL. Databricks is optional and does not affect the rest of Anvil.
 
-`make inspect` reads local runtime and provider state without changing it. `make test` validates both runtime profiles, memory behavior, lifecycle, rollback, failure recovery, and Databricks contracts with local fixtures. The suite blocks external network connections in its lifecycle checks while allowing loopback for isolated runtime fixtures.
+`make inspect` reads local runtime and provider state without changing it, including whether Anvil is not installed, partially installed, ready, degraded, or corrupted. `make test` validates both runtime profiles, memory behavior, lifecycle, rollback, failure recovery, Databricks providers, and fresh HOME/XDG command journeys with local fixtures. The suite isolates all user/XDG roots, constrains `PATH`, and blocks external network connections in lifecycle checks while allowing loopback for isolated runtime fixtures.
 
-For a first installation, run `make reforge`, then `make doctor`. If a healthy supported OpenCode runtime is already installed, reforge rebuilds Anvil around that exact executable without contacting a release service. If no runtime exists, reforge provisions the version selected by `config/runtime-policy.json` and may need network access.
+For a first installation, run `make inspect` to review the environment, then `make reforge` and `make doctor`. Before reforge, inventory commands remain useful; commands that require an installed Anvil report that prerequisite and point to reforge. Rollback reports when no verified snapshot exists. If a healthy supported OpenCode runtime is already installed, reforge rebuilds Anvil around that exact executable without contacting a release service. If no runtime exists, reforge provisions the version selected by `config/runtime-policy.json` and may need network access.
 
 `make upgrade` upgrades Anvil only. It uses the local validated OpenCode executable for rehearsal and preserves its exact path, bytes, and version. `make upgrade DRY_RUN=1` works offline, reports active OpenCode processes, and does not signal them or change live state. A real upgrade checks the backup destination first, warns before stopping only the exact runtime processes using the configured data paths, prefers graceful shutdown, and uses SIGKILL only after the bounded wait. Start OpenCode normally when the upgrade finishes. Use `make update-runtime` for an explicit same-major OpenCode update. Use `make migrate-runtime OPENCODE_MAJOR=N` for an explicit major migration.
 
@@ -109,8 +109,8 @@ Anvil configures one model-neutral `anvil` primary agent. No model is pinned; se
 
 `make rollback` restores the latest verified snapshot by scope. An Anvil-only snapshot restores Anvil config/metadata and preserves the OpenCode executable/data/state; a runtime snapshot restores those runtime files as well. Current Anvil Markdown memory is archived separately before rollback and remains portable.
 
-`make doctor` checks the selected config adapter and agent policy, commands and skills, runtime support, memory, knowledge access, source registry, migration metadata, and visible workspace overrides. It reports `HEALTHY`, `WARNING`, or `BROKEN`; exit codes are `0`, `2`, and `1` respectively. A supported installation on an older Anvil release is reported as `UPGRADE AVAILABLE` with exit code `0`. `make stats` uses OpenCode 2's structured JSON report or OpenCode 1's native text report; unavailable metrics are reported without invented values.
+`make doctor` checks the shared lifecycle state as well as the selected config adapter and agent policy, commands and skills, runtime support, memory, knowledge access, source registry, migration metadata, and visible workspace overrides. It reports `HEALTHY`, `WARNING`, `PARTIALLY INSTALLED`, `BROKEN`, or `NOT INSTALLED`; exit codes are `0` for a completed healthy/informational check, `2` for warnings or partial installs, and `1` for corrupted state or failed checks. A supported installation on an older Anvil release is reported as `UPGRADE AVAILABLE` with exit code `0`. `make stats` uses OpenCode 2's structured JSON report or OpenCode 1's native text report; unavailable metrics are reported without invented values.
 
 ## Version history
 
-See the [Anvil 2.6.1 release notes](docs/versions/v2.6.1.md), [Anvil 2.6.0 release notes](docs/versions/v2.6.0.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).
+See the [Anvil 2.6.2 release notes](docs/versions/v2.6.2.md), [public command contracts](docs/command-contracts.md), [Anvil 2.6.1 release notes](docs/versions/v2.6.1.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).

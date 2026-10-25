@@ -9,6 +9,7 @@ import platform
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import urllib.error
 import urllib.request
@@ -117,22 +118,50 @@ def install_sdk() -> dict[str, Any]:
     """Create/reuse Anvil's private SDK environment without touching global Python."""
     root = data_root()
     python = root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    invocation = str(python.expanduser().absolute())
+
+    def blocked(failure: str, message: str) -> dict[str, Any]:
+        return {"status": "BLOCKED", "failure": failure, "message": message}
+
     try:
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(root, 0o700)
+        system_python = Path(sys.executable).expanduser().absolute()
+        if not system_python.is_file() or not os.access(system_python, os.X_OK):
+            return blocked("python-unavailable", "A working Python executable is required to prepare the isolated Databricks SDK environment.")
         if not python.is_file():
-            subprocess.run([os.sys.executable, "-m", "venv", str(root / "venv")], check=True, timeout=90,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            try:
+                subprocess.run([str(system_python), "-m", "venv", str(root / "venv")], check=True, timeout=90,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            except subprocess.CalledProcessError:
+                # Some distributions create the environment but report that
+                # ensurepip is unavailable. Detect that specifically.
+                if python.is_file() and os.access(python, os.X_OK):
+                    pip_check = subprocess.run([invocation, "-m", "pip", "--version"], check=False,
+                                               capture_output=True, text=True, timeout=8)
+                    if pip_check.returncode:
+                        return blocked("pip-unavailable", "pip is unavailable in Anvil's isolated Python environment.")
+                return blocked("venv-unavailable", "Anvil could not create a working isolated Python environment.")
             os.chmod(root / "venv", 0o700)
-        check = subprocess.run([str(python), "-c", "import importlib.metadata as m; print(m.version('databricks-sdk'))"],
+        if not python.is_file() or not os.access(python, os.X_OK):
+            return blocked("python-unavailable", "Anvil's isolated Python executable is missing or not executable.")
+        sanity = subprocess.run([invocation, "-c", "import sys; print(sys.prefix)"],
+                                capture_output=True, text=True, timeout=8, check=False)
+        if sanity.returncode:
+            return blocked("python-unavailable", "Anvil's isolated Python executable could not start.")
+        check = subprocess.run([invocation, "-c", "import importlib.metadata as m; print(m.version('databricks-sdk'))"],
                                capture_output=True, text=True, timeout=8, check=False)
         if check.returncode == 0:
-            return {"status": "READY", "python": str(python.resolve()), "version": check.stdout.strip(), "reused": True}
-        subprocess.run([str(python), "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "databricks-sdk==0.141.0"],
+            return {"status": "READY", "python": invocation, "version": check.stdout.strip(), "reused": True}
+        pip_check = subprocess.run([invocation, "-m", "pip", "--version"], check=False,
+                                   capture_output=True, text=True, timeout=8)
+        if pip_check.returncode:
+            return blocked("pip-unavailable", "pip is unavailable in Anvil's isolated Python environment.")
+        subprocess.run([invocation, "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "databricks-sdk==0.141.0"],
                        check=True, timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        result = subprocess.run([str(python), "-c", "import importlib.metadata as m; print(m.version('databricks-sdk'))"],
+        result = subprocess.run([invocation, "-c", "import importlib.metadata as m; print(m.version('databricks-sdk'))"],
                                 capture_output=True, text=True, timeout=8, check=True)
-        return {"status": "READY", "python": str(python.resolve()), "version": result.stdout.strip(), "reused": False}
+        return {"status": "READY", "python": invocation, "version": result.stdout.strip(), "reused": False}
     except subprocess.TimeoutExpired:
         return {"status": "BLOCKED", "failure": "download-failed", "message": "SDK setup timed out"}
     except subprocess.CalledProcessError as exc:

@@ -15,9 +15,12 @@ import sys
 import time
 import tempfile
 from typing import Any
+from unittest import mock
 
 
 ROOT = pathlib.Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(ROOT / "scripts"))
+import lifecycle_state  # noqa: E402
 CANDIDATE_V2 = pathlib.Path(sys.argv[2]).resolve()
 VERSION_V2 = sys.argv[3]
 CANDIDATE_V1 = pathlib.Path(sys.argv[4]).resolve()
@@ -112,6 +115,180 @@ def fixture(temp: pathlib.Path) -> dict[str, pathlib.Path]:
         "anvil_data": anvil_data, "memory": anvil_data / "memory",
         "state_opencode": state_opencode,
     }
+
+
+def fresh_environment(temp: pathlib.Path) -> dict[str, str]:
+    home = temp / "home"
+    config_home = temp / "xdg-config"
+    data_home = temp / "xdg-data"
+    state_home = temp / "xdg-state"
+    cache_home = temp / "xdg-cache"
+    for path in (home, config_home, data_home, state_home, cache_home):
+        path.mkdir(parents=True, exist_ok=True)
+    python_dir = str(pathlib.Path(sys.executable).parent)
+    return {
+        "PATH": python_dir + os.pathsep + "/usr/bin:/bin",
+        "HOME": str(home), "XDG_CONFIG_HOME": str(config_home),
+        "XDG_DATA_HOME": str(data_home), "XDG_STATE_HOME": str(state_home),
+        "XDG_CACHE_HOME": str(cache_home), "PYTHONNOUSERSITE": "1",
+        "SHELL": "/bin/bash", "TMPDIR": "/tmp", "LANG": "C.UTF-8",
+        "ANVIL_DATABRICKS_CLI": str(FIXTURES / "bin" / "databricks"),
+        "ANVIL_DATABRICKS_SCENARIO": "valid", "ANVIL_DOCTOR_LOCAL": "1",
+    }
+
+
+def assert_human_public_result(proc: subprocess.CompletedProcess[str], command: str) -> str:
+    output = proc.stdout + proc.stderr
+    check("Traceback" not in output and "FileNotFoundError" not in output
+          and "json.decoder" not in output,
+          f"{command} exposed an internal exception or traceback: {output[-2000:]}")
+    check(not any(line.lstrip().startswith(("{", "[")) for line in output.splitlines()),
+          f"{command} emitted raw JSON in its normal human output")
+    return output
+
+
+def fresh_machine_command_contract_test(temp: pathlib.Path, wrapper_v1: pathlib.Path) -> None:
+    env = fresh_environment(temp)
+    offline = offline_env({
+        "home": pathlib.Path(env["HOME"]),
+        "config_home": pathlib.Path(env["XDG_CONFIG_HOME"]),
+        "data_home": pathlib.Path(env["XDG_DATA_HOME"]),
+        "state_home": pathlib.Path(env["XDG_STATE_HOME"]),
+        "install_bin": pathlib.Path(env["HOME"]) / ".opencode" / "bin",
+    }, temp, **{key: value for key, value in env.items()
+                if key not in {"PATH", "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "SHELL", "TMPDIR", "LANG"}})
+    offline.update(env)
+    offline["PYTHONPATH"] = str(ROOT / "tests" / "fixtures" / "network-denied")
+    preinstall = [
+        (("help",), 0), (("inspect",), 0), (("doctor",), 0),
+        (("capabilities",), 0), (("stats",), 0),
+        (("upgrade", "DRY_RUN=1"), 2), (("upgrade",), 2), (("rollback",), 2),
+        (("update-runtime",), 2), (("migrate-runtime", "OPENCODE_MAJOR=2"), 2),
+        (("databricks-setup", "DRY_RUN=1"), 0), (("databricks-setup",), 2),
+    ]
+    outputs: dict[str, str] = {}
+    for args, expected in preinstall:
+        proc = run(["/usr/bin/make", "--no-print-directory", *args], offline, expected=expected)
+        outputs[" ".join(args)] = assert_human_public_result(proc, "make " + " ".join(args))
+    check("Status                NOT_INSTALLED" in outputs["inspect"],
+          "fresh repository inspect did not report NOT_INSTALLED")
+    check("make reforge" in outputs["upgrade"],
+          "pre-install Anvil upgrade did not explain the reforge prerequisite")
+    check("No Anvil rollback snapshot" in outputs["rollback"],
+          "fresh rollback did not explain the missing snapshot and next action")
+    check("workspace URL" in outputs["databricks-setup"].casefold()
+          or "interactive terminal" in outputs["databricks-setup"],
+          "first-use Databricks setup did not explain its workspace prerequisite")
+    paths = {
+        "home": pathlib.Path(offline["HOME"]),
+        "config": pathlib.Path(offline["XDG_CONFIG_HOME"]) / "opencode",
+        "record": pathlib.Path(offline["XDG_DATA_HOME"]) / "anvil" / "installation.json",
+        "binary": pathlib.Path(offline["HOME"]) / ".opencode" / "bin" / "opencode",
+    }
+    check(not paths["config"].exists() and not paths["record"].exists() and not paths["binary"].exists(),
+          "pre-install inventory or blocked commands changed managed Anvil state")
+
+    managed_path = str(pathlib.Path(offline["HOME"]) / ".opencode" / "bin")
+    bootstrap_env = dict(offline, PATH=managed_path + os.pathsep + offline["PATH"],
+                         ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper_v1),
+                         ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    bootstrapped = run(["/usr/bin/make", "--no-print-directory", "reforge"], bootstrap_env)
+    assert_human_public_result(bootstrapped, "make reforge")
+    check("Status: HEALTHY" in bootstrapped.stdout,
+          "fresh-machine make reforge did not pass its postflight doctor")
+    check(lifecycle_state_for_env(bootstrap_env) == "READY",
+          "first-use reforge did not produce READY lifecycle state")
+
+    postinstall = [
+        (("inspect",), 0), (("doctor",), 2), (("capabilities",), 0),
+        (("stats",), 0), (("upgrade", "DRY_RUN=1"), 0),
+        (("update-runtime",), 2), (("migrate-runtime", "OPENCODE_MAJOR=2"), 2),
+        (("databricks-setup", "DRY_RUN=1"), 0), (("databricks-setup",), 2),
+    ]
+    after_failures = tree_hash(pathlib.Path(bootstrap_env["XDG_DATA_HOME"]) / "anvil")
+    for args, expected in postinstall:
+        proc = run(["/usr/bin/make", "--no-print-directory", *args], offline, expected=expected)
+        output = assert_human_public_result(proc, "make " + " ".join(args))
+        if args[0] == "doctor":
+            check("not in this session's PATH" in output and "Status: WARNING" in output,
+                  "doctor did not report a usable runtime missing from this shell's PATH: "
+                  f"exit={proc.returncode}, output={output[-2500:]}")
+        if args[0] == "update-runtime" or args[0] == "migrate-runtime":
+            check("release" in output.casefold() or "network" in output.casefold()
+                  or "could not" in output.casefold(),
+                  f"offline runtime operation lacked a useful blocker: {output[-1000:]}")
+    check(tree_hash(pathlib.Path(bootstrap_env["XDG_DATA_HOME"]) / "anvil") == after_failures,
+          "blocked offline runtime operations changed Anvil state")
+
+    memory = pathlib.Path(bootstrap_env["XDG_DATA_HOME"]) / "anvil" / "memory"
+    shutil.rmtree(memory)
+    degraded = run(["/usr/bin/make", "--no-print-directory", "inspect"], offline)
+    check("Status                DEGRADED" in degraded.stdout,
+          "missing memory directory was not classified as DEGRADED")
+    memory.mkdir(parents=True)
+    successful_upgrade = run(["/usr/bin/make", "--no-print-directory", "upgrade"],
+                             dict(bootstrap_env, ANVIL_DOCTOR_LOCAL="1"))
+    assert_human_public_result(successful_upgrade, "make upgrade")
+    rollback = run(["/usr/bin/make", "--no-print-directory", "rollback"], offline)
+    assert_human_public_result(rollback, "make rollback")
+    check("Rollback completed" in rollback.stderr,
+          "post-install rollback did not restore a verified snapshot")
+    check(lifecycle_state_for_env(offline) == "READY",
+          "rollback did not leave the prior Anvil installation ready")
+    print("PASS fresh HOME/XDG public command matrices, reforge journey, offline blockers, and post-install rollback")
+
+
+def lifecycle_state_for_env(env: dict[str, str]) -> str:
+    proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "lifecycle_state.py"), "inspect", "--format", "json"],
+                          cwd=ROOT, env=env, text=True, capture_output=True, timeout=20, check=False)
+    check(proc.returncode == 0, f"lifecycle state inspection failed: {proc.stderr}")
+    return json.loads(proc.stdout)["lifecycle"]
+
+
+def partial_lifecycle_matrix_test(temp: pathlib.Path, wrapper_v1: pathlib.Path) -> None:
+    config_only = fresh_environment(temp / "config-only")
+    config_path = pathlib.Path(config_only["XDG_CONFIG_HOME"]) / "opencode"
+    config_path.mkdir(parents=True)
+    shutil.copy2(V1_CONFIG, config_path / "opencode.jsonc")
+    inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], config_only)
+    check("PARTIALLY_INSTALLED" in inspect.stdout, "config-only environment was not classified as partial")
+
+    runtime_only = fresh_environment(temp / "runtime-only")
+    binary = pathlib.Path(runtime_only["HOME"]) / ".opencode" / "bin" / "opencode"
+    binary.parent.mkdir(parents=True)
+    binary.symlink_to(wrapper_v1)
+    inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], runtime_only)
+    check("PARTIALLY_INSTALLED" in inspect.stdout, "runtime-only environment was not classified as partial")
+    doctor = run(["/usr/bin/make", "--no-print-directory", "doctor"], runtime_only, expected=2)
+    check("managed Anvil config is missing" in doctor.stderr,
+          "runtime-only doctor did not explain the missing Anvil config")
+
+    corrupt = fresh_environment(temp / "corrupt-config")
+    corrupt_config = pathlib.Path(corrupt["XDG_CONFIG_HOME"]) / "opencode"
+    corrupt_config.mkdir(parents=True)
+    (corrupt_config / "opencode.jsonc").write_text("{ invalid", encoding="utf-8")
+    doctor = run(["/usr/bin/make", "--no-print-directory", "doctor"], corrupt, expected=2)
+    check("CORRUPTED" in doctor.stdout and "BROKEN" in doctor.stdout,
+          "corrupted generated config was not classified by doctor")
+
+    non_executable = fresh_environment(temp / "non-executable-runtime")
+    binary = pathlib.Path(non_executable["HOME"]) / ".opencode" / "bin" / "opencode"
+    binary.parent.mkdir(parents=True)
+    shutil.copy2(wrapper_v1, binary)
+    binary.chmod(0o644)
+    inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], non_executable)
+    check("CORRUPTED" in inspect.stdout, "non-executable managed runtime was not classified as corrupted")
+
+    invalid_repo = temp / "invalid-repository"
+    invalid_repo.mkdir()
+    (invalid_repo / "VERSION").write_text("invalid\n", encoding="utf-8")
+    invalid_env = fresh_environment(temp / "invalid-version")
+    with mock.patch.object(lifecycle_state, "ROOT", invalid_repo), \
+            mock.patch.object(lifecycle_state.runtime_state, "discover", return_value={"runtime": None}), \
+            mock.patch.dict(os.environ, invalid_env, clear=True):
+        check(lifecycle_state.evaluate()["lifecycle"] == "CORRUPTED",
+              "invalid repository VERSION was not classified as corrupted")
+    print("PASS config-only, runtime-only, corrupted config, non-executable runtime, and invalid VERSION states")
 
 
 def use_v2_profile(paths: dict[str, pathlib.Path], temp: pathlib.Path, wrapper: pathlib.Path) -> None:
@@ -808,6 +985,11 @@ def main() -> int:
         encoding="utf-8",
     )
     wrapper_v1.chmod(0o755)
+
+    with tempfile.TemporaryDirectory(prefix="anvil-public-commands-", dir=TEST_ROOT) as name:
+        fresh_machine_command_contract_test(pathlib.Path(name), wrapper_v1)
+    with tempfile.TemporaryDirectory(prefix="anvil-partial-lifecycle-", dir=TEST_ROOT) as name:
+        partial_lifecycle_matrix_test(pathlib.Path(name), wrapper_v1)
 
     with tempfile.TemporaryDirectory(prefix="anvil-provider-migration-", dir=TEST_ROOT) as name:
         provider_migration_test(pathlib.Path(name))

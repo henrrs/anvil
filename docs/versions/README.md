@@ -1,6 +1,6 @@
 # Anvil version capability matrix
 
-Anvil's product version and OpenCode runtime generation are independent. Anvil 2.1 established OpenCode 1.x and 2.x adapters; Anvil 2.2 added optional Databricks execution to both; Anvil 2.3 adds provider independence without changing runtime requirements. Anvil 2.3.1 corrects lifecycle coupling; 2.4.0 adds safe runtime quiescing and topology-aware setup; 2.5.0 introduces Anvil-owned Databricks configuration and authentication; 2.6.0 adds validated readiness and provider reliability; 2.6.1 fixes provider-specific fallback setup and cross-session SDK path reuse. See [runtime compatibility](../runtime-compatibility.md) for version floors and validation methods.
+Anvil's product version and OpenCode runtime generation are independent. Anvil 2.1 established OpenCode 1.x and 2.x adapters; Anvil 2.2 added optional Databricks execution to both; Anvil 2.3 adds provider independence without changing runtime requirements. Anvil 2.3.1 corrects lifecycle coupling; 2.4.0 adds safe runtime quiescing and topology-aware setup; 2.5.0 introduces Anvil-owned Databricks configuration and authentication; 2.6.0 adds validated readiness and provider reliability; 2.6.1 fixes provider-specific fallback setup and cross-session SDK path reuse; 2.6.2 hardens first-use lifecycle and SDK bootstrap. See [runtime compatibility](../runtime-compatibility.md) for version floors and validation methods.
 
 | Capability | Anvil V1 | Anvil 2.1 + OpenCode 1 | Anvil 2.1 + OpenCode 2 | Anvil 2.2 + OpenCode 1 | Anvil 2.2 + OpenCode 2 | Anvil 2.3 + OpenCode 1 | Anvil 2.3 + OpenCode 2 | Anvil 2.4 + OpenCode 1 | Anvil 2.4 + OpenCode 2 | Anvil 2.5 + OpenCode 1 | Anvil 2.5 + OpenCode 2 | Anvil 2.6 + OpenCode 1 | Anvil 2.6 + OpenCode 2 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -30,7 +30,7 @@ Anvil's product version and OpenCode runtime generation are independent. Anvil 2
 
 The Databricks rows use shared provider/filesystem primitives and do not require OpenCode 2, MCP, or a model-specific feature. Databricks remains optional when providers or workspace access are unavailable. CLI setup is explicit; a blocked CLI can use SDK fallback where supported.
 
-See [V1 history](v1.md), [V2 release](v2.md), [Anvil 2.1 release](v2.1.md), [Anvil 2.2 release](v2.2.md), [Anvil 2.3 release](v2.3.md), [Anvil 2.4.0 release](v2.4.0.md), [Anvil 2.5.0 release](v2.5.0.md), [Anvil 2.6.0 release](v2.6.0.md), [Anvil 2.6.1 release](v2.6.1.md), [the changelog](../../CHANGELOG.md), and the migration guides linked below.
+See [V1 history](v1.md), [V2 release](v2.md), [Anvil 2.1 release](v2.1.md), [Anvil 2.2 release](v2.2.md), [Anvil 2.3 release](v2.3.md), [Anvil 2.4.0 release](v2.4.0.md), [Anvil 2.5.0 release](v2.5.0.md), [Anvil 2.6.0 release](v2.6.0.md), [Anvil 2.6.1 release](v2.6.1.md), [Anvil 2.6.2 release](v2.6.2.md), [the changelog](../../CHANGELOG.md), and the migration guides linked below.
 
 Anvil 2.3.1 keeps the capability matrix unchanged and separates Anvil upgrades from OpenCode runtime updates. See [Anvil 2.3.1 release notes](v2.3.1.md).
 
@@ -41,3 +41,5 @@ Anvil 2.5.0 keeps both OpenCode runtime profiles and moves Databricks setup to a
 Anvil 2.6.0 makes setup, status, and doctor use a shared readiness contract, with a validated provider and core capability evidence required for READY. See [Anvil 2.6.0 release notes](v2.6.0.md), the [readiness contract](../databricks/readiness.md), and the [2.5.0-to-2.6.0 migration guide](../migrations/v2.5.0-to-v2.6.0.md).
 
 Anvil 2.6.1 prepares the isolated SDK only after an explicit setup discovers a provider-specific CLI health failure, and preserves the validated SDK executable across clean processes. The patch leaves readiness and state-schema semantics unchanged; no migration is required. See [Anvil 2.6.1 release notes](v2.6.1.md).
+
+Anvil 2.6.2 adds shared lifecycle reporting, an isolated fresh-machine command matrix, explicit pip/venv checks, preserved SDK invocation paths, and phase-aware safe diagnostics. It leaves runtime compatibility and Databricks readiness persistence unchanged. See [Anvil 2.6.2 release notes](v2.6.2.md) and the [public command contracts](../command-contracts.md).

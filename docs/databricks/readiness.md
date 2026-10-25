@@ -67,6 +67,10 @@ The repository-level cause was confirmed offline: setup installed the SDK only w
 
 Anvil 2.6.1 corrects those boundaries. During the explicit setup command only, a normalized provider-specific CLI failure may trigger isolated SDK installation and a full re-run through the shared resolver. The resolver passes its validated SDK executable to the adapter, and direct SDK calls consult the saved inventory. Shared authentication, workspace-network, permission, invalid-argument, and unknown failures do not trigger installation or provider roulette. Metadata-list operations use their own timeout class; its 45-second value is unchanged.
 
+### 2.6.2 bootstrap diagnostics
+
+Anvil 2.6.2 preserves the same readiness stages and schema-3 persistence rules. SDK setup now reports missing Python, venv, pip, or package-source prerequisites as structured provider state. The worker constructs an explicit SDK `Config` from the selected Anvil profile and owned config file; allowlisted failure phase and normalized status survive into the setup/doctor presenter without forwarding exception text or response bodies. A blocked SDK fallback does not invalidate a healthy CLI provider or promote an unverified provider to READY.
+
 ## One production path
 
 `make databricks-setup` stages an Anvil-owned config, authenticates through the selected strategy, and validates `current-user me`, `clusters list`, and `warehouses list` through `json_from_cli` → the capability resolver → the same CLI/SDK adapters used by a later session. The profile, absolute CLI, sanitized child environment, timeout class, error mapping, and JSON validation are shared. A fresh process test reloads the persisted config and performs status and cluster discovery.

@@ -2,6 +2,27 @@
 
 Release notes for user-visible Anvil changes. See [version history](docs/versions/README.md) and [release discipline](docs/RELEASING.md).
 
+## [2.6.2] - 2026-10-25
+
+### Fixed
+
+- Added a shared Anvil lifecycle evaluator for repository-only, partial, installed, ready, degraded, and corrupted managed state. Inspect and doctor report that state; upgrade, runtime update/migration, and rollback use shared lifecycle preconditions.
+- Fresh rollback now explains when no verified snapshot exists and how to create one. Doctor no longer marks an unconfigured Databricks integration stale, and it preserves status-probe diagnostics.
+- `make test` now isolates HOME, all XDG roots, PATH, Python user-site behavior, and Databricks selectors; external network attempts fail the offline suite.
+- Databricks SDK setup now distinguishes a missing pip from Python/venv/download blockers, preserves the venv Python invocation path through discovery and persistence, and shows the actual SDK blocker in human output.
+- SDK worker calls now construct an explicit Config with the selected Anvil profile, owned config file and bounded timeouts. Safe allowlisted phase diagnostics survive the worker, adapter, readiness result and presenter.
+- Unexpected Python command failures now receive a sanitized human-facing error boundary, with stack frames available through `DEBUG=1`.
+
+### Documentation and validation
+
+- Added the public Make command contract matrix, lifecycle definitions, fresh-install journey, and root-cause audit.
+- No Databricks readiness state or persisted provider schema changed; OpenCode 1.x and 2.x runtime support and Anvil-only upgrade independence remain intact.
+- The offline release suite covers pre/post-reforge public command matrices, partial/corrupt states, missing pip, venv symlink identity, SDK worker diagnostics, and rollback. It uses local fixtures and does not require Databricks, Azure, or external network access.
+
+### Release choice
+
+PATCH: this release corrects command and bootstrap reliability without adding product capabilities or changing the persisted Databricks state schema.
+
 ## [2.6.1] - 2026-10-16
 
 ### Fixed

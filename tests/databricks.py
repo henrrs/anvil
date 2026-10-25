@@ -41,6 +41,7 @@ def load_module(name: str, path: Path):
 dbx = load_module("anvil_databricks_test", ROOT / "scripts" / "databricks.py")
 finops = load_module("anvil_finops_test", ROOT / "scripts" / "databricks_finops.py")
 sdk_worker = load_module("anvil_databricks_sdk_worker_test", ROOT / "scripts" / "databricks_providers" / "sdk_worker.py")
+public_errors = load_module("anvil_public_errors_test", ROOT / "scripts" / "public_errors.py")
 dbx.POLL_INTERVAL = 0
 
 
@@ -670,6 +671,9 @@ def test_hung_provider_cannot_be_promoted_ready(temp: Path) -> None:
         return budgets.get(name, original(name))
     with mock.patch.dict(os.environ, env, clear=False), \
             mock.patch.object(dbx.timeouts, "seconds_for", side_effect=short_budget), \
+            mock.patch.object(dbx.cli_install, "install_sdk",
+                              return_value={"status": "BLOCKED", "failure": "policy-blocked",
+                                            "message": "network disabled in this offline regression"}), \
             mock.patch.object(dbx.sys, "stdin", TTYInput("")), \
             mock.patch("builtins.input", side_effect=["https://adb-1234567890123456.7.azuredatabricks.net", "1", "y", "y"]), \
             contextlib.redirect_stdout(io.StringIO()):
@@ -1334,6 +1338,29 @@ def test_topology_auth_strategy_and_presenters() -> None:
           "human setup leaked internal implementation details")
     check("/internal/private/databricks" in dbx.presentation.setup_text(result, verbose=True),
           "verbose mode omitted provider diagnostics")
+    blocked_sdk_result = {**result, "overall": "NOT_READY",
+                          "providers": {"cli": {"status": "READY", "installed": True},
+                                        "sdk": {"status": "BLOCKED", "failure": "pip-unavailable",
+                                                "message": "pip is unavailable in Anvil's isolated Python environment."},
+                                        "vscode": {"available": False}},
+                          "readiness": {}, "next_step": "Resolve the SDK installation blocker, then rerun make databricks-setup."}
+    blocked_sdk_text = dbx.presentation.setup_text(blocked_sdk_result)
+    check("SDK installation blocker" in blocked_sdk_text and "pip is unavailable" in blocked_sdk_text
+          and "Install Python venv/ensurepip support" in blocked_sdk_text,
+          "human setup output concealed the missing-pip SDK blocker or remediation")
+    phase_result = {**result, "readiness": {"blockers": [{"category": "PERMISSION_DENIED",
+                                                             "summary": "clusters list failed",
+                                                             "diagnostics": {"phase": "request",
+                                                                             "exception_category": "PermissionDenied",
+                                                                             "normalized_status": 403}}]}}
+    phase_text = dbx.presentation.setup_text(phase_result)
+    check("request phase (PermissionDenied), HTTP 403" in phase_text,
+          "human setup output omitted safe SDK phase diagnostics")
+    doctor_no_profile = dbx.presentation.doctor_text({"overall": "NOT_CONFIGURED", "readiness_stale": False,
+                                                       "readiness": {}, "external_profiles_detected": 0,
+                                                       "external_profiles_used": False})
+    check("cached result is stale" not in doctor_no_profile,
+          "doctor presenter marked an unconfigured integration stale")
     remote_result = {"dry_run": False, "overall": "NOT_CONFIGURED", "providers": {},
                      "topology": {"kind": "vscode_remote"}, "authentication": {"strategy": "vscode-assisted"},
                      "next_step": "Sign in with the Databricks VS Code extension, then run make databricks-setup again."}
@@ -1634,9 +1661,17 @@ def test_sdk_worker_uses_pinned_official_api_contracts() -> None:
             list=record_call("workspace_list", [types.SimpleNamespace(path="/Shared")]))
     )
 
+    class Config:
+        def __init__(self, **values):
+            self.values = values
+            self.host = "https://adb-123.azuredatabricks.net"
+
     sdk_module = types.ModuleType("databricks.sdk")
     sdk_module.__path__ = []
-    sdk_module.WorkspaceClient = lambda **kwargs: (client_configurations.append(kwargs) or workspace_client)
+    sdk_module.WorkspaceClient = lambda **kwargs: (client_configurations.append(kwargs["config"].values) or workspace_client)
+    sdk_module.Config = Config
+    core_module = types.ModuleType("databricks.sdk.core")
+    core_module.Config = Config
     root_module = types.ModuleType("databricks")
     root_module.__path__ = []
     service_module = types.ModuleType("databricks.sdk.service")
@@ -1650,6 +1685,7 @@ def test_sdk_worker_uses_pinned_official_api_contracts() -> None:
     service_module.compute = compute_module
     service_module.sql = sql_module
     modules = {"databricks": root_module, "databricks.sdk": sdk_module,
+               "databricks.sdk.core": core_module,
                "databricks.sdk.service": service_module,
                "databricks.sdk.service.compute": compute_module,
                "databricks.sdk.service.sql": sql_module}
@@ -1665,7 +1701,7 @@ def test_sdk_worker_uses_pinned_official_api_contracts() -> None:
             code = sdk_worker.main()
             check(code == expected_code, f"SDK worker returned an unexpected result for {request['operation']}: {stderr.getvalue()}")
         if expected_code:
-            return {}
+            return json.loads(stderr.getvalue())
         return json.loads(stdout.getvalue())
 
     python = invoke({"operation": "python.execute", "timeout": 30,
@@ -1691,6 +1727,15 @@ def test_sdk_worker_uses_pinned_official_api_contracts() -> None:
           "SDK worker did not use the Anvil-owned Unified Authentication profile")
     invoke({"operation": "identity", "profile": "dev", "payload": {}}, expected_code=1)
 
+    original_cluster_list = workspace_client.clusters.list
+    workspace_client.clusters.list = lambda: [{"unsafe": {1}}]
+    serialization_failure = invoke({"operation": "clusters.list", "payload": {}}, expected_code=1)
+    check(serialization_failure["error"]["phase"] == "response_parsing"
+          and serialization_failure["error"]["exception_category"] == "TypeError"
+          and "unsafe" not in json.dumps(serialization_failure),
+          "SDK response-serialization failure lost its safe response phase")
+    workspace_client.clusters.list = original_cluster_list
+
     for operation, payload in (
         ("clusters.list", {}), ("clusters.get", {"cluster_id": "cluster-a"}),
         ("warehouses.list", {}), ("warehouses.get", {"warehouse_id": "warehouse-a"}),
@@ -1704,6 +1749,111 @@ def test_sdk_worker_uses_pinned_official_api_contracts() -> None:
           and calls["pipelines_list"] == {"max_results": 100}
           and calls["workspace_list"] == {"path": "/Shared"},
           "SDK workspace metadata operations did not use their bounded official methods")
+
+
+def test_sdk_diagnostics_cross_real_worker_process(temp: Path) -> None:
+    package = temp / "fake-sdk"
+    (package / "databricks" / "sdk" / "service").mkdir(parents=True)
+    (package / "databricks" / "__init__.py").write_text("", encoding="utf-8")
+    (package / "databricks" / "sdk" / "core.py").write_text("""\
+import os
+class Config:
+    def __init__(self, **values):
+        assert values['profile'] == 'anvil-prod'
+        assert values['config_file'] == os.environ['DATABRICKS_CONFIG_FILE']
+        self.values = values
+        self.host = 'https://workspace.example.invalid'
+""", encoding="utf-8")
+    (package / "databricks" / "sdk" / "__init__.py").write_text("""\
+from .core import Config
+class PermissionDenied(Exception):
+    status_code = 403
+class Clusters:
+    def list(self):
+        raise PermissionDenied('token=fixture-secret workspace=private-fixture')
+class WorkspaceClient:
+    def __init__(self, *, config):
+        self.config = config
+        self.clusters = Clusters()
+""", encoding="utf-8")
+    (package / "databricks" / "sdk" / "service" / "__init__.py").write_text("from . import compute, sql\n", encoding="utf-8")
+    (package / "databricks" / "sdk" / "service" / "compute.py").write_text("class Language: PYTHON = 'PYTHON'\n", encoding="utf-8")
+    (package / "databricks" / "sdk" / "service" / "sql.py").write_text("pass\n", encoding="utf-8")
+    config_file = temp / "owned-databrickscfg"
+    config_file.write_text("[anvil-prod]\nhost = https://workspace.example.invalid\n", encoding="utf-8")
+    with mock.patch.dict(os.environ, {"PYTHONPATH": os.pathsep.join((str(package), os.environ.get("PYTHONPATH", "")))}, clear=False):
+        try:
+            dbx.sdk.call("clusters.list", profile="anvil-prod", python=sys.executable,
+                         config_path=str(config_file), timeout=3)
+        except dbx.DatabricksError as exc:
+            check(exc.category == "PERMISSION_DENIED", "SDK subprocess failure category was not normalized")
+            check(exc.diagnostics == {"phase": "request", "operation": "clusters.list",
+                                      "exception_category": "PermissionDenied", "normalized_status": 403,
+                                      "retryable": False, "failure_scope": "CAPABILITY"},
+                  "safe SDK phase diagnostics did not cross the worker boundary")
+            check("fixture-secret" not in str(exc) and "private-fixture" not in str(exc)
+                  and "fixture-secret" not in repr(exc.diagnostics),
+                  "SDK worker leaked a secret or arbitrary exception message")
+        else:
+            raise AssertionError("SDK worker unexpectedly succeeded for a permission failure")
+
+
+def test_sdk_bootstrap_pip_blocker_and_venv_path_identity(temp: Path) -> None:
+    data_home = temp / "sdk-bootstrap-data"
+    venv_python = data_home / "anvil" / "databricks" / "venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to(sys.executable)
+    invocation = str(venv_python.absolute())
+    with mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(data_home)}, clear=False):
+        def missing_pip(command, **kwargs):
+            if command[1:3] == ["-c", "import sys; print(sys.prefix)"]:
+                return subprocess.CompletedProcess(command, 0, stdout=str(venv_python.parent.parent), stderr="")
+            if command[1:3] == ["-c", "import importlib.metadata as m; print(m.version('databricks-sdk'))"]:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+            if command[1:4] == ["-m", "pip", "--version"]:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="No module named pip")
+            raise AssertionError(f"unexpected SDK bootstrap command: {command}")
+
+        with mock.patch.object(dbx.cli_install.subprocess, "run", side_effect=missing_pip):
+            blocked = dbx.cli_install.install_sdk()
+        check(blocked["status"] == "BLOCKED" and blocked["failure"] == "pip-unavailable"
+              and "pip is unavailable" in blocked["message"],
+              "missing pip was not reported as a structured SDK installation blocker")
+
+        def sdk_present(command, **kwargs):
+            check(command[0] == invocation, "SDK bootstrap collapsed the venv interpreter invocation path")
+            if command[1:3] == ["-c", "import sys; print(sys.prefix)"]:
+                return subprocess.CompletedProcess(command, 0, stdout=str(venv_python.parent.parent), stderr="")
+            if command[1:3] == ["-c", "import importlib.metadata as m; print(m.version('databricks-sdk'))"]:
+                return subprocess.CompletedProcess(command, 0, stdout="0.141.0\n", stderr="")
+            raise AssertionError(f"an installed SDK should not require pip: {command}")
+
+        with mock.patch.object(dbx.cli_install.subprocess, "run", side_effect=sdk_present):
+            ready = dbx.cli_install.install_sdk()
+        check(ready["status"] == "READY" and ready["python"] == invocation,
+              "installed SDK did not retain the venv symlink invocation path")
+        with mock.patch.object(dbx.discovery, "python_version", return_value="0.141.0"):
+            discovered = dbx.discovery.discover_sdk({"providers": {"sdk": {"python": invocation}}})
+        check(discovered["python"] == invocation and discovered["environment"] == "verified-state",
+              "SDK discovery resolved the venv symlink to the system interpreter")
+
+
+def test_public_error_boundary_redacts_and_keeps_debug_frames() -> None:
+    def explode() -> int:
+        raise RuntimeError("token=fixture-secret; unexpected worker data")
+
+    normal = io.StringIO()
+    with contextlib.redirect_stderr(normal):
+        code = public_errors.run_public(explode, command="Anvil test command")
+    check(code == 1 and "unexpected internal error" in normal.getvalue()
+          and "Traceback" not in normal.getvalue() and "fixture-secret" not in normal.getvalue(),
+          "public exception boundary leaked traceback content or secrets")
+    debug = io.StringIO()
+    with mock.patch.dict(os.environ, {"DEBUG": "1"}, clear=False), contextlib.redirect_stderr(debug):
+        code = public_errors.run_public(explode, command="Anvil test command")
+    check(code == 1 and "Debug traceback" in debug.getvalue() and "RuntimeError" in debug.getvalue()
+          and "fixture-secret" not in debug.getvalue(),
+          "DEBUG mode did not preserve a safe traceback")
 
 def test_finops_scenarios() -> None:
     fixtures = ROOT / "tests" / "fixtures" / "databricks" / "finops"
@@ -1849,11 +1999,14 @@ def main() -> int:
         test_expired_auth_invalidates_previous_ready_state(temp)
         test_process_runner_bounds_output_and_kills_child(temp)
         test_provider_state_dry_run_and_installer(temp)
+        test_sdk_bootstrap_pip_blocker_and_venv_path_identity(temp)
         test_topology_auth_strategy_and_presenters()
         test_auth_executor_fakes(temp)
         test_setup_auth_orchestration_fakes()
         test_sdk_fallback_routes_core_operations(temp)
         test_sdk_worker_uses_pinned_official_api_contracts()
+        test_sdk_diagnostics_cross_real_worker_process(temp)
+        test_public_error_boundary_redacts_and_keeps_debug_frames()
     test_finops_scenarios()
     test_query_recipes()
     test_repository_harness_and_legacy_scan()

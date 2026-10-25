@@ -75,3 +75,11 @@ anvil_runtime_json() {
 anvil_runtime_record() {
   python3 "$ANVIL_ROOT/scripts/runtime_state.py" record --format json
 }
+
+anvil_lifecycle_state() {
+  python3 "$ANVIL_ROOT/scripts/lifecycle_state.py" "$@"
+}
+
+anvil_require_installed() {
+  anvil_lifecycle_state require-installed
+}

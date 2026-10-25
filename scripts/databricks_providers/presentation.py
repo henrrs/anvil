@@ -110,6 +110,12 @@ def setup_text(result: dict[str, Any], *, verbose: bool = False) -> str:
                 sdk_fallback = "not installed"
             lines += ["", "Execution", f"  Primary provider     {'Databricks CLI' if selected_provider == 'cli' else 'Python SDK'}",
                       f"  SDK fallback         {sdk_fallback}"]
+        if sdk.get("status") == "BLOCKED":
+            message = sdk.get("message") or "Anvil could not prepare its isolated Python SDK environment."
+            lines += ["", "SDK installation blocker", f"  {message}",
+                      "", "Impact", "  SDK fallback is unavailable; a healthy CLI provider can still serve its supported capabilities."]
+            if sdk.get("failure") == "pip-unavailable":
+                lines.append("  Remediation          Install Python venv/ensurepip support, or use a healthy Databricks CLI provider.")
         if cli.get("status") == "READY" and not cli.get("path_visible"):
             lines += ["", "Note", "  CLI is ready for Anvil. It is not on this shell's PATH; no path change is needed."]
         conflicts = result.get("environment_conflicts", [])
@@ -121,6 +127,14 @@ def setup_text(result: dict[str, Any], *, verbose: bool = False) -> str:
         if blockers and isinstance(blockers[0], dict):
             blocker = blockers[0]
             lines += ["", "Root issue", f"  {blocker.get('summary') or blocker.get('category', 'Readiness check failed')}" ]
+            diagnostics = blocker.get("diagnostics") if isinstance(blocker.get("diagnostics"), dict) else {}
+            if diagnostics.get("phase"):
+                detail = f"{diagnostics['phase'].replace('_', ' ')} phase"
+                if diagnostics.get("exception_category"):
+                    detail += f" ({diagnostics['exception_category']})"
+                if diagnostics.get("normalized_status"):
+                    detail += f", HTTP {diagnostics['normalized_status']}"
+                lines.append(f"  Diagnostic            {detail}")
             impact = _failure_impact(readiness)
             if impact:
                 lines += ["", "Impact", f"  {impact}"]
@@ -242,6 +256,14 @@ def doctor_text(value: dict[str, Any], *, verbose: bool = False) -> str:
     if blockers and isinstance(blockers[0], dict):
         blocker = blockers[0]
         lines += ["", "Root issue", f"  {blocker.get('summary') or blocker.get('category', 'Readiness check failed')}" ]
+        diagnostics = blocker.get("diagnostics") if isinstance(blocker.get("diagnostics"), dict) else {}
+        if diagnostics.get("phase"):
+            detail = f"{diagnostics['phase'].replace('_', ' ')} phase"
+            if diagnostics.get("exception_category"):
+                detail += f" ({diagnostics['exception_category']})"
+            if diagnostics.get("normalized_status"):
+                detail += f", HTTP {diagnostics['normalized_status']}"
+            lines.append(f"  Diagnostic            {detail}")
         impact = _failure_impact(readiness)
         if impact:
             lines += ["", "Impact", f"  {impact}", "", "Next step", f"  {_failure_next_step(readiness)}"]

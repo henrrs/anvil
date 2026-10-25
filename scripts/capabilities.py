@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import runtime  # noqa: E402
+from public_errors import run_public  # noqa: E402
 
 
 def databricks_module():
@@ -65,4 +66,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_public(main, command="Anvil capabilities"))
