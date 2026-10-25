@@ -2,6 +2,22 @@
 
 Release notes for user-visible Anvil changes. See [version history](docs/versions/README.md) and [release discipline](docs/RELEASING.md).
 
+## [2.7.0] - 2026-10-25
+
+### Added
+
+- Added model-agnostic Communication & Artifact Intelligence: a lazy skill and `/review` command backed by bounded, runtime-independent evidence, quantitative, planning, rendering, and review contracts.
+- Added deterministic Decimal analysis for absolute/relative changes, percentage points, zero/negative baselines, normalization, distributions, outliers, exclusions, and projections with explicit assumptions.
+- Added provenance-checked Markdown reports and exact slide outlines, plus a renderer-independent architecture model with accessible SVG output and layout collision rejection.
+- Added bounded local text/CSV/JSON/OOXML input extraction, optional `pdftotext` support, and communication capability reporting in `make capabilities`.
+- Added offline regression coverage for arithmetic, evidence, audiences, constraints, local inputs, Markdown, SVG, and reviewer failure cases.
+
+### Compatibility and scope
+
+- OpenCode 1.x and 2.x compatibility remains unchanged. No OpenCode runtime upgrade, model pin, MCP server, Python dependency, persistent schema migration, automatic memory write, or default Databricks query was added.
+- Markdown and SVG are the available artifact renderers. Binary PPTX/DOCX/PDF, quantitative charts, OCR, and animation remain unavailable.
+- Semantic truth remains a model/human review responsibility; structural and mathematical checks are not reported as factual verification.
+
 ## [2.6.2] - 2026-10-25
 
 ### Fixed

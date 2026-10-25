@@ -42,7 +42,8 @@
           "anvil-spark-performance": "allow",
           "anvil-delta-lake": "allow",
           "anvil-databricks": "allow",
-          "anvil-data-ingestion": "allow"
+          "anvil-data-ingestion": "allow",
+          "anvil-communication": "allow"
         }
       }
     }

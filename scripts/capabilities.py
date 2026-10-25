@@ -15,6 +15,27 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import runtime  # noqa: E402
 from public_errors import run_public  # noqa: E402
+from communication import inputs as communication_inputs  # noqa: E402
+
+
+def communication_state() -> dict:
+    supported_inputs = ["markdown", "text", "csv", "tsv", "json", "jsonc-text", "source", "configuration",
+                        "docx-text", "pptx-slide-text", "xlsx-cell-text"]
+    optional_inputs = ["pdf-text"] if communication_inputs.shutil.which("pdftotext") else []
+    return {
+        "status": "AVAILABLE",
+        "interface": "anvil-communication skill and local deterministic helper",
+        "capabilities": ["evidence_inventory", "bounded_text_extraction", "quantitative_analysis",
+                         "quantitative_visual_selection", "audience_and_constraint_planning", "markdown_materialization",
+                         "architecture_svg", "artifact_review"],
+        "inputs": {"supported": supported_inputs, "optional": optional_inputs,
+                   "media_analysis": False, "notes": [
+                       "OOXML extraction reads supported text and values only; images, charts, media, and embedded objects are not analyzed.",
+                       "Spreadsheet formulas are not recalculated; scanned PDF pages are not OCR-processed."]},
+        "outputs": {"available": ["markdown_report", "markdown_slide_outline", "accessible_svg_architecture"],
+                    "unavailable": ["pptx", "docx", "pdf", "quantitative_charts", "ocr", "dynamic_animation"]},
+        "dependencies": {"required": [], "optional": ["pdftotext"]},
+    }
 
 
 def databricks_module():
@@ -38,6 +59,7 @@ def main() -> int:
     runtime_state = runtime.capabilities(args.binary, args.major)
     databricks_state = adapter.local_status()
     databricks_capabilities = adapter.capabilities(databricks_state)
+    communication = communication_state()
     if args.format == "json":
         print(json.dumps({
             "schema_version": 1,
@@ -45,6 +67,7 @@ def main() -> int:
             "runtime": runtime_state,
             "databricks": databricks_state,
             "databricks_capabilities": databricks_capabilities,
+            "communication": communication,
         }, indent=2))
         return 0
 
@@ -62,6 +85,14 @@ def main() -> int:
     from databricks_providers.presentation import capabilities_text
     print("\n".join("  " + line if index else line for index, line in
                       enumerate(capabilities_text(databricks_capabilities).splitlines())))
+    print()
+    print("Communication & artifacts")
+    print("  Status                 AVAILABLE")
+    print("  Inputs                 " + ", ".join(communication["inputs"]["supported"]))
+    if communication["inputs"]["optional"]:
+        print("  Optional inputs        " + ", ".join(communication["inputs"]["optional"]))
+    print("  Outputs                Markdown, slide outline, accessible SVG")
+    print("  Unavailable renderers  PPTX, DOCX, PDF, quantitative charts, OCR, animation")
     return 0
 
 

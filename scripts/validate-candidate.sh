@@ -134,12 +134,12 @@ assert config.get("default_agent")=="anvil", "OpenCode 1 did not load the Anvil 
 assert "model" not in config and "small_model" not in config, "Anvil pins a model"
 agent=config.get("agent",{}).get("anvil",{})
 assert agent.get("mode")=="primary", "OpenCode 1 did not load the Anvil primary agent"
-assert set(("remember","recall","distill")) <= set(config.get("command",{})), "Anvil Markdown commands were not loaded"
+assert set(("remember","recall","distill","review")) <= set(config.get("command",{})), "Anvil Markdown commands were not loaded"
 permission=agent.get("permission",{})
 assert permission.get("*")=="deny" and permission.get("task")=="deny", "V1 deny-by-default/subagent policy did not load"
 items=skills if isinstance(skills,list) else skills.get("data",[])
 names={item.get("name") for item in items if isinstance(item,dict)}
-expected={"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion"}
+expected={"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion","anvil-communication"}
 assert expected <= names, f"OpenCode 1 did not load all Anvil skills: {sorted(expected-names)}"
 print(f"OpenCode {sys.argv[2]}: V1 config, agent, commands and skills validated")
 PY
@@ -177,8 +177,8 @@ def names(file, key):
         return {item.get(key) for item in value.get("data", []) if isinstance(item, dict)}
     except (OSError, ValueError):
         return set()
-raise SystemExit(0 if {"remember","recall","distill"} <= names("commands.json","name")
-                 and {"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion"} <= names("skills.json","id")
+raise SystemExit(0 if {"remember","recall","distill","review"} <= names("commands.json","name")
+                 and {"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion","anvil-communication"} <= names("skills.json","id")
                  and "anvil-core" in names("plugins.json","id")
                  and "anvil-knowledge" in names("references.json","name") else 1)
 PY
@@ -213,10 +213,10 @@ assert config["compaction"].get("keep",{}).get("tokens")==8000
 assert "prune" not in config["compaction"] and "tail_turns" not in config["compaction"]
 commands=load("commands.json").get("data",[])
 command_names={item.get("name") for item in commands}
-assert {"remember","recall","distill"} <= command_names, f"missing commands: {command_names}"
+assert {"remember","recall","distill","review"} <= command_names, f"missing commands: {command_names}"
 skills=load("skills.json").get("data",[])
 skill_ids={item.get("id") for item in skills}
-expected={"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion"}
+expected={"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion","anvil-communication"}
 assert expected <= skill_ids, f"missing skills: {sorted(expected-skill_ids)}"
 plugins=load("plugins.json").get("data",[])
 core=[item for item in plugins if item.get("id")=="anvil-core" and item.get("state",{}).get("status")=="active"]

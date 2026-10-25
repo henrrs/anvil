@@ -15,9 +15,9 @@ from typing import Any
 
 SKILLS = {
     "anvil-memory", "anvil-spark-performance", "anvil-delta-lake",
-    "anvil-databricks", "anvil-data-ingestion",
+    "anvil-databricks", "anvil-data-ingestion", "anvil-communication",
 }
-COMMANDS = {"remember", "recall", "distill"}
+COMMANDS = {"remember", "recall", "distill", "review"}
 BUILTINS = {"build", "plan", "general", "explore"}
 PROTECTED_SHELL = (
     "git reset --hard*", "git clean -f*", "git checkout -- *", "git restore --worktree*",
@@ -377,7 +377,7 @@ def audit(path: Path) -> list[str]:
             errors.append(f"Anvil core action {action} is not allowed")
     allowed_skills = {resource for (action, resource), effect in rules.items() if action == "skill" and resource != "*" and effect == "allow"}
     if rules.get(("skill", "*")) != "deny" or allowed_skills != SKILLS:
-        errors.append("Anvil skill allowlist does not match the five shipped skills")
+        errors.append("Anvil skill allowlist does not match the shipped skill set")
     mcp = data.get("mcp", {})
     if not isinstance(mcp, dict) or mcp.get("servers", {}) != {} or set(mcp) - {"servers"}:
         errors.append("managed global MCP server config is not empty")

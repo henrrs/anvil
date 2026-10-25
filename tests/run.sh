@@ -172,7 +172,10 @@ env ANVIL_DATABRICKS_CLI=/nonexistent/anvil-test-databricks \
 python3 - "$tmp_root/capabilities.json" <<'PY' || fail 'capabilities output is not one valid runtime/Databricks JSON document'
 import json,sys
 data=json.load(open(sys.argv[1],encoding="utf-8"))
-assert set(data) >= {"runtime","databricks","databricks_capabilities"}
+assert set(data) >= {"runtime","databricks","databricks_capabilities","communication"}
+assert data["communication"]["status"] == "AVAILABLE"
+assert "markdown_report" in data["communication"]["outputs"]["available"]
+assert "pptx" in data["communication"]["outputs"]["unavailable"]
 assert data["databricks"]["cli_installed"] is False
 PY
 pass 'make capabilities emits one combined machine-readable JSON document'
@@ -188,8 +191,8 @@ assert all(config["agents"][name]["disabled"] is True for name in ("build","plan
 assert config["agents"]["anvil"]["permissions"][-2]["action"]=="subagent"
 assert config["mcp"]["servers"]=={}
 assert config["plugins"]==["./plugins/anvil-core"]
-assert {p.stem for p in (root/"config/commands").glob("*.md")}=={"remember","recall","distill"}
-assert {p.name for p in (root/"config/skills").iterdir()}=={"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion"}
+assert {p.stem for p in (root/"config/commands").glob("*.md")}=={"remember","recall","distill","review"}
+assert {p.name for p in (root/"config/skills").iterdir()}=={"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion","anvil-communication"}
 plugin=(root/"config/plugins/anvil-core/index.ts").read_text(encoding="utf-8")
 assert "anvil_memory_search" in plugin and "ctx.tool.transform" in plugin
 for forbidden in ("chat.message", "session.created", "tool.execute", "provider.transform", "system.prompt", "session.compacting"):
@@ -238,6 +241,8 @@ python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d=={"valid":1,"in
 pass 'V1 memory reads without rewrites; Python search works with ripgrep unavailable'
 
 python3 "$ROOT/tests/distill.py" || fail '/distill fixture, provenance, drift and idempotency checks'
+python3 "$ROOT/tests/communication.py" || fail 'communication/artifact intelligence offline contracts and regressions'
+pass 'Communication and artifact intelligence runs deterministic offline regressions'
 python3 "$ROOT/tests/lifecycle.py" "$ROOT" "$candidate_v2" "$version_v2" "$candidate_v1" "$version_v1" "$tmp_root" || fail 'upgrade/reforge/migrate-runtime/rollback lifecycle integration'
 
 python3 - "$ROOT" "$tmp_root/stats-sample.json" <<'PY' || fail 'native stats formatter'

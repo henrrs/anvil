@@ -18,9 +18,9 @@ import source_registry
 
 EXPECTED_SKILLS = {
     "anvil-memory", "anvil-spark-performance", "anvil-delta-lake",
-    "anvil-databricks", "anvil-data-ingestion",
+    "anvil-databricks", "anvil-data-ingestion", "anvil-communication",
 }
-EXPECTED_COMMANDS = {"remember", "recall", "distill"}
+EXPECTED_COMMANDS = {"remember", "recall", "distill", "review"}
 
 
 def read_json(path: Path) -> dict:

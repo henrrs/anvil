@@ -1,6 +1,6 @@
 # Testing
 
-`make test` requires Bash, Python 3.11+, `tar`, and the standard system utilities used by Anvil. It makes no external OpenCode, Databricks, or model calls. Local OpenCode 1/2 fixtures and a fake Databricks CLI validate runtime and adapter contracts. The entire suite runs with temporary HOME and XDG roots, a constrained PATH, no Python user site, and cleared external Databricks selectors. Windows users can run the suite under WSL.
+`make test` requires Bash, Python 3.11+, `tar`, and the standard system utilities used by Anvil. It makes no external OpenCode, Databricks, or model calls. Local OpenCode 1/2 fixtures and a fake Databricks CLI validate runtime and adapter contracts. The entire suite runs with temporary HOME and XDG roots, a constrained PATH, no Python user site, and cleared external Databricks selectors. Communication and artifact regressions use the Python standard library and local fixtures. Windows users can run the suite under WSL.
 
 ## Offline runtime and configuration checks
 
@@ -20,7 +20,11 @@ Lifecycle checks use local OpenCode wrappers and isolated HOME/XDG trees. They c
 
 ## Release, harness, and stats checks
 
-The suite checks shell/Python syntax, runtime policy and capabilities, release documentation, the global harness budget and required invariants, skill use/do-not-use descriptions, query recipe constraints, the combined JSON capabilities shape, and the absence of the standalone legacy organization token in tracked or untracked repository text. The stats formatter is checked with a structured local fixture.
+The suite checks shell/Python syntax, runtime policy and capabilities, release documentation, the global harness budget and required invariants, skill use/do-not-use descriptions, query recipe constraints, combined JSON runtime/Databricks/communication capabilities, and the absence of the standalone legacy organization token in tracked or untracked repository text. The stats formatter is checked with a structured local fixture.
+
+## Communication and artifact checks
+
+`tests/communication.py` validates Decimal deltas, percentage points, zero/near-zero/negative baselines, normalization, distribution percentiles/outliers/missing values, explicit exclusions, projection classification and assumptions, audience policy, ranking semantics, exact slide counts/roles, evidence ID integrity, and recomputation of plan metrics. Local text, CSV, JSON, DOCX, PPTX, XLSX, symlink, size-limit, and optional-PDF-unavailable fixtures cover bounded input behavior. Markdown output checks exact slide counts, citations, permissions, no-overwrite defaults, and reviewer findings. SVG checks XML accessibility, model-backed review, boundary containment, and the regression where an edge crosses an unrelated node. None of these tests requires a model, OpenCode 2 feature, Databricks workspace, or network access.
 
 ## Limits
 

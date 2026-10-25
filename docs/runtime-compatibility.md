@@ -1,23 +1,23 @@
 # Anvil runtime compatibility
 
-**Checked:** 2026-10-16 (UTC)
-**Anvil release:** `2.6.2`
+**Official runtime release metadata last checked:** 2026-10-16 (UTC)
+**Anvil release:** `2.7.0`
 **Policy:** OpenCode 1.x and 2.x supported; default major `1`; automatic major upgrade disabled.
 
-| Anvil | OpenCode runtime | Minimum | 2.6 offline profile fixture | Adapter | Support |
+| Anvil | OpenCode runtime | Minimum | Offline profile fixture | Adapter | Support |
 |---|---|---:|---:|---|---|
-| 2.6.x | 1.x | 1.18.18 | 1.18.18 | `opencode-v1` | Supported |
-| 2.6.x | 2.x | 2.0.0 | 2.0.0 | `opencode-v2` | Supported |
+| 2.7.x | 1.x | 1.18.18 | 1.18.18 | `opencode-v1` | Supported |
+| 2.7.x | 2.x | 2.0.0 | 2.0.0 | `opencode-v2` | Supported |
 
-The 2.6.2 mandatory suite validates both adapter contracts using checked-in local CLI fixtures and denies external network access across the isolated test suite. It adds fresh HOME/XDG lifecycle journeys, partial/corrupt-state reporting, SDK missing-pip and venv-path checks, and safe worker diagnostics. It does not download or claim to smoke-test a live OpenCode release. The last recorded official candidate resolution in the preceding runtime release documentation was OpenCode 1 `1.19.3` and OpenCode 2 `2.0.31`; use the official release references below to revalidate live candidates before future releases.
+The 2.7.0 mandatory suite validates both adapter contracts using checked-in local CLI fixtures and denies external network access across the isolated test suite. It adds fresh HOME/XDG lifecycle journeys, partial/corrupt-state reporting, SDK missing-pip and venv-path checks, safe worker diagnostics, and offline communication/artifact regression coverage. It does not download or claim to smoke-test a live OpenCode release. The last recorded official candidate resolution in the preceding runtime release documentation was OpenCode 1 `1.19.3` and OpenCode 2 `2.0.31`; use the official release references below to revalidate live candidates before future releases.
 
 ## Common and runtime-specific capabilities
 
-Both profiles provide the single Anvil agent, Markdown commands and skills, file memory, `/remember`, `/recall`, `/distill`, source registry, explicit reconciliation, and Databricks provider capability through shared scripts. Databricks does not require an OpenCode plugin, MCP, or a V2-only permission/tool API.
+Both profiles provide the single Anvil agent, Markdown commands and skills, file memory, `/remember`, `/recall`, `/distill`, `/review`, source registry, explicit reconciliation, Databricks provider capability, and Anvil's model-independent communication/artifact workflow through shared scripts. The communication capability does not require an OpenCode 2 plugin/API, MCP, or a runtime-specific tool feature. Databricks does not require an OpenCode plugin, MCP, or a V2-only permission/tool API.
 
 OpenCode 1 uses its singular `agent`/`permission` config shape. It has no Anvil native memory-search tool or native Knowledge Reference, so shared Python file search and named-file reads are used. Its native stats command produces terminal text. OpenCode 2 uses plural `agents`/`plugins`, ordered permissions, the local read-only `anvil-core` search tool, `anvil-knowledge` Reference, and structured stats JSON. Shared commands, skills, memory, and Databricks integration remain the same.
 
-Runtime behavior is exposed through `scripts/runtime.py`. `make capabilities` combines runtime capability data with the current non-secret Databricks CLI/profile/compute state. `FORMAT=json make capabilities` emits one JSON object with `runtime`, `databricks`, and `databricks_capabilities` keys.
+Runtime behavior is exposed through `scripts/runtime.py`. `make capabilities` combines runtime capability data with the current non-secret Databricks CLI/profile/compute state and Anvil communication/artifact support. `FORMAT=json make capabilities` emits one JSON object with `runtime`, `databricks`, `databricks_capabilities`, and `communication` keys.
 
 ## Databricks CLI compatibility
 

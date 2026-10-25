@@ -4,7 +4,7 @@
 >
 > **Better harness. Better execution.**
 
-Anvil 2.6.2 hardens fresh installation, public command reliability, and Databricks SDK bootstrap while keeping OpenCode 1/2 support.
+Anvil 2.7.0 adds model-agnostic Communication & Artifact Intelligence while keeping OpenCode 1/2 support and the existing Databricks state contract.
 
 ```bash
 # First installation
@@ -42,7 +42,7 @@ Use `make inspect` to review the current setup before changing it. Use `make cap
 
 For a shorter headline: **Anvil — Better harness. Better execution.**
 
-Anvil is a lean, model-agnostic harness and lifecycle layer for OpenCode 1.x and 2.x. Anvil's release version is independent from the OpenCode major. OpenCode owns model/provider authentication, sessions, its native tools, and runtime state. Anvil supplies a focused behavioral environment: compact instructions, one primary agent, a small set of skills, explicit file memory, evidence-driven workflows, safe upgrade and recovery operations, and an optional Databricks capability.
+Anvil is a lean, model-agnostic harness and lifecycle layer for OpenCode 1.x and 2.x. Anvil's release version is independent from the OpenCode major. OpenCode owns model/provider authentication, sessions, its native tools, and runtime state. Anvil supplies a focused behavioral environment: compact instructions, one primary agent, a small set of skills, explicit file memory, evidence-driven workflows, safe upgrade and recovery operations, optional Databricks integration, and communication/artifact intelligence.
 
 ## Why Anvil?
 
@@ -103,7 +103,17 @@ On OpenCode 2, Anvil's local `anvil-core` plugin exposes one bounded, read-only 
 
 ## Models, agents, and skills
 
-Anvil configures one model-neutral `anvil` primary agent. No model is pinned; select models through OpenCode as usual. The four built-in user-facing agents are disabled, subagents are denied, and no MCP servers are enabled by default. Five allowlisted skills cover memory, Spark performance, Delta Lake, Databricks, and data ingestion.
+Anvil configures one model-neutral `anvil` primary agent. No model is pinned; select models through OpenCode as usual. The four built-in user-facing agents are disabled, subagents are denied, and no MCP servers are enabled by default. Allowlisted skills cover memory, Spark performance, Delta Lake, Databricks, data ingestion, and communication artifacts.
+
+## Communication and artifacts
+
+Use natural language with the Anvil agent, for example: “Analyze these named files and prepare an executive report,” “Prepare exactly five slides from this evidence,” or “Review this Markdown artifact against its plan.” The `anvil-communication` skill guides source inventory, targeted extraction, evidence provenance, quantitative interpretation, audience adaptation, planning, and review. `/review PATH` is the generic command for reviewing an explicitly named artifact.
+
+The local core is also available at `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/scripts/artifacts.py` after installation. It provides bounded `discover` and `extract`, deterministic `quantify`, hard-constraint checks, Markdown report/slide-outline materialization, semantic architecture-to-SVG rendering, and deterministic review. `make capabilities` lists its supported inputs and renderers.
+
+Supported source extraction includes Markdown/text, CSV/TSV, JSON/JSONC text, common source/config files, and text/value extraction from DOCX/PPTX/XLSX. PDF text extraction is optional and requires `pdftotext`. Embedded images, charts, speaker notes, scanned pages, workbook formulas, and media are not interpreted. Available artifact outputs are Markdown and accessible architecture SVG; binary PPTX/DOCX/PDF, quantitative chart rendering, OCR, and animation are not available in this release.
+
+Numerical values remain tied to evidence IDs. The deterministic core separates absolute change, relative change, and percentage-point change; preserves missing values and zero/negative baseline limitations; supports measured normalization and distribution summaries; and keeps annualized values labeled as projections with assumptions. It recalculates derived values before materialization. Executive, technical, and mixed audiences receive different emphasis and presentation detail without altering the underlying measurements. Structural and arithmetic PASS results do not prove that a narrative claim is true; semantic review remains required.
 
 ## Recovery and status
 
@@ -113,4 +123,4 @@ Anvil configures one model-neutral `anvil` primary agent. No model is pinned; se
 
 ## Version history
 
-See the [Anvil 2.6.2 release notes](docs/versions/v2.6.2.md), [public command contracts](docs/command-contracts.md), [Anvil 2.6.1 release notes](docs/versions/v2.6.1.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).
+See the [Anvil 2.7.0 release notes](docs/versions/v2.7.0.md), [communication and artifact architecture](docs/communication-artifact-intelligence.md), [public command contracts](docs/command-contracts.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).

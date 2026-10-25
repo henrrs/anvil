@@ -1,0 +1,22 @@
+{
+  "metrics": [
+    {
+      "id": "QI-spend",
+      "name": "Monthly spend",
+      "kind": "amount",
+      "unit": "USD",
+      "semantics": "lower_is_better",
+      "baseline": {"value": "1200000", "unit": "USD", "period": "previous 30 days", "evidence_ids": ["E-spend-before"]},
+      "current": {"value": "870000", "unit": "USD", "period": "last 30 days", "evidence_ids": ["E-spend-now"]}
+    },
+    {
+      "id": "QI-success-rate",
+      "name": "Success rate",
+      "kind": "rate",
+      "unit": "%",
+      "semantics": "higher_is_better",
+      "baseline": {"value": "4", "unit": "%", "evidence_ids": ["E-rate-before"]},
+      "current": {"value": "2", "unit": "%", "evidence_ids": ["E-rate-now"]}
+    }
+  ]
+}

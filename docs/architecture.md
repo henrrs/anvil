@@ -14,13 +14,13 @@ Project, system-managed, and organization settings are outside Anvil's global ow
 
 ## Runtime profiles and agent policy
 
-OpenCode 1 uses its singular `agent`, `permission`, and `plugin` config fields. Anvil defines one model-neutral `anvil` primary agent, denies `task`, prompts for sensitive `.env` reads and destructive Git shell operations, and allowlists only the five Anvil skills. The global plugin list is empty for this profile.
+OpenCode 1 uses its singular `agent`, `permission`, and `plugin` config fields. Anvil defines one model-neutral `anvil` primary agent, denies `task`, prompts for sensitive `.env` reads and destructive Git shell operations, and allowlists only the shipped Anvil skills. The global plugin list is empty for this profile.
 
-OpenCode 2 uses plural `agents` and `plugins` fields and ordered permissions. It defines the same model-neutral primary agent, denies subagents, prompts for sensitive `.env` reads and destructive Git shell operations, and allowlists the same five skills plus one memory-search tool. No global MCP servers are enabled by default. Neither profile pins a model or replaces the provider's native system prompt.
+OpenCode 2 uses plural `agents` and `plugins` fields and ordered permissions. It defines the same model-neutral primary agent, denies subagents, prompts for sensitive `.env` reads and destructive Git shell operations, and allowlists the same shipped skills plus one memory-search tool. No global MCP servers are enabled by default. Neither profile pins a model or replaces the provider's native system prompt.
 
 ## Capabilities and progressive enhancement
 
-Callers use the central capability record rather than treating every Anvil release as one OpenCode generation. OpenCode 2 adds the local `anvil-core` plugin, native `anvil-knowledge` Reference, ordered permissions, bounded tool output, and structured stats JSON. OpenCode 1 uses its native config, commands/skills, and text stats; shared Python memory search and direct reads of explicitly named knowledge files provide the fallbacks. `scripts/capabilities.py` combines those runtime capabilities with local Databricks provider and saved-profile metadata in one text or JSON result. Inventory commands do not contact Databricks; they show cached capability evidence and mark it stale after 15 minutes.
+Callers use the central capability record rather than treating every Anvil release as one OpenCode generation. OpenCode 2 adds the local `anvil-core` plugin, native `anvil-knowledge` Reference, ordered permissions, bounded tool output, and structured stats JSON. OpenCode 1 uses its native config, commands/skills, and text stats; shared Python memory search and direct reads of explicitly named knowledge files provide the fallbacks. `scripts/capabilities.py` combines runtime, local/cached Databricks, and Anvil communication/artifact capabilities in one text or JSON result. Inventory commands do not contact Databricks; they show cached capability evidence and mark it stale after 15 minutes.
 
 ## Public command presentation
 
@@ -30,7 +30,15 @@ The V2 plugin uses the OpenCode 2 API to register only bounded, read-only `anvil
 
 ## Skills and commands
 
-Five native lazy skills cover memory, Spark performance, Delta Lake, Databricks, and data ingestion. Native Markdown commands provide `/remember`, `/recall`, and `/distill`, all assigned to the Anvil agent. Persistent memory writes require explicit `/remember`, `/distill`, or direct user intent.
+Native lazy skills cover memory, Spark performance, Delta Lake, Databricks, data ingestion, and evidence-backed communication artifacts. Native Markdown commands provide `/remember`, `/recall`, `/distill`, and a generic `/review`, all assigned to the Anvil agent. Persistent memory writes require explicit `/remember`, `/distill`, or direct user intent.
+
+## Communication and artifact intelligence
+
+The model-independent `scripts/communication` package provides bounded, standard-library contracts for source discovery and extraction, evidence and finding provenance, reproducible quantitative analysis, audience/constraint planning, Markdown materialization, architecture semantics and SVG, and deterministic artifact review. The lazy `anvil-communication` skill keeps natural language as the user interface; it guides the model to read only named inputs, synthesize evidence, prepare the plan, and ask before materializing when the request leaves an important decision open. The `/review` command reviews an explicitly named existing artifact without modifying it.
+
+`make capabilities` reports supported source types and output renderers. Markdown reports and slide outlines and accessible architecture SVG are available. DOCX/PPTX/PDF binary rendering, chart rendering, OCR, embedded-media interpretation, and animation are not claimed. PDF text extraction requires the optional local `pdftotext` utility. The helper does no remote source discovery, Databricks query, or memory write on its own; remote evidence remains subject to existing explicit provider workflows.
+
+The plan validator recomputes derived numeric fields from observations, requires measured values and diagram claims to resolve to provenance records, checks audience and hard-constraint structure, and keeps `semantic_claim_review: PENDING_MODEL` for the model/human reviewer. SVG layout validation rejects node collisions and edges crossing unrelated nodes; this deterministic check does not claim aesthetic quality.
 
 ## Databricks capability
 

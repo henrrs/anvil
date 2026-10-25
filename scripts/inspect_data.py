@@ -136,7 +136,7 @@ def main() -> int:
     anvil_managed = current.get("default_agent") == "anvil"
     allowed_skill_names = {
         "anvil-memory", "anvil-spark-performance", "anvil-delta-lake",
-        "anvil-databricks", "anvil-data-ingestion",
+        "anvil-databricks", "anvil-data-ingestion", "anvil-communication",
     }
     active_skill_files = [
         name for name in skills

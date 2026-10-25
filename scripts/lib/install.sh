@@ -26,6 +26,12 @@ anvil_build_config() {
   install -m 0600 -- "$ANVIL_ROOT/scripts/runtime_state.py" "$destination/scripts/runtime_state.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/databricks.py" "$destination/scripts/databricks.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/databricks_finops.py" "$destination/scripts/databricks_finops.py"
+  install -m 0600 -- "$ANVIL_ROOT/scripts/artifacts.py" "$destination/scripts/artifacts.py"
+  rm -rf -- "$destination/scripts/communication"
+  cp -R -- "$ANVIL_ROOT/scripts/communication" "$destination/scripts/communication"
+  find "$destination/scripts/communication" -type d -name __pycache__ -prune -exec rm -rf -- {} +
+  find "$destination/scripts/communication" -type f -name '*.pyc' -delete
+  find "$destination/scripts/communication" -type f -exec chmod 600 -- {} +
   rm -rf -- "$destination/scripts/databricks_providers"
   cp -R -- "$ANVIL_ROOT/scripts/databricks_providers" "$destination/scripts/databricks_providers"
   find "$destination/scripts/databricks_providers" -type f -exec chmod 600 -- {} +
@@ -41,7 +47,9 @@ anvil_apply_config() {
   chmod 600 -- "$ANVIL_CONFIG_DIR/opencode.jsonc"
   chmod 700 -- "$ANVIL_CONFIG_DIR/scripts/memory.py" "$ANVIL_CONFIG_DIR/scripts/source_registry.py" "$ANVIL_CONFIG_DIR/scripts/runtime.py" \
     "$ANVIL_CONFIG_DIR/scripts/runtime_state.py" \
-    "$ANVIL_CONFIG_DIR/scripts/databricks.py" "$ANVIL_CONFIG_DIR/scripts/databricks_finops.py"
+    "$ANVIL_CONFIG_DIR/scripts/databricks.py" "$ANVIL_CONFIG_DIR/scripts/databricks_finops.py" \
+    "$ANVIL_CONFIG_DIR/scripts/artifacts.py"
+  find "$ANVIL_CONFIG_DIR/scripts/communication" -type f -exec chmod 600 -- {} +
   find "$ANVIL_CONFIG_DIR/scripts/databricks_providers" -type f -exec chmod 600 -- {} +
 }
 
