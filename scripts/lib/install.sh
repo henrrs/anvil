@@ -96,7 +96,7 @@ anvil_apply_config() {
   local parent stage previous
   parent="$(dirname -- "$ANVIL_CONFIG_DIR")"
   stage="$(mktemp -d "$parent/.anvil-config-stage.XXXXXX")"
-  if ! cp -R -- "$source_config"/. "$stage"/; then
+  if ! cp -pR -- "$source_config"/. "$stage"/; then
     rm -rf -- "$stage"
     anvil_error 'Anvil global config staging copy failed.'
     return 1

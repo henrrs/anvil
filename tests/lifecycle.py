@@ -457,6 +457,233 @@ def config_ownership_transition_test(temp: pathlib.Path) -> None:
     print("PASS upgrade preserves user-owned extras, binds the manifest, and blocks target-path collisions")
 
 
+def brownfield_legacy_npm_symlink_test(temp: pathlib.Path) -> None:
+    """Exercise a lived-in pre-manifest install through inspect, doctor, upgrade, and reforge."""
+    paths = fixture(temp / "machine")
+    paths["binary"].write_text(paths["binary"].read_text(encoding="utf-8").replace("v1.19.0\\n", "v1.19.3\\n"),
+                                encoding="utf-8")
+    installation_path = paths["anvil_data"] / "installation.json"
+    installation = json.loads(installation_path.read_text(encoding="utf-8"))
+    installation["version"] = "1.19.3"
+    write_json(installation_path, installation)
+    node_modules = paths["config"] / "node_modules"
+    package = node_modules / "node-gyp-build-optional-packages"
+    bin_dir = node_modules / ".bin"
+    package.mkdir(parents=True)
+    bin_dir.mkdir()
+    target = package / "build-test.js"
+    target.write_text("module.exports = true;\n", encoding="utf-8")
+    target_mtime = target.stat().st_mtime_ns
+    link = bin_dir / "node-gyp-build-optional-packages-test"
+    link.symlink_to("../node-gyp-build-optional-packages/build-test.js")
+    broken_link = bin_dir / "missing-package-command"
+    broken_link.symlink_to("../missing-package/missing.js")
+    resolved_target = link.resolve(strict=True)
+    check(node_modules.resolve() in resolved_target.parents,
+          "brownfield fixture npm symlink does not resolve inside node_modules")
+
+    provider_config = paths["config_home"] / "anvil" / "databricks" / "databrickscfg"
+    provider_config.parent.mkdir(parents=True, exist_ok=True)
+    provider_config.write_text("[anvil-prod]\nhost = https://example.azuredatabricks.net\nauth_type = azure-cli\n",
+                               encoding="utf-8")
+    provider_state = paths["config_home"] / "anvil" / "databricks.json"
+    write_json(provider_state, {"schema_version": 3, "selected_profile": "anvil-prod",
+                                "workspace_host": "https://example.azuredatabricks.net",
+                                "fixture_marker": "preserve-through-anvil-upgrade"})
+    provider_hashes = {path: file_hash(path) for path in (provider_config, provider_state)}
+    config_before = filesystem_snapshot(paths["config"])
+    memory_before = tree_hash(paths["memory"])
+    runtime_before = file_hash(paths["binary"])
+    backup_env = env_for(paths, ANVIL_ROOT=str(ROOT), ANVIL_PREVIOUS_ANVIL_VERSION="2.6.1")
+    snapshot = run([
+        "bash", "-c",
+        "source \"$ANVIL_ROOT/scripts/lib/common.sh\"; "
+        "source \"$ANVIL_ROOT/scripts/lib/backup.sh\"; "
+        "anvil_backup_create \"$1\" \"$2\" anvil",
+        "_", "1.19.3", "{}",
+    ], backup_env)
+    backup_path = pathlib.Path(snapshot.stdout.strip().splitlines()[-1])
+    run([sys.executable, str(ROOT / "scripts/state.py"), "verify", str(backup_path)], env_for(paths))
+
+    env = offline_env(paths, temp)
+    inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
+    check("Status                MIGRATION_REQUIRED" in inspect.stdout,
+          "valid 2.6.1 install with external npm state was not classified as migratable; "
+          f"observed output:\n{inspect.stdout}")
+    check("unowned symbolic link(s)" in inspect.stdout,
+          "inspect did not identify the package-manager link as external state")
+    check("Rollback snapshots   1 verified" in inspect.stdout,
+          "brownfield fixture did not include its existing verified rollback snapshot")
+    lifecycle = run([sys.executable, str(ROOT / "scripts/lifecycle_state.py"), "inspect", "--format", "json"], env)
+    state = json.loads(lifecycle.stdout)
+    check(state["managed_config"]["manifest_present"] is False,
+          "the legacy fixture was not represented as unrecorded source state")
+    check({"node_modules/.bin/node-gyp-build-optional-packages-test",
+           "node_modules/.bin/missing-package-command"}.issubset(
+               set(state["managed_config"]["external_symlinks"])),
+          "external valid/broken npm links were not both classified outside Anvil ownership")
+
+    doctor = run(["/usr/bin/make", "--no-print-directory", "doctor"], env)
+    check("Status: UPGRADE AVAILABLE" in doctor.stdout and "make upgrade" in doctor.stderr,
+          "doctor did not recommend the supported migration for the brownfield install")
+    check("CORRUPTED" not in doctor.stdout and "BROKEN" not in doctor.stdout,
+          "doctor treated external package-manager links as core Anvil corruption")
+
+    before_dry_run = {
+        "config": filesystem_snapshot(paths["config"]),
+        "installation": filesystem_snapshot(paths["anvil_data"]),
+        "memory": filesystem_snapshot(paths["memory"]),
+        "binary": file_hash(paths["binary"]),
+        "provider": {path: file_hash(path) for path in provider_hashes},
+    }
+    dry = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env)
+    check("No files changed." in dry.stdout and "No processes stopped." in dry.stdout,
+          "brownfield upgrade dry-run did not guarantee a read-only plan")
+    check(filesystem_snapshot(paths["config"]) == before_dry_run["config"]
+          and filesystem_snapshot(paths["anvil_data"]) == before_dry_run["installation"]
+          and filesystem_snapshot(paths["memory"]) == before_dry_run["memory"]
+          and file_hash(paths["binary"]) == before_dry_run["binary"]
+          and {path: file_hash(path) for path in provider_hashes} == before_dry_run["provider"],
+          "brownfield upgrade dry-run changed Anvil, runtime, memory, or provider state")
+
+    upgrade_env = dict(env, ANVIL_TEST_MODE="1", ANVIL_YES="1",
+                       ANVIL_UPGRADE_COUNTDOWN_SECONDS="0", ANVIL_SKIP_RUNTIME_PROBE="1")
+    upgraded = run(["/usr/bin/make", "--no-print-directory", "upgrade"], upgrade_env)
+    installation = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
+    manifest_path = paths["config"] / ".anvil-managed.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    check(installation["anvil_version"] == ANVIL_VERSION and installation.get("managed_config_manifest_sha256"),
+          "the brownfield upgrade did not publish current Anvil metadata and a pinned manifest")
+    check(not any(path == "node_modules" or path.startswith("node_modules/") for path in manifest["files"]),
+          "the new Anvil manifest adopted external node_modules content")
+    check(filesystem_snapshot(node_modules) == filesystem_snapshot(paths["config"] / "node_modules"),
+          "upgrade changed the external npm dependency tree or symlink targets")
+    check(link.is_symlink() and os.readlink(link) == "../node-gyp-build-optional-packages/build-test.js"
+          and resolved_target.is_file(), "upgrade did not preserve the valid npm symlink exactly")
+    check(broken_link.is_symlink() and os.readlink(broken_link) == "../missing-package/missing.js"
+          and not broken_link.exists(), "upgrade did not preserve the broken external npm symlink")
+    check(target.stat().st_mtime_ns == target_mtime,
+          "upgrade changed the modification time of an external package-manager file")
+    check(file_hash(paths["binary"]) == runtime_before,
+          "Anvil-only upgrade changed the compatible OpenCode runtime")
+    check(tree_hash(paths["memory"]) == memory_before,
+          "brownfield upgrade changed existing Anvil memory")
+    check({path: file_hash(path) for path in provider_hashes} == provider_hashes,
+          "brownfield upgrade changed Anvil-owned Databricks config or provider state")
+    run([sys.executable, str(ROOT / "scripts/state.py"), "verify", installation["migration"]["backup"]],
+        env_for(paths))
+    inspect_after = run(["/usr/bin/make", "--no-print-directory", "inspect"], upgrade_env)
+    check("Status                READY" in inspect_after.stdout,
+          f"inspect did not recognize the migrated install:\n{inspect_after.stdout}")
+    doctor_after = run(["/usr/bin/make", "--no-print-directory", "doctor"], upgrade_env)
+    check("Status: BROKEN" not in doctor_after.stdout and "Status: BROKEN" not in doctor_after.stderr,
+          "doctor treated preserved external npm or provider state as a broken current install")
+
+    reforge_env = dict(env, ANVIL_TEST_MODE="1", ANVIL_YES="1", ANVIL_SKIP_RUNTIME_PROBE="1")
+    reforged = run(["/usr/bin/make", "--no-print-directory", "reforge"], reforge_env)
+    check("installed with OpenCode 1.19.3" in reforged.stdout + reforged.stderr,
+          "make reforge did not reuse the validated OpenCode runtime")
+    check(file_hash(paths["binary"]) == runtime_before
+          and filesystem_snapshot(node_modules) == filesystem_snapshot(paths["config"] / "node_modules")
+          and target.stat().st_mtime_ns == target_mtime
+          and tree_hash(paths["memory"]) == memory_before
+          and {path: file_hash(path) for path in provider_hashes} == provider_hashes,
+          "reforge changed the runtime, external npm tree, or Databricks config/state")
+    assert_no_external_network(temp)
+    check(config_before.get("node_modules/.bin/node-gyp-build-optional-packages-test", ())[0] == "symlink",
+          "brownfield baseline snapshot did not capture the real npm symlink shape")
+    check("No changes performed." in dry.stdout and "installed" in upgraded.stdout + upgraded.stderr,
+          "brownfield lifecycle did not complete both dry-run and real upgrade")
+    print("PASS brownfield 2.6.1 source, npm links, provider state, snapshot, dry-run, upgrade, and reforge")
+
+
+def managed_symlink_recovery_test(temp: pathlib.Path) -> None:
+    """Unsafe links at manifest-owned paths remain corruption and the offered reforge recovers them."""
+    paths = fixture(temp / "machine")
+    promote_fixture_to_current_anvil(paths, temp)
+    skill_file = paths["config"] / "skills" / "anvil-memory" / "SKILL.md"
+    command_file = paths["config"] / "commands" / "remember.md"
+    original_skill = skill_file.read_bytes()
+    identical_external_skill = temp / "external-skill-copy.md"
+    identical_external_skill.write_bytes(original_skill)
+    skill_file.unlink()
+    skill_file.symlink_to(identical_external_skill)
+    try:
+        lifecycle_state.managed_config.inspect_source(paths["config"], ANVIL_VERSION)
+    except ValueError as exc:
+        check("Anvil-managed path is a symbolic link" in str(exc),
+              "managed symlink security depended on target content changing")
+    else:
+        raise AssertionError("managed skill symlink to byte-identical external content was accepted")
+    skill_file.unlink()
+    skill_file.write_bytes(original_skill)
+    attacker_file = temp / "attacker-command.md"
+    attacker_file.write_text("external command payload\n", encoding="utf-8")
+    for path in (skill_file, command_file):
+        path.unlink()
+    skill_file.symlink_to("/etc/passwd")
+    command_file.symlink_to(attacker_file)
+    broken_file = paths["config"] / "skills" / "anvil-databricks" / "references" / "authentication.md"
+    broken_file.unlink()
+    broken_file.symlink_to(temp / "missing-managed-target.md")
+    attack_hash = file_hash(attacker_file)
+    config_before = filesystem_snapshot(paths["config"])
+    env = offline_env(paths, temp)
+
+    inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
+    check("Status                CORRUPTED" in inspect.stdout,
+          "manifest-owned escaping/broken symlinks were not classified as corruption")
+    check("Anvil-managed path is a symbolic link" in inspect.stdout,
+          "managed symlink corruption reason did not name ownership")
+    doctor = run(["/usr/bin/make", "--no-print-directory", "doctor"], env, expected=2)
+    check("Status: BROKEN" in doctor.stdout and "Run make reforge" in doctor.stdout,
+          "doctor did not offer the supported managed-file recovery path")
+    blocked = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env, expected=2)
+    check("CORRUPTED" in blocked.stderr and "make reforge" in blocked.stderr,
+          "upgrade did not stop safely while the managed config was compromised")
+    check(filesystem_snapshot(paths["config"]) == config_before
+          and file_hash(attacker_file) == attack_hash
+          and not (paths["anvil_data"] / "backups").exists(),
+          "inspection/doctor/blocked upgrade changed malicious managed state or created a snapshot")
+
+    reforge_env = dict(env, ANVIL_TEST_MODE="1", ANVIL_YES="1", ANVIL_SKIP_RUNTIME_PROBE="1")
+    run(["/usr/bin/make", "--no-print-directory", "reforge"], reforge_env)
+    for path in (skill_file, command_file, broken_file):
+        check(path.is_file() and not path.is_symlink(),
+              f"recommended reforge did not rebuild managed path {path.relative_to(paths['config'])}")
+    check(file_hash(attacker_file) == attack_hash,
+          "managed-link recovery followed or modified the external attacker-owned target")
+    ready = run(["/usr/bin/make", "--no-print-directory", "inspect"], reforge_env)
+    check("Status                READY" in ready.stdout,
+          "reforge did not restore a valid lifecycle after removing managed symlinks")
+    print("PASS managed escaping and broken symlinks remain detectable; doctor-recommended reforge recovers them")
+
+
+def managed_profile_symlink_recovery_test(temp: pathlib.Path) -> None:
+    """Do not recommend reforge when its required source profile is itself untrusted."""
+    paths = fixture(temp / "machine")
+    promote_fixture_to_current_anvil(paths, temp)
+    profile = paths["config"] / "opencode.jsonc"
+    safe_copy = temp / "profile-copy.jsonc"
+    shutil.copy2(profile, safe_copy)
+    profile.unlink()
+    profile.symlink_to(safe_copy)
+    env = offline_env(paths, temp)
+    inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
+    check("Status                CORRUPTED" in inspect.stdout
+          and "Automatic recovery is not available" in inspect.stdout,
+          "inspect recommended automatic recovery for an untrusted managed profile symlink")
+    check("Next step\n  Run make reforge" not in inspect.stdout,
+          "inspect recommended reforge even though the profile symlink blocks that operation")
+    before = filesystem_snapshot(paths["config"])
+    reforge = run(["/usr/bin/make", "--no-print-directory", "reforge"], env, expected=2)
+    check("profile is a symlink" in reforge.stderr,
+          "reforge did not report why the managed profile cannot be used as a source")
+    check(filesystem_snapshot(paths["config"]) == before,
+          "blocked reforge changed state when the managed profile was an untrusted symlink")
+    print("PASS lifecycle diagnostics withhold reforge when its source profile is unsafe")
+
+
 def custom_agent_transition_test(temp: pathlib.Path) -> None:
     env_home = temp / "home with spaces"
     env_data = temp / "data ü"
@@ -628,7 +855,8 @@ def concurrent_lifecycle_test(temp: pathlib.Path) -> None:
               f"concurrent lifecycle command returned an unexpected exit code: {process.returncode}\n{stderr[-2000:]}")
         if process.returncode != 0:
             check("another lifecycle transaction" in stderr.casefold(),
-                  "concurrent lifecycle loser did not report the active transaction blocker")
+                  "concurrent lifecycle loser did not report the active transaction blocker:\n"
+                  f"{stderr[-3000:]}\n{stdout[-1500:]}")
     check(lifecycle_state_for_env(env) == "READY",
           "overlapping Anvil upgrades left a non-ready installation")
     check(not (paths["anvil_data"] / "lifecycle-transaction.json").exists(),
@@ -1476,6 +1704,12 @@ def main() -> int:
     lifecycle_version_order_test()
     with tempfile.TemporaryDirectory(prefix="anvil-config-ownership-", dir=TEST_ROOT) as name:
         config_ownership_transition_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-brownfield-npm-link-", dir=TEST_ROOT) as name:
+        brownfield_legacy_npm_symlink_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-managed-symlink-recovery-", dir=TEST_ROOT) as name:
+        managed_symlink_recovery_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-managed-profile-symlink-", dir=TEST_ROOT) as name:
+        managed_profile_symlink_recovery_test(pathlib.Path(name))
     with tempfile.TemporaryDirectory(prefix="anvil-custom-agent-transition-", dir=TEST_ROOT) as name:
         custom_agent_transition_test(pathlib.Path(name))
     with tempfile.TemporaryDirectory(prefix="anvil-filesystem-paths-", dir=TEST_ROOT) as name:

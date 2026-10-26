@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -50,6 +51,8 @@ def _read_json(path: Path) -> tuple[dict[str, Any] | None, bool]:
 
 
 def _audit_config(path: Path, *, allow_older_skill_set: bool = False) -> int | None:
+    if path.is_symlink():
+        return 0
     if not path.is_file():
         return None
     suffix = "-compatible" if allow_older_skill_set else ""
@@ -62,6 +65,8 @@ def _audit_config(path: Path, *, allow_older_skill_set: bool = False) -> int | N
 
 
 def _profile_major(path: Path) -> int | None:
+    if path.is_symlink():
+        return None
     try:
         config = managed_config.parse_jsonc(path.read_text(encoding="utf-8"), str(path))
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
@@ -110,7 +115,9 @@ def evaluate() -> dict[str, Any]:
     recorded_version_valid = recorded_version is None or parse_version(recorded_version) is not None
     version_relation = compare_versions(recorded_version, repository_version)
     legacy_unversioned = record_exists and recorded_version is None
-    if version_relation is not None and version_relation > 0:
+    if config_path.is_symlink():
+        config_major = 0
+    elif version_relation is not None and version_relation > 0:
         config_major = _profile_major(config_path)
     else:
         config_major = _audit_config(config_path, allow_older_skill_set=(version_relation != 0))
@@ -243,6 +250,19 @@ def evaluate() -> dict[str, Any]:
     if not backup_inventory["latest"]:
         warnings.append("No verified rollback snapshot is available yet.")
 
+    manifest_path = locations["config"] / managed_config.MANIFEST_NAME
+    try:
+        manifest_mode = manifest_path.lstat().st_mode
+        manifest_present = stat.S_ISREG(manifest_mode)
+        manifest_invalid = not manifest_present
+    except FileNotFoundError:
+        manifest_present = False
+        manifest_invalid = False
+    except OSError:
+        manifest_present = False
+        manifest_invalid = True
+    recovery = _recovery_plan(lifecycle, managed_config_error, runtime_usable, unsafe_path, transaction)
+
     return {
         "schema_version": 1,
         "lifecycle": lifecycle,
@@ -266,9 +286,11 @@ def evaluate() -> dict[str, Any]:
                            "runtime_major": config_major or None,
                            "path": str(locations["config"])},
         "managed_config": {"valid": managed_config_error is None and managed_config_result is not None,
-                            "manifest_present": bool(managed_config_result and managed_config_result.get("manifest_present")),
+                            "manifest_present": manifest_present,
+                            "manifest_invalid": manifest_invalid,
                             "owned_files": len(managed_config_result.get("owned_files", [])) if managed_config_result else 0,
                             "user_files": managed_config_result.get("user_files", []) if managed_config_result else [],
+                            "external_symlinks": managed_config_result.get("external_symlinks", []) if managed_config_result else [],
                             "error": managed_config_error},
         "transaction": transaction,
         "runtime": {"present": bool(runtime.get("installed")), "usable": runtime_usable,
@@ -277,9 +299,50 @@ def evaluate() -> dict[str, Any]:
                     "path_ready": bool(runtime.get("path_ready"))},
         "memory": {"present": memory_present, "path": str(locations["memory"])},
         "backups": backup_inventory,
+        "recovery": recovery,
         "blockers": blockers,
         "warnings": warnings,
     }
+
+
+def _recovery_plan(lifecycle: str, config_error: str | None, runtime_usable: bool,
+                   unsafe_path: Path | None, transaction: dict[str, Any]) -> dict[str, Any]:
+    if lifecycle == "MIGRATION_REQUIRED":
+        return {"applicable": True, "command": "make upgrade",
+                "instruction": "Run make upgrade to migrate this valid installation."}
+    if lifecycle == "STALE":
+        return {"applicable": True, "command": "make upgrade",
+                "instruction": "Run make upgrade to install the newer compatible Anvil patch release."}
+    if lifecycle in {"REPOSITORY_ONLY", "PARTIALLY_INSTALLED"}:
+        return {"applicable": True, "command": "make reforge",
+                "instruction": "Run make reforge to install or complete the Anvil harness."}
+    if lifecycle == "CORRUPTED":
+        recoverable_config = bool(config_error and config_error.startswith((
+            "Anvil-managed file is missing:",
+            "Anvil-managed file changed unexpectedly:",
+            "Anvil-managed path is a symbolic link:",
+            "source profile is missing files required by its own release:",
+        )))
+        if recoverable_config and runtime_usable and unsafe_path is None \
+                and "opencode.jsonc" not in config_error:
+            return {"applicable": True, "command": "make reforge",
+                    "instruction": "Run make reforge to rebuild the identified Anvil-managed files; the installed OpenCode runtime will be reused."}
+        return {"applicable": False, "command": None,
+                "instruction": "Automatic recovery is not available for this finding. Preserve the current files and manually review the reported unsafe or untrusted state before retrying lifecycle commands."}
+    if lifecycle == "RECOVERY_REQUIRED":
+        if transaction.get("valid") is True and transaction.get("backup_valid") is True:
+            return {"applicable": True, "command": "rerun interrupted lifecycle command",
+                    "instruction": "Close OpenCode, then rerun the interrupted lifecycle command to recover from its verified snapshot."}
+        return {"applicable": False, "command": None,
+                "instruction": "Automatic recovery is unavailable because the lifecycle journal or its snapshot failed validation. Preserve the current files and review the journal and backups manually."}
+    if lifecycle == "TRANSITION_IN_PROGRESS":
+        return {"applicable": False, "command": None,
+                "instruction": "Wait for the active lifecycle command to finish before starting another operation."}
+    if lifecycle == "UNSUPPORTED":
+        return {"applicable": False, "command": None,
+                "instruction": "Use a compatible Anvil checkout/runtime; automatic downgrade is blocked."}
+    return {"applicable": False, "command": None,
+            "instruction": "No recovery action is currently required."}
 
 
 def _human(value: dict[str, Any]) -> str:
@@ -292,8 +355,9 @@ def _human(value: dict[str, Any]) -> str:
     lines = ["Anvil lifecycle", "────────────────", f"Status                {names.get(value['lifecycle'], value['lifecycle'])}",
              f"Installed release     {value['transition']['source_version'] or 'unknown'}",
              f"Target release        {value['transition']['target_version'] or 'invalid'}",
-             f"Managed config        {'valid' if value['configuration']['valid'] else 'not available'}",
-             f"Managed file manifest {'present' if value['managed_config']['manifest_present'] else 'legacy/unrecorded'}",
+             f"OpenCode profile      {'valid' if value['configuration']['valid'] else 'not available'}",
+             f"Managed file audit    {'valid' if value['managed_config']['valid'] else 'needs review' if value['configuration']['present'] else 'not available'}",
+             f"Managed file manifest {'present' if value['managed_config']['manifest_present'] else 'invalid' if value['managed_config']['manifest_invalid'] else 'legacy/unrecorded'}",
              f"OpenCode runtime      {value['runtime']['version'] or 'not available'}",
              f"Memory directory     {'present' if value['memory']['present'] else 'not initialized'}",
              f"Rollback snapshots   {value['backups']['valid_count']} verified"]
@@ -301,26 +365,12 @@ def _human(value: dict[str, Any]) -> str:
         if values:
             lines.extend(["", label])
             lines.extend(f"  {item}" for item in values)
-    if value["lifecycle"] == "MIGRATION_REQUIRED":
-        lines.extend(["", "Next step", "  Run make upgrade to migrate this valid installation."])
-    elif value["lifecycle"] == "STALE":
-        lines.extend(["", "Next step", "  Run make upgrade to install the newer compatible Anvil patch release."])
-    elif value["lifecycle"] == "RECOVERY_REQUIRED":
-        if value["transaction"].get("valid") is True and value["transaction"].get("backup_valid") is True:
-            next_step = "Close OpenCode, then rerun the interrupted lifecycle command to recover from its verified snapshot."
-        else:
-            next_step = "Preserve the current files and review the lifecycle journal and rollback snapshots manually."
-        lines.extend(["", "Next step", f"  {next_step}"])
-    elif value["lifecycle"] == "TRANSITION_IN_PROGRESS":
-        lines.extend(["", "Next step", "  Wait for the active lifecycle command to finish before starting another operation."])
-    elif value["lifecycle"] == "UNSUPPORTED":
-        lines.extend(["", "Next step", "  Use a compatible Anvil checkout/runtime; automatic downgrade is blocked."])
-    elif value["lifecycle"] in {"REPOSITORY_ONLY", "PARTIALLY_INSTALLED", "CORRUPTED"}:
-        lines.extend(["", "Next step"])
-        if value["lifecycle"] == "REPOSITORY_ONLY":
-            lines.append("  Run make reforge to install Anvil.")
-        else:
-            lines.append("  Review the reported state; run make reforge to rebuild recoverable Anvil files.")
+    external_links = value["managed_config"].get("external_symlinks", [])
+    if external_links:
+        lines.extend(["", "External config state",
+                      f"  {len(external_links)} unowned symbolic link(s); excluded from Anvil integrity checks and preserved during migration."])
+    if value["lifecycle"] != "READY" and value["recovery"]["instruction"] != "No recovery action is currently required.":
+        lines.extend(["", "Next step", f"  {value['recovery']['instruction']}"])
     return "\n".join(lines)
 
 
@@ -346,8 +396,10 @@ def main() -> int:
         print(_human(value), file=sys.stderr)
         if value["lifecycle"] == "UNSUPPORTED":
             print("\nBLOCKED: This checkout cannot safely modify the installed Anvil/runtime version.", file=sys.stderr)
+        elif value["lifecycle"] == "TRANSITION_IN_PROGRESS":
+            print("\nBLOCKED: Another lifecycle transaction is already running. Wait for it to finish before starting another operation.", file=sys.stderr)
         else:
-            print("\nBLOCKED: This operation requires a usable Anvil installation. Review the state above before running make reforge.", file=sys.stderr)
+            print("\nBLOCKED: This operation requires a usable Anvil installation. Follow the recovery step above first.", file=sys.stderr)
         return 1
     if args.action == "require-current":
         if value["lifecycle"] in {"READY", "INSTALLED", "DEGRADED"}:

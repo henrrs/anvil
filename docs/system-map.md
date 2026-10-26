@@ -86,7 +86,7 @@ There is no `make setup` target. `make` prints help; fresh installation uses the
 | Databricks profile/provider state | `$XDG_CONFIG_HOME/anvil/databricks/` and `anvil/databricks.json` | Anvil-owned profile and non-secret readiness metadata; external Databricks profiles are read-only diagnostics and are not adopted. |
 | Databricks client installs | Under Anvil XDG data | Explicit setup may install a user-local CLI or isolated SDK; general Anvil lifecycle does not. Provider-native credential storage handles secrets. |
 
-All lifecycle integration tests use isolated HOME and XDG roots. File manifests reject unsafe relative paths and symlinks within a managed config. Snapshot restore verifies archive contents before activation. Runtime process matching is scoped to the validated executable, current user, and configured OpenCode data roots.
+All lifecycle integration tests use isolated HOME and XDG roots. File manifests reject unsafe relative paths and symlinks at Anvil-owned paths; unowned config entries are inventoried without following symlinks, excluded from Anvil hashes, and preserved during migration. Snapshot restore verifies archive contents before activation. Runtime process matching is scoped to the validated executable, current user, and configured OpenCode data roots.
 
 ## External dependency inventory
 

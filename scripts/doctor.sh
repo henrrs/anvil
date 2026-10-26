@@ -139,6 +139,12 @@ PY
   fi
 fi
 
+if [[ -L "$ANVIL_CONFIG_DIR/opencode.jsonc" ]]; then
+  anvil_error 'The managed OpenCode profile is a symbolic link; doctor will not follow it.'
+  printf '\nStatus: BROKEN\n'
+  exit 1
+fi
+
 config_major=""
 audit_suffix=""
 if [[ "$recorded_anvil" != "$expected_anvil" ]]; then audit_suffix="-compatible"; fi

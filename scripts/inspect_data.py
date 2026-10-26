@@ -11,6 +11,8 @@ from configure import parse_jsonc
 
 
 def config_data(path: Path) -> dict:
+    if path.is_symlink():
+        return {}
     try:
         value = parse_jsonc(path.read_text(encoding="utf-8"), str(path))
         return value if isinstance(value, dict) else {}
@@ -44,7 +46,7 @@ def main() -> int:
 
     config_dir: Path = args.config
     main_configs = [config_dir / name for name in ("config.json", "opencode.json", "opencode.jsonc")]
-    parsed = [(path, config_data(path)) for path in main_configs if path.is_file()]
+    parsed = [(path, config_data(path)) for path in main_configs if path.is_file() and not path.is_symlink()]
     agents = files(config_dir, ("agents", "agent", "modes", "mode"))
     skills = files(config_dir, ("skills", "skill"))
     plugin_dirs = files(config_dir, ("plugins", "plugin"))
@@ -92,7 +94,7 @@ def main() -> int:
     while True:
         for name in ("opencode.json", "opencode.jsonc"):
             path = cursor / name
-            if path.is_file():
+            if path.is_file() and not path.is_symlink():
                 project_configs.append(path)
                 data = config_data(path)
                 if isinstance(data.get("mcp", {}), dict):
@@ -110,7 +112,7 @@ def main() -> int:
             project_plugins.extend(files(project_opencode, ("plugins", "plugin")))
             for name in ("opencode.json", "opencode.jsonc"):
                 path = project_opencode / name
-                if path.is_file():
+                if path.is_file() and not path.is_symlink():
                     project_configs.append(path)
                     data = config_data(path)
                     if isinstance(data.get("mcp", {}), dict):

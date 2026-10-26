@@ -27,6 +27,10 @@ if [[ -L "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_BIN" ]]; then
   anvil_error 'The OpenCode installer directory or bin directory is a symlink; refusing to install through it.'
   exit 1
 fi
+if [[ -L "$ANVIL_CONFIG_DIR/opencode.jsonc" ]]; then
+  anvil_error 'The installed OpenCode profile is a symlink and cannot be trusted as a reforge source. Restore the profile from a verified Anvil snapshot or review it manually first.'
+  exit 1
+fi
 python3 "$ROOT/scripts/active-opencode.py" || {
   anvil_error 'Close OpenCode before reforge so its database can be backed up consistently.'
   exit 1

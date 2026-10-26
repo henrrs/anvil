@@ -4,28 +4,40 @@
 **Execution environment:** Linux, Python 3.12, isolated test HOME/XDG
 **Release mode:** offline fixtures; no user OpenCode, Databricks profile, model, or production state was used.
 
+**Follow-up reassessment:** On 2026-10-25, a production-like 2.6.1 install exposed a false-corruption case that the original audit did not cover. The ownership/lifecycle fix and brownfield regressions now pass the full offline suite; the release recommendation below reflects this retest.
+
 ## 1. Executive summary
 
-**Overall status: HEALTHY WITH RISKS.** The public lifecycle and integration contract suite passes from a clean temporary environment. State classification, Anvil-only upgrade boundaries, V1/V2 configuration, snapshot recovery, runtime preservation, user-file ownership, and Databricks provider contracts have broad local regression coverage. The audit reproduced and fixed two high-severity behavior defects and two medium-severity reliability/documentation defects.
+**Overall status: HEALTHY WITH RISKS.** The refreshed public lifecycle and integration contract suite passes from temporary HOME/XDG roots. State classification, Anvil-only upgrade boundaries, V1/V2 configuration, snapshot recovery, runtime preservation, ownership-aware symlink handling, brownfield migration, and Databricks provider contracts have local regression coverage. The original audit fixed two high-severity behavior defects and two medium-severity reliability/documentation defects; this follow-up reproduced and fixed a third high-severity lifecycle defect.
 
-The evidence supports release of the offline/core changes, conditional on the regular CI/release gate and a separate real provider/runtime smoke test where those external services are available. It does not establish live Databricks readiness, model reasoning quality, release artifact availability, macOS behavior, or aesthetic quality of generated diagrams.
+The initial audit conclusion was incomplete: its generated lifecycle fixture had no package-manager tree or npm-style symlinks beneath the OpenCode config root. This follow-up adds that state, validates both sides of the ownership boundary, and tests the full legacy-to-current lifecycle. It still does not establish live Databricks readiness, model reasoning quality, release artifact availability, macOS behavior, or aesthetic quality of generated diagrams.
+
+## Follow-up reassessment — managed ownership and brownfield state
+
+The escaped defect was reproducible before the product fix: a legacy Anvil 2.6.1 fixture with a valid internal npm `.bin` symlink was classified `CORRUPTED`, and the reported blocker was `symbolic link inside managed config needs manual review`. The old `_files()` helper recursively enumerated the entire OpenCode config root and rejected every symlink before `inspect_source()` consulted the managed manifest or the legacy release inventory.
+
+The prior quality tests missed it for a concrete reason. `tests/lifecycle.py::fixture()` generated an Anvil profile with ordinary user-owned files, but no `node_modules`, package-manager links, or equivalent external runtime-generated tree. Existing symlink regressions covered explicit artifact/input and runtime boundaries, not a symlink inside the OpenCode config root. The source/target ownership tests proved regular-file preservation and collision handling, but never asserted that an unowned symlink was excluded from the Anvil integrity policy. The fixture was too clean for the filesystem shape of a long-lived install, and the missing invariant was “location does not imply ownership.”
+
+The follow-up brownfield fixture now represents the old manifest-less release, a compatible OpenCode 1.19.3 runtime, existing memory, Anvil Databricks config/provider state, a verified rollback snapshot, and both valid and broken npm-style links. It runs inspect, doctor, upgrade dry-run with full zero-write snapshots, real upgrade, post-upgrade inspect/doctor, and reforge. Separate managed-link tests cover escaping skill/command symlinks and a broken managed symlink. A doctor-recommended reforge is executed and verified; an untrusted `opencode.jsonc` symlink receives manual-review guidance, and reforge refuses to read it.
+
+The distinguishing assurance now asserts both directions: unowned symlinks survive literally and never enter the manifest, while symlinks at manifest-owned paths remain corruption. The new npm regression was observed failing against the previous blanket-rejection logic before the implementation changed. The security scenarios fail if managed-path symlink checks are removed.
 
 ## 2. Inventory and test baseline
 
 The [system map](system-map.md) catalogs 71 executable source files (56 Python and 15 shell), all Make targets, 35 config assets, six skills, four slash commands, persistent-state roots, external dependencies and failure boundaries. Five test drivers compose the release gate: `tests/run.sh`, plus the lifecycle, Databricks, distill and communication Python drivers.
 
-Before the audit regressions were added, the lifecycle driver had 20 named scenario routines and the existing full `make test` had passed after the lifecycle implementation. The audited suite now has 25 lifecycle scenario routines; the four other drivers and the Make test harness remain. New assurance covers ownership migration, disabled custom agents, paths with spaces/Unicode and external cwd, concurrent lifecycle invocation, and read-only configuration parent preflight. Assertions within scenarios are not counted as separate tests.
+Before the audit regressions were added, the lifecycle driver had 20 named scenario routines and the existing full `make test` had passed after the lifecycle implementation. The original audit suite had 25 lifecycle scenario routines. The 2026-10-25 follow-up adds three, bringing the lifecycle driver to 28 routines; the four other drivers and the Make test harness remain. New assurance covers ownership migration, disabled custom agents, paths with spaces/Unicode and external cwd, concurrent lifecycle invocation, read-only configuration parent preflight, and brownfield package-manager/managed-symlink boundaries. Assertions within scenarios are not counted as separate tests.
 
 Executed checks:
 
-- `make test` — **PASS**, after all code/test changes. Tests report: “All Anvil offline checks passed.” OpenCode 1.18.18 and 2.0.0 fixtures, fake Databricks CLI/auth, denied external network, temporary HOME and all XDG roots.
+- `make test` — **PASS** after the 2026-10-25 ownership/lifecycle fix and regression additions. Output: “All Anvil offline checks passed.” This includes the 2.6.1→2.8.0 brownfield migration, valid/broken external npm links, recovery and managed-link security cases.
 - `python3 scripts/version_docs.py` — **PASS** for 2.8.0 release/version/inventory documentation.
-- `py_compile` — **PASS**, 60 Python files.
-- `bash -n` — **PASS**, 16 shell files under scripts/tests.
+- `python3 -m py_compile scripts/managed_config.py scripts/lifecycle_state.py scripts/inspect_data.py tests/lifecycle.py` — **PASS**.
+- `bash -n scripts/lib/install.sh scripts/reforge.sh scripts/doctor.sh` — **PASS**; the full suite also reports shell/Python syntax **PASS**.
 - `git diff --check` — **PASS**.
 - `shellcheck`, `ruff`, `mypy`, `pylint`, and coverage/mutation tools — **unavailable**; these were not represented as passing.
 
-The initial full suite passed before the final read-only-path fix. After that fix, the complete suite was rerun and passed again. A separate focused run reproduced the pre-fix issue and confirmed read-only rejection before snapshot, transaction journal, or runtime shutdown.
+Before the fix, the exact regression returned `CORRUPTED` with the blanket symlink blocker. After the fix, the focused brownfield, managed-link recovery, and unsafe-profile recommendation tests passed, followed by a complete `make test` pass. The brownfield dry-run compares full filesystem snapshots across config, Anvil state, memory, runtime and provider files to prove zero writes.
 
 ## 3. Functional capability and confidence matrix
 
@@ -60,7 +72,7 @@ Confidence describes executed contract coverage, not production traffic or model
 | Transaction recovery and rollback | PASS | High for injected paths | No power-loss/disk-full physical test |
 | OpenCode V1/V2 integration | PASS (contract) | Medium-high | Fixture versions 1.18.18/2.0.0, no live binary matrix |
 | Runtime release update/migration | PASS (offline contract) | Medium | Release API/download availability is external |
-| Config and ownership | PASS | High | Future new config shapes still need inventory/schema update |
+| Config and ownership | PASS after follow-up | High (brownfield and adversarial fixtures) | Future new config shapes still need inventory/schema update; no live enterprise install was inspected |
 | Memory and source registry | PASS | Medium-high | No large-scale retrieval or semantic model benchmark |
 | Databricks provider/auth | PASS (offline contract) | Medium | No real auth, permissions, workspace, CLI or SQL run |
 | Databricks FinOps | PASS (fixture) | Medium | Live schema/retention/large result variation unverified |
@@ -79,8 +91,9 @@ None found.
 
 1. **Paths containing spaces were split while parsing runtime discovery.** Shell `read` used default IFS on tab-delimited output, which also treats spaces as separators. Lifecycle commands could fail to rediscover a valid runtime when HOME/XDG included spaces. Fixed by setting tab-only IFS in `scripts/anvil_upgrade.sh`, `scripts/upgrade.sh`, and `scripts/reforge.sh`. Regression: `filesystem_and_working_directory_test` uses spaced/Unicode HOME and XDG, an external cwd, `make -C`, dry-run, real upgrade, reforge, and same-major runtime update; it verifies Anvil-only commands preserve the runtime and runtime update preserves Anvil config/release.
 2. **Disabled custom inline agents were silently lost during profile rebuild.** The generator retained enabled extras but dropped disabled V1/V2 agent definitions, and strict V2 audits rejected additional enabled agents without ownership context. Fixed by preserving disabled user agents, translating V1 `disable` and V2 `disabled`, and using the installed manifest's `managed_agents` list to distinguish Anvil-owned agents. Regression: `custom_agent_transition_test` covers V1→V1, V1→V2, V2→V1, V2→V2 and Anvil-owned removals.
+3. **External npm symlinks falsely marked legacy installs corrupted and blocked upgrade.** `_files()` rejected every symlink beneath the OpenCode config root before checking Anvil ownership; the same helper blocked target preparation, while generic corruption text could recommend reforge without evidence that it could run. Fixed by enumerating nodes without following symlinks, applying integrity checks only to manifest/source-inventory paths, preserving unowned links without resolving them, blocking managed links, and deriving lifecycle recovery guidance from known preconditions. Reforge refuses a symlinked source profile. Regression: the 2.6.1 brownfield journey and managed/untrusted symlink cases described above.
 
-Both P1 findings have automated regression coverage and pass after the fix.
+All three P1 findings have automated regression coverage and pass in the refreshed full suite. The first two were fixed in the original audit; the ownership/lifecycle finding is fixed and revalidated by this follow-up.
 
 ### P2 — Medium, fixed or bounded
 
@@ -122,6 +135,7 @@ Pure-Python checks cover bounded input extraction, evidence IDs, arithmetic and 
 
 - Concurrent lifecycle attempts can leave an extra valid snapshot, as above.
 - No live OpenCode binary release, network/proxy behavior, installer checksum fetch, or official artifact smoke test was run; lifecycle tests deliberately deny external network.
+- The brownfield package-manager tree is intentionally small and models ownership/link semantics rather than production scale. Very large `node_modules` trees will increase config staging and snapshot time/space; backup preflight checks available space, but large-tree performance was not benchmarked.
 - No real Databricks/Azure/SQL workspace or credential session was used. Databricks results are contract-level confidence only.
 - No model was invoked. `/distill` and communication skill reasoning remain dependent on model/user judgment; deterministic helper success is not semantic truth verification.
 - macOS, Windows outside WSL, alternate Bash/Make/tar implementations, low-disk conditions, ACL-only permission changes, and actual power loss are not verified.
@@ -154,7 +168,7 @@ Recommended next engineering priorities:
 | Do provider outages corrupt core Anvil state? | Databricks contract tests show setup/provider status is separate from core lifecycle; no live workspace outage test was run. |
 | Does memory survive lifecycle operations? | Tests verify memory remains through Anvil/runtime rollback and is outside snapshots; large-scale or multi-user semantics are not established. |
 | Will every future skill/command/agent/config change migrate automatically? | Skills/commands have an introduction-version inventory; inline agents have managed ownership metadata. New config fields still require explicit migration/audit design and regression tests. |
-| Would tests catch the observed cross-release lifecycle regression? | Yes: tests cover supported old-source profiles on both runtime generations and target-only managed files. The full offline suite passed. |
+| Would the original quality audit have caught the observed npm-symlink regression? | No. Its fixtures omitted package-manager trees beneath the global config and its symlink assertions did not exercise managed-config discovery. The follow-up brownfield regression now fails on the old blanket-rejection behavior and covers valid, broken, unowned, and managed symlinks. |
 
 ## 11. Release recommendation
 
