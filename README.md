@@ -4,7 +4,7 @@
 >
 > **Better harness. Better execution.**
 
-Anvil 2.7.0 adds model-agnostic Communication & Artifact Intelligence while keeping OpenCode 1/2 support and the existing Databricks state contract.
+Anvil 2.8.0 hardens lifecycle inspection, migration, managed-file ownership, rollback, and interrupted-operation recovery while preserving OpenCode 1/2 and Databricks integration boundaries.
 
 ```bash
 # First installation
@@ -123,4 +123,4 @@ Numerical values remain tied to evidence IDs. The deterministic core separates a
 
 ## Version history
 
-See the [Anvil 2.7.0 release notes](docs/versions/v2.7.0.md), [communication and artifact architecture](docs/communication-artifact-intelligence.md), [public command contracts](docs/command-contracts.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).
+See the [Anvil 2.8.0 release notes](docs/versions/v2.8.0.md), [lifecycle migration guide](docs/migrations/v2.7.1-to-v2.8.0.md), [system map](docs/system-map.md), [full-system quality audit](docs/quality-audit.md), [communication and artifact architecture](docs/communication-artifact-intelligence.md), [public command contracts](docs/command-contracts.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).

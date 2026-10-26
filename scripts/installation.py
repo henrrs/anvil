@@ -4,16 +4,19 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from semver import parse as parse_version
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--destination", type=Path, required=True)
+    parser.add_argument("--config-dir", type=Path, help="Installed config root whose Anvil manifest is recorded")
     parser.add_argument("--opencode-version", required=True)
     parser.add_argument("--opencode-major", type=int)
     parser.add_argument("--anvil-version", required=True)
@@ -42,7 +45,7 @@ def main() -> int:
         except (OSError, ValueError, json.JSONDecodeError):
             record = {}
         record.update({
-            "schema_version": max(2, int(record.get("schema_version", 1) or 1)),
+            "schema_version": max(3, int(record.get("schema_version", 1) or 1)),
             "anvil_version": args.anvil_version,
             "runtime_major": runtime_major,
             "runtime_profile": f"opencode-v{runtime_major}",
@@ -80,7 +83,7 @@ def main() -> int:
             prior_major = record.get("runtime_major", record.get("generation", args.from_generation))
             prior_version = record.get("version") or args.previous_opencode_version or None
             record.update({
-                "schema_version": max(2, int(record.get("schema_version", 1) or 1)),
+                "schema_version": max(3, int(record.get("schema_version", 1) or 1)),
                 "runtime_major": runtime_major,
                 "runtime_profile": f"opencode-v{runtime_major}",
                 "version": args.opencode_version,
@@ -104,7 +107,7 @@ def main() -> int:
             })
         else:
             record = {
-                "schema_version": 2,
+                "schema_version": 3,
                 "anvil_version": args.anvil_version,
                 "runtime_major": runtime_major,
                 "runtime_profile": f"opencode-v{runtime_major}",
@@ -128,6 +131,18 @@ def main() -> int:
                     "completed_utc": now,
                 },
             }
+    if args.config_dir is not None:
+        manifest_path = args.config_dir / ".anvil-managed.json"
+        if manifest_path.is_file():
+            try:
+                digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+            except OSError as exc:
+                parser.error(f"could not read installed managed config manifest: {exc}")
+            record["managed_config_manifest_sha256"] = digest
+        elif (parse_version(record.get("anvil_version")) or (0, 0, 0)) >= (2, 8, 0):
+            parser.error("this installed Anvil release requires a managed config manifest")
+        else:
+            record.pop("managed_config_manifest_sha256", None)
     destination.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     os.chmod(destination.parent, 0o700)
     fd, temporary = tempfile.mkstemp(prefix=".installation.", dir=destination.parent)

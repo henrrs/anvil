@@ -2,6 +2,29 @@
 
 Release notes for user-visible Anvil changes. See [version history](docs/versions/README.md) and [release discipline](docs/RELEASING.md).
 
+## [2.8.0] - 2026-10-25
+
+### Added
+
+- Added semantic lifecycle states for supported upgrades, required migration, unsupported downgrade/source windows, degraded installs, corruption, and interrupted-operation recovery.
+- Added a checksummed managed-file manifest bound to installation metadata. Upgrades now show a source-to-target file plan, preserve user-owned global files, and stop before mutation when a user file collides with a newly managed path.
+- Added atomic configuration staging and a durable transaction journal. A verified snapshot is restored automatically before a retry after a hard interruption; `inspect` remains read-only and reports `RECOVERY_REQUIRED`.
+- Added source compatibility for the current and previous two Anvil minor releases, semver ordering, and downgrade protection in both upgrade and reforge. Runtime-only updates keep the installed Anvil release and its exact configuration; explicit runtime-major migration requires current Anvil.
+
+### Fixed
+
+- A prior-release profile is now validated against its own managed inventory before target files are planned, so target-only additions no longer classify an otherwise valid source install as corrupted.
+- Reforge preserves user CLI/TUI preferences and user-owned files while rebuilding Anvil-owned files; modified or missing managed files can be repaired through explicit reforge when the ownership manifest remains trustworthy.
+- Rollback to a prior Anvil release is reported as migration-required when the checkout is newer, rather than as corruption.
+- Upgrade preflight now detects a read-only configuration parent before stopping OpenCode or creating a snapshot/journal, so a blocked atomic swap leaves the installation untouched.
+- Runtime discovery now preserves executable paths containing spaces during lifecycle output parsing; config rebuilds also retain disabled user-owned inline agents across OpenCode 1/2 transitions.
+
+### Compatibility and validation
+
+- Existing 2.6.x and 2.7.x profiles migrate with `make upgrade`; Anvil-only upgrades preserve the exact supported OpenCode executable, data, and state. OpenCode 1.x and 2.x remain supported.
+- New managed manifests are stored in the OpenCode global config and their SHA-256 is recorded in installation metadata. No Databricks credentials, readiness state, or memory schema are migrated.
+- `make test` covers version skew, extras/collisions, dry-run immutability, interrupted transactions, rollback, and runtime preservation using isolated HOME/XDG roots and offline fixtures.
+
 ## [2.7.1] - 2026-10-25
 
 ### Fixed

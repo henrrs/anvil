@@ -10,6 +10,7 @@ anvil_need python3 tar cp mv install chmod date
 [[ $# == 0 ]] || { anvil_error 'make upgrade accepts DRY_RUN=1 only; use make update-runtime or make migrate-runtime for OpenCode changes.'; exit 2; }
 ANVIL_VERSION="$(cat "$ROOT/VERSION")"
 
+anvil_recover_pending
 anvil_require_installed
 if [[ -L "$ANVIL_CONFIG_DIR" || -L "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_BIN" ]] || \
    ! anvil_safe_managed_path "$ANVIL_CONFIG_DIR" "$ANVIL_CONFIG_DIR" || \
@@ -19,7 +20,7 @@ if [[ -L "$ANVIL_CONFIG_DIR" || -L "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_B
 fi
 
 runtime_json="$(anvil_runtime_json)"
-read -r binary runtime_version major adapter supported < <(python3 - "$runtime_json" <<'PY'
+IFS=$'\t' read -r binary runtime_version major adapter supported < <(python3 - "$runtime_json" <<'PY'
 import json,sys
 r=json.loads(sys.argv[1]).get("runtime") or {}
 print("\t".join(str(r.get(k) or "") for k in ("executable","version","generation","adapter","supported")))
@@ -75,6 +76,7 @@ on_error() {
   if (( transaction_active )) && [[ -n "$backup_dir" ]]; then
     anvil_error "Anvil upgrade failed after config replacement (exit $status); restoring the Anvil-only snapshot."
     if ANVIL_INTERNAL_MODE=1 bash "$ROOT/scripts/rollback.sh" --backup "$backup_dir" --internal; then
+      python3 "$ROOT/scripts/lifecycle_transaction.py" clear || anvil_error 'Automatic rollback completed, but the recovery journal could not be cleared.'
       anvil_ok 'Automatic Anvil rollback completed; the OpenCode runtime and data were preserved.'
     else
       anvil_error "Automatic rollback failed. Verified snapshot remains at $backup_dir"
@@ -141,6 +143,7 @@ printf '\nUpgrade behavior\n'
 printf '  countdown           %ss\n' "${ANVIL_UPGRADE_COUNTDOWN_SECONDS:-5}"
 printf '  graceful shutdown   enabled (SIGTERM first)\n'
 printf '  force termination   fallback only\n'
+anvil_print_config_plan "$ANVIL_CONFIG_DIR" "$ready_config/generated" "$old_anvil_version" "$ANVIL_VERSION"
 
 if [[ "${DRY_RUN:-0}" == 1 ]]; then
   printf '\nNo changes performed.\nNo processes stopped.\nNo files changed.\n'
@@ -187,15 +190,25 @@ if [[ "${ANVIL_TEST_FAIL_AFTER_BACKUP:-0}" == 1 ]]; then
   exit 1
 fi
 
+python3 "$ROOT/scripts/lifecycle_transaction.py" begin --operation anvil-upgrade \
+  --backup "$backup_dir" --source-version "$old_anvil_version" --target-version "$ANVIL_VERSION" --owner-pid "$$"
 transaction_active=1
+python3 "$ROOT/scripts/lifecycle_transaction.py" phase applying-config
 anvil_apply_config "$ready_config/generated"
+python3 "$ROOT/scripts/lifecycle_transaction.py" phase config-applied
 if [[ "${ANVIL_TEST_FAIL_AFTER_CONFIG:-0}" == 1 ]]; then
   anvil_error 'Injected failure after Anvil config replacement.'
   false
 fi
 XDG_DATA_HOME="$ANVIL_DATA_HOME" python3 "$ANVIL_CONFIG_DIR/scripts/memory.py" init >/dev/null
+python3 "$ROOT/scripts/lifecycle_transaction.py" phase before-installation-metadata
+if [[ "${ANVIL_TEST_FAIL_BEFORE_METADATA:-0}" == 1 ]]; then
+  anvil_error 'Injected failure before installation metadata was written.'
+  false
+fi
 python3 "$ROOT/scripts/installation.py" \
   --destination "$ANVIL_DATA_DIR/installation.json" \
+  --config-dir "$ANVIL_CONFIG_DIR" \
   --opencode-version "$runtime_version" --anvil-version "$ANVIL_VERSION" \
   --opencode-major "$major" --binary "$binary" --anvil-only \
   --migration-status anvil-upgrade --previous-anvil-version "$old_anvil_version" --backup "$backup_dir"
@@ -205,7 +218,7 @@ doctor_status=0
 if [[ "${ANVIL_TEST_FAIL_DOCTOR:-0}" == 1 ]]; then
   doctor_status=1
 else
-  ANVIL_DOCTOR_LOCAL=1 bash "$ROOT/scripts/doctor.sh" || doctor_status=$?
+  ANVIL_TRANSACTION_POSTFLIGHT=1 ANVIL_DOCTOR_LOCAL=1 bash "$ROOT/scripts/doctor.sh" || doctor_status=$?
 fi
 if (( doctor_status == 1 || doctor_status > 2 )); then
   anvil_error 'Post-upgrade doctor reported a broken installation.'
@@ -214,6 +227,8 @@ elif (( doctor_status == 2 )); then
   anvil_warn 'Upgrade completed with local project or source-drift warnings from doctor.'
 fi
 
+python3 "$ROOT/scripts/lifecycle_transaction.py" phase postflight-validated
+python3 "$ROOT/scripts/lifecycle_transaction.py" clear
 transaction_active=0
 anvil_ok "Anvil $ANVIL_VERSION installed; OpenCode $runtime_version was preserved exactly."
 anvil_ok "Anvil-only rollback snapshot: $backup_dir"

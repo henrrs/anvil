@@ -86,16 +86,36 @@ mkdir -p -- "$test_config_home/opencode"
 cp -a -- "$tmp_root/target-config/." "$test_config_home/opencode/"
 chmod 600 -- "$test_config_home/opencode/opencode.jsonc"
 if [[ "$target_major" == 1 ]]; then
-  python3 "$ROOT/scripts/configure.py" audit-v1 "$test_config_home/opencode/opencode.jsonc"
+  if [[ "$reuse_config" == yes ]]; then
+    python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$test_config_home/opencode/opencode.jsonc"
+  else
+    python3 "$ROOT/scripts/configure.py" audit-v1 "$test_config_home/opencode/opencode.jsonc"
+  fi
 else
-  python3 "$ROOT/scripts/configure.py" audit "$test_config_home/opencode/opencode.jsonc"
+  if [[ "$reuse_config" == yes ]]; then
+    python3 "$ROOT/scripts/configure.py" audit-compatible "$test_config_home/opencode/opencode.jsonc"
+  else
+    python3 "$ROOT/scripts/configure.py" audit "$test_config_home/opencode/opencode.jsonc"
+  fi
 fi
 
 mkdir -p -- "$test_home/.opencode/bin"
 install -m 0755 -- "$candidate" "$test_home/.opencode/bin/opencode"
 test_binary="$test_home/.opencode/bin/opencode"
 "${rehearsal_env[@]}" python3 "$ROOT/scripts/memory.py" init >/dev/null
-python3 - "$test_data_home/anvil/installation.json" "$expected_version" "$(cat "$ROOT/VERSION")" "$target_major" <<'PY'
+source_anvil_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
+import json,sys
+try:
+  value=json.load(open(sys.argv[1],encoding="utf-8"))
+except (OSError,ValueError):
+  value={}
+print(value.get("anvil_version") or "")
+PY
+)"
+if [[ "$reuse_config" != yes ]]; then
+  source_anvil_version="$(cat "$ROOT/VERSION")"
+fi
+python3 - "$test_data_home/anvil/installation.json" "$expected_version" "$source_anvil_version" "$target_major" <<'PY'
 import json,sys
 from datetime import datetime,timezone
 record={

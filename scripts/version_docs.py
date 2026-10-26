@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import sys
+import json
 from pathlib import Path
 
 
@@ -19,6 +20,7 @@ def main() -> int:
     release_doc = patch_release_doc if (ROOT / patch_release_doc).is_file() else f"docs/versions/v{version.rsplit('.', 1)[0]}.md"
     required = {
         "CHANGELOG.md": [f"## [{version}]"],
+        "README.md": [f"Anvil {version}", "make upgrade DRY_RUN=1", "make reforge", "docs/system-map.md", "docs/quality-audit.md"],
         release_doc: [f"# Anvil {version}", "make update-runtime", "exact validated", "Network required"],
         "docs/versions/README.md": ["Anvil 2.2 + OpenCode 1", "Anvil 2.2 + OpenCode 2", "Anvil 2.3 + OpenCode 1", "Anvil 2.3 + OpenCode 2", "Anvil 2.4 + OpenCode 1", "Anvil 2.4 + OpenCode 2", "Anvil 2.7 + OpenCode 1", "Anvil 2.7 + OpenCode 2", "Communication & artifact intelligence", "Binary PPTX/DOCX/PDF rendering", "Databricks live system catalog and FinOps", "Topology-aware Databricks auth setup", "Runtime quiescing during Anvil upgrade", "Runtime-major migration command", "do not require OpenCode 2"],
         "docs/versions/v2.7.0.md": ["Communication & Artifact Intelligence", "OpenCode 1.x and 2.x", "make upgrade", "exact validated", "Binary PPTX", "Network required"],
@@ -46,8 +48,29 @@ def main() -> int:
         "docs/databricks/testing.md": ["offline", "tests/fixtures/bin/databricks", "do not resolve/download OpenCode", "topology-aware auth selection", "human/JSON presentation"],
         "docs/databricks/readiness.md": ["CONFIGURED", "AUTHENTICATED", "WORKSPACE_VALIDATED", "CAPABILITIES_DISCOVERED", "CLI_PROCESS_TIMEOUT", "15 minutes", "process-group"],
         "docs/decisions/ADR-0013-databricks-readiness-provider-validation.md": ["same production provider", "schema-3", "permission denials", "MINOR"],
+        "docs/versions/v2.8.0.md": ["MIGRATION_REQUIRED", "STALE", "managed-file", "RECOVERY_REQUIRED", "make upgrade DRY_RUN=1", "exact validated", "Network required", "disabled in the source profile", "writable config parent"],
+        "docs/migrations/v2.7.1-to-v2.8.0.md": ["RECOVERY_REQUIRED", "DRY_RUN=1", "make update-runtime", "make migrate-runtime", "rollback"],
+        "docs/decisions/ADR-0016-lifecycle-state-and-managed-file-migration.md": ["Status:** Accepted", "MIGRATION_REQUIRED", "managed-file", "durable transaction journal", "downgrade"],
+        "docs/command-contracts.md": ["MIGRATION_REQUIRED", "UNSUPPORTED", "RECOVERY_REQUIRED", "source-to-target plan"],
     }
     errors = []
+    inventory_path = ROOT / "config/managed-inventory.json"
+    try:
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        actual_skills = {path.name for path in (ROOT / "config/skills").iterdir() if path.is_dir()}
+        actual_commands = {path.stem for path in (ROOT / "config/commands").glob("*.md")}
+        for category, actual in (("skills", actual_skills), ("commands", actual_commands)):
+            declared = inventory.get(category, {})
+            if not isinstance(declared, dict) or set(declared) != actual:
+                errors.append(f"config/managed-inventory.json {category} do not match the shipped set")
+                continue
+            for name, introduced in declared.items():
+                if not re.fullmatch(r"\d+\.\d+\.\d+", str(introduced)):
+                    errors.append(f"config/managed-inventory.json has an invalid introduction version for {category}/{name}")
+                elif tuple(map(int, str(introduced).split("."))) > tuple(map(int, version.split("."))):
+                    errors.append(f"config/managed-inventory.json introduction for {category}/{name} is newer than VERSION")
+    except (OSError, UnicodeError, json.JSONDecodeError, AttributeError) as exc:
+        errors.append(f"config/managed-inventory.json is unreadable or invalid: {exc}")
     for relative, phrases in required.items():
         path = ROOT / relative
         if not path.is_file():

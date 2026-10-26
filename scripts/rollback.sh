@@ -20,6 +20,10 @@ if (( internal )) && [[ "${ANVIL_INTERNAL_MODE:-0}" != 1 ]]; then
   anvil_error 'Internal rollback options are reserved for Anvil lifecycle scripts and isolated tests.'
   exit 2
 fi
+if (( ! internal )); then
+  anvil_recover_pending
+  if [[ "${ANVIL_RECOVERED_PENDING:-0}" == 1 ]]; then exit 0; fi
+fi
 
 if [[ -z "$backup" ]]; then
   backup="$(anvil_lifecycle_state latest-backup)"
@@ -67,8 +71,28 @@ fi
 if ! anvil_safe_managed_path "$ANVIL_CONFIG_DIR" "$ANVIL_CONFIG_DIR"; then
   anvil_error 'Current config path did not pass the managed-path check.'; exit 1
 fi
+if [[ -L "$ANVIL_CONFIG_DIR" || -L "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_BIN" ]]; then
+  anvil_error 'Managed config/install paths must not be symlinks during rollback.'; exit 1
+fi
 if [[ "$ANVIL_INSTALL_ROOT" != "$ANVIL_HOME_DIR/.opencode" || "$ANVIL_INSTALL_ROOT" == / || "$ANVIL_INSTALL_ROOT" == "$ANVIL_HOME_DIR" || "$(dirname -- "$ANVIL_INSTALL_ROOT")" == / ]]; then
   anvil_error 'Current installer path did not pass the managed-path check.'; exit 1
+fi
+prior_anvil_version="$(read_manifest previous.anvil_version)"
+current_anvil_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
+import json,sys
+try: value=json.load(open(sys.argv[1],encoding="utf-8"))
+except (OSError,ValueError): value={}
+print(value.get("anvil_version") or "")
+PY
+)"
+if (( ! internal )); then
+  if ! python3 "$ROOT/scripts/active-opencode.py"; then
+    anvil_error 'Close OpenCode before rollback so its data and state can be restored consistently.'
+    exit 1
+  fi
+  python3 "$ROOT/scripts/lifecycle_transaction.py" begin --operation rollback \
+    --backup "$backup_real" --source-version "$current_anvil_version" --target-version "$prior_anvil_version" --owner-pid "$$"
+  python3 "$ROOT/scripts/lifecycle_transaction.py" phase restoring-snapshot
 fi
 
 config_present="$(read_manifest previous.config_present)"
@@ -112,6 +136,7 @@ if [[ -d "$ANVIL_MEMORY_DIR" ]]; then
 fi
 
 config_archive="$backup_real/config.tar.gz"
+if (( ! internal )); then python3 "$ROOT/scripts/lifecycle_transaction.py" phase restoring-config; fi
 python3 "$ROOT/scripts/archive.py" restore "$config_archive" "$ANVIL_CONFIG_DIR" "$config_present"
 if [[ "$backup_scope" == runtime ]]; then
   installer_archive="$backup_real/opencode-root.tar.gz"
@@ -150,6 +175,7 @@ if [[ -f "$backup_real/previous-installation.json" ]]; then
 else
   rm -f -- "$ANVIL_DATA_DIR/installation.json"
 fi
+if (( ! internal )); then python3 "$ROOT/scripts/lifecycle_transaction.py" phase restoring-metadata; fi
 
 runtime_state_file="$(read_manifest previous.runtime_state_file)"
 runtime_state_present="$(read_manifest previous.runtime_state_present)"
@@ -175,5 +201,9 @@ if [[ "$backup_scope" == runtime && -n "$old_version" ]]; then
 fi
 if [[ -n "$memory_backup" ]]; then
   anvil_ok "Current Anvil memory was archived before rollback: $memory_backup"
+fi
+if (( ! internal )); then
+  python3 "$ROOT/scripts/lifecycle_transaction.py" phase postflight-validated
+  python3 "$ROOT/scripts/lifecycle_transaction.py" clear
 fi
 anvil_ok 'Rollback completed. Anvil memory remains at its data path and is inert without the Anvil harness.'

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -256,6 +257,54 @@ def new_providers(config_dir: Path) -> dict[str, Any]:
     return providers
 
 
+def _user_agents(config_dir: Path, major: int) -> dict[str, dict[str, Any]]:
+    """Carry disabled inline user agents across config rebuilds.
+
+    Anvil owns its named baseline agents and its primary agent. Additional
+    inline agents are accepted only when disabled by the source audit; retain
+    those definitions and normalize the generation-specific disable key.
+    """
+    prior = _read_config(config_dir / "opencode.jsonc")
+    key = "agent" if isinstance(prior.get("agent"), dict) else "agents"
+    agents = prior.get(key, {})
+    if not isinstance(agents, dict):
+        return {}
+    manifest_path = config_dir / ".anvil-managed.json"
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"managed agent ownership manifest cannot be read: {exc}") from exc
+        config_ownership = manifest.get("config", {}) if isinstance(manifest, dict) else None
+        if not isinstance(config_ownership, dict):
+            raise ValueError("managed agent ownership manifest has an invalid config section")
+        recorded_agents = config_ownership.get("managed_agents")
+        if recorded_agents is not None:
+            if not isinstance(recorded_agents, list) or any(not isinstance(name, str) or not name for name in recorded_agents):
+                raise ValueError("managed agent ownership manifest has an invalid managed_agents list")
+            reserved = set(recorded_agents) | {"anvil"}
+        else:
+            # Manifests created before inline config ownership was recorded
+            # use the shipped baseline as the best available legacy signal.
+            reserved = BUILTINS | {"anvil"}
+    else:
+        reserved = BUILTINS | {"anvil"}
+    disabled_key = "disable" if key == "agent" else "disabled"
+    target_disabled_key = "disable" if major == 1 else "disabled"
+    result: dict[str, dict[str, Any]] = {}
+    for name, definition in agents.items():
+        if name in reserved or not isinstance(name, str) or not isinstance(definition, dict):
+            continue
+        if definition.get(disabled_key) is not True:
+            continue
+        copied = copy.deepcopy(definition)
+        copied.pop("disable", None)
+        copied.pop("disabled", None)
+        copied[target_disabled_key] = True
+        result[name] = copied
+    return result
+
+
 def build(source: Path, destination: Path, prior_config_dir: Path | None, preserve_cli: bool, major: int) -> None:
     if major not in (1, 2):
         raise ValueError("runtime major must be 1 or 2")
@@ -267,6 +316,36 @@ def build(source: Path, destination: Path, prior_config_dir: Path | None, preser
         providers = old_providers(prior_config_dir) if major == 2 else new_providers(prior_config_dir)
         if providers:
             data["providers" if major == 2 else "provider"] = providers
+        custom_agents = _user_agents(prior_config_dir, major)
+        if custom_agents:
+            data["agents" if major == 2 else "agent"].update(custom_agents)
+        prior = _read_config(prior_config_dir / "opencode.jsonc")
+        prior_agents_key = "agent" if isinstance(prior.get("agent"), dict) else "agents"
+        prior_agents = prior.get(prior_agents_key, {})
+        prior_anvil = prior_agents.get("anvil", {}) if isinstance(prior_agents, dict) else {}
+        if prior_agents_key == "agent":
+            prior_permission = prior_anvil.get("permission", {}) if isinstance(prior_anvil, dict) else {}
+            prior_skill_rules = prior_permission.get("skill", {}) if isinstance(prior_permission, dict) else {}
+            custom_skills = {name for name, effect in prior_skill_rules.items()
+                             if name != "*" and effect == "allow" and name not in SKILLS
+                             and (prior_config_dir / "skills" / name / "SKILL.md").is_file()}
+        else:
+            prior_rules = prior_anvil.get("permissions", []) if isinstance(prior_anvil, dict) else []
+            custom_skills = {str(rule.get("resource")) for rule in prior_rules if isinstance(rule, dict)
+                             and rule.get("action") == "skill" and rule.get("effect") == "allow"
+                             and rule.get("resource") not in {"*", *SKILLS}
+                             and (prior_config_dir / "skills" / str(rule.get("resource")) / "SKILL.md").is_file()}
+        if custom_skills:
+            if major == 1:
+                data["agent"]["anvil"]["permission"]["skill"].update({name: "allow" for name in sorted(custom_skills)})
+            else:
+                permissions = data["agents"]["anvil"]["permissions"]
+                insert_at = next((index for index, rule in enumerate(permissions)
+                                  if isinstance(rule, dict) and rule.get("action") == "subagent"), len(permissions))
+                permissions[insert_at:insert_at] = [
+                    {"action": "skill", "resource": name, "effect": "allow"}
+                    for name in sorted(custom_skills)
+                ]
     if major == 2:
         knowledge = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "anvil" / "knowledge"
         data["references"]["anvil-knowledge"]["path"] = str(knowledge)
@@ -284,8 +363,8 @@ def build(source: Path, destination: Path, prior_config_dir: Path | None, preser
     os.replace(temporary, output)
 
 
-def _audit_v1(path: Path, *, allow_older_skill_set: bool = False) -> list[str]:
-    """Retain the precise V1 baseline check for upgrade detection and regression fixtures."""
+def _audit_v1(path: Path, *, source_compatible: bool = False) -> list[str]:
+    """Audit a current V1 profile or its security-critical source compatibility."""
     errors: list[str] = []
     try:
         data = parse_jsonc(path.read_text(encoding="utf-8"), str(path))
@@ -299,13 +378,22 @@ def _audit_v1(path: Path, *, allow_older_skill_set: bool = False) -> list[str]:
     if not isinstance(agents, dict):
         errors.append("agent must be an object")
         agents = {}
-    if set(agents) != {"build", "plan", "general", "explore", "anvil"}:
+    if (not ({"build", "plan", "general", "explore", "anvil"} <= set(agents))
+            if not source_compatible else "anvil" not in agents):
         errors.append("unexpected global agent definitions")
     if data.get("default_agent") != "anvil":
         errors.append("default_agent is not anvil")
-    for name in BUILTINS:
-        if not isinstance(agents.get(name), dict) or agents[name].get("disable") is not True:
-            errors.append(f"built-in agent {name} is not disabled")
+    if source_compatible:
+        for name, agent in agents.items():
+            if name != "anvil" and (not isinstance(agent, dict) or agent.get("disable") is not True):
+                errors.append(f"non-primary agent {name} is not disabled")
+    else:
+        for name in BUILTINS:
+            if not isinstance(agents.get(name), dict) or agents[name].get("disable") is not True:
+                errors.append(f"built-in agent {name} is not disabled")
+        for name, agent in agents.items():
+            if name not in BUILTINS | {"anvil"} and (not isinstance(agent, dict) or agent.get("disable") is not True):
+                errors.append(f"custom agent {name} must remain disabled")
     anvil = agents.get("anvil", {})
     if not isinstance(anvil, dict) or anvil.get("mode") != "primary":
         errors.append("anvil primary agent is missing")
@@ -324,13 +412,16 @@ def _audit_v1(path: Path, *, allow_older_skill_set: bool = False) -> list[str]:
         errors.append("V1 destructive Git shell prompts are missing")
     skill = permission.get("skill", {})
     allowed_skills = {k for k, v in skill.items() if k != "*" and v == "allow"} if isinstance(skill, dict) else set()
-    skills_valid = (BASELINE_SKILLS <= allowed_skills <= SKILLS
-                    if allow_older_skill_set else allowed_skills == SKILLS)
+    skill_root = path.parent / "skills"
+    custom_skills = allowed_skills - SKILLS
+    custom_skills_present = all((skill_root / name / "SKILL.md").is_file() for name in custom_skills)
+    skills_valid = (all(isinstance(name, str) and name for name in allowed_skills) and custom_skills_present
+                    if source_compatible else SKILLS <= allowed_skills and custom_skills_present)
     if not isinstance(skill, dict) or skill.get("*") != "deny" or not skills_valid:
         errors.append("V1 skill allowlist does not match a supported Anvil profile")
-    if data.get("mcp") not in ({}, None):
+    if not source_compatible and data.get("mcp") not in ({}, None):
         errors.append("V1 global MCP config is not empty")
-    if data.get("plugin") not in ([], None):
+    if not source_compatible and data.get("plugin") not in ([], None):
         errors.append("V1 managed global plugins are not empty")
     compact = data.get("compaction", {})
     if not isinstance(compact, dict) or compact.get("auto") is not True:
@@ -338,7 +429,7 @@ def _audit_v1(path: Path, *, allow_older_skill_set: bool = False) -> list[str]:
     return errors
 
 
-def audit(path: Path, *, allow_older_skill_set: bool = False) -> list[str]:
+def audit(path: Path, *, source_compatible: bool = False) -> list[str]:
     errors: list[str] = []
     try:
         data = parse_jsonc(path.read_text(encoding="utf-8"), str(path))
@@ -352,13 +443,22 @@ def audit(path: Path, *, allow_older_skill_set: bool = False) -> list[str]:
     if not isinstance(agents, dict):
         errors.append("agents must be an object")
         agents = {}
-    if set(agents) != BUILTINS | {"anvil"}:
+    if (not ((BUILTINS | {"anvil"}) <= set(agents))
+            if not source_compatible else "anvil" not in agents):
         errors.append("agent definitions do not match the native Anvil set")
     if data.get("default_agent") != "anvil":
         errors.append("default_agent is not anvil")
-    for name in BUILTINS:
-        if not isinstance(agents.get(name), dict) or agents[name].get("disabled") is not True:
-            errors.append(f"built-in agent {name} is not disabled")
+    if source_compatible:
+        for name, agent in agents.items():
+            if name != "anvil" and (not isinstance(agent, dict) or agent.get("disabled") is not True):
+                errors.append(f"non-primary agent {name} is not disabled")
+    else:
+        for name in BUILTINS:
+            if not isinstance(agents.get(name), dict) or agents[name].get("disabled") is not True:
+                errors.append(f"built-in agent {name} is not disabled")
+        for name, agent in agents.items():
+            if name not in BUILTINS | {"anvil"} and (not isinstance(agent, dict) or agent.get("disabled") is not True):
+                errors.append(f"custom agent {name} must remain disabled")
     anvil = agents.get("anvil", {})
     if not isinstance(anvil, dict) or anvil.get("mode") != "primary":
         errors.append("anvil primary agent is missing")
@@ -376,29 +476,36 @@ def audit(path: Path, *, allow_older_skill_set: bool = False) -> list[str]:
         errors.append("Anvil does not preserve sensitive .env read prompts")
     if rules.get(("shell", "*")) != "allow" or any(rules.get(("shell", pattern)) != "ask" for pattern in PROTECTED_SHELL):
         errors.append("Anvil does not ask before destructive Git shell commands")
-    for action in ("read", "glob", "grep", "edit", "shell", "webfetch", "websearch", "question", "anvil_memory_search"):
+    core_actions = ("read", "glob", "grep", "edit", "shell", "webfetch", "websearch", "question", "anvil_memory_search")
+    required_actions = ("read", "edit", "shell") if source_compatible else core_actions
+    for action in required_actions:
         if rules.get((action, "*")) != "allow":
             errors.append(f"Anvil core action {action} is not allowed")
     allowed_skills = {resource for (action, resource), effect in rules.items() if action == "skill" and resource != "*" and effect == "allow"}
-    skills_valid = (BASELINE_SKILLS <= allowed_skills <= SKILLS
-                    if allow_older_skill_set else allowed_skills == SKILLS)
+    skill_root = path.parent / "skills"
+    custom_skills = allowed_skills - SKILLS
+    custom_skills_present = all((skill_root / name / "SKILL.md").is_file() for name in custom_skills)
+    skills_valid = (all(isinstance(name, str) and name for name in allowed_skills) and custom_skills_present
+                    if source_compatible else SKILLS <= allowed_skills and custom_skills_present)
     if rules.get(("skill", "*")) != "deny" or not skills_valid:
         errors.append("Anvil skill allowlist does not match a supported Anvil profile")
     mcp = data.get("mcp", {})
-    if not isinstance(mcp, dict) or mcp.get("servers", {}) != {} or set(mcp) - {"servers"}:
+    if not source_compatible and (not isinstance(mcp, dict) or mcp.get("servers", {}) != {} or set(mcp) - {"servers"}):
         errors.append("managed global MCP server config is not empty")
-    if data.get("plugins") != ["./plugins/anvil-core"]:
+    if not source_compatible and data.get("plugins") != ["./plugins/anvil-core"]:
         errors.append("anvil-core is not the only managed plugin")
     compaction = data.get("compaction", {})
-    if not isinstance(compaction, dict) or compaction.get("auto") is not True or compaction.get("keep", {}).get("tokens") != 8000 or compaction.get("buffer") != 20000 or set(compaction) != {"auto", "keep", "buffer"}:
+    if (not isinstance(compaction, dict) or compaction.get("auto") is not True
+            or (not source_compatible and (compaction.get("keep", {}).get("tokens") != 8000
+                or compaction.get("buffer") != 20000 or set(compaction) != {"auto", "keep", "buffer"}))):
         errors.append("native V2 compaction settings are missing or contain legacy fields")
     output = data.get("tool_output", {})
-    if not isinstance(output, dict) or not output.get("max_lines") or not output.get("max_bytes"):
+    if not source_compatible and (not isinstance(output, dict) or not output.get("max_lines") or not output.get("max_bytes")):
         errors.append("bounded tool output is not configured")
-    if not isinstance(data.get("watcher", {}).get("ignore"), list) or not data["watcher"]["ignore"]:
+    if not source_compatible and (not isinstance(data.get("watcher", {}).get("ignore"), list) or not data["watcher"]["ignore"]):
         errors.append("watcher ignore patterns are missing")
     reference = data.get("references", {}).get("anvil-knowledge", {})
-    if not isinstance(reference, dict) or not reference.get("path") or reference.get("path") == "__ANVIL_KNOWLEDGE_PATH__":
+    if not source_compatible and (not isinstance(reference, dict) or not reference.get("path") or reference.get("path") == "__ANVIL_KNOWLEDGE_PATH__"):
         errors.append("native anvil-knowledge reference is missing its absolute path")
     return errors
 
@@ -426,9 +533,9 @@ def main() -> int:
             build(args.source, args.destination, args.prior_config_dir, args.preserve_cli, args.major)
             return 0
         if args.action in {"audit-v1", "audit-v1-compatible"}:
-            errors = _audit_v1(args.config, allow_older_skill_set=args.action.endswith("-compatible"))
+            errors = _audit_v1(args.config, source_compatible=args.action.endswith("-compatible"))
         else:
-            errors = audit(args.config, allow_older_skill_set=args.action == "audit-compatible")
+            errors = audit(args.config, source_compatible=args.action == "audit-compatible")
         for error in errors:
             print(f"ERROR {error}")
         if not errors:

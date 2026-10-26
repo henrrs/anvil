@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "skills": {
+    "anvil-communication": "2.7.0",
+    "anvil-data-ingestion": "0.1.0",
+    "anvil-databricks": "0.1.0",
+    "anvil-delta-lake": "0.1.0",
+    "anvil-memory": "0.1.0",
+    "anvil-spark-performance": "0.1.0"
+  },
+  "commands": {
+    "distill": "2.0.0",
+    "recall": "0.1.0",
+    "remember": "0.1.0",
+    "review": "2.7.0"
+  }
+}

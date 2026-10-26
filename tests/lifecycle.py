@@ -19,8 +19,10 @@ from unittest import mock
 
 
 ROOT = pathlib.Path(sys.argv[1]).resolve()
+ANVIL_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 sys.path.insert(0, str(ROOT / "scripts"))
 import lifecycle_state  # noqa: E402
+from semver import compare as compare_versions, parse as parse_version, supported_migration  # noqa: E402
 CANDIDATE_V2 = pathlib.Path(sys.argv[2]).resolve()
 VERSION_V2 = sys.argv[3]
 CANDIDATE_V1 = pathlib.Path(sys.argv[4]).resolve()
@@ -54,6 +56,30 @@ def tree_hash(path: pathlib.Path) -> dict[str, str]:
     }
 
 
+def filesystem_snapshot(root: pathlib.Path) -> dict[str, tuple[Any, ...]]:
+    """Capture file contents, permissions, directories, and symlink targets."""
+    result: dict[str, tuple[Any, ...]] = {}
+
+    def visit(path: pathlib.Path, relative: str) -> None:
+        info = path.lstat()
+        mode = info.st_mode
+        if path.is_symlink():
+            result[relative] = ("symlink", mode & 0o777, os.readlink(path))
+        elif path.is_dir():
+            result[relative] = ("directory", mode & 0o777)
+            for child in sorted(path.iterdir(), key=lambda item: item.name):
+                child_relative = child.name if relative == "." else f"{relative}/{child.name}"
+                visit(child, child_relative)
+        elif path.is_file():
+            result[relative] = ("file", mode & 0o777, info.st_size, file_hash(path))
+        else:
+            result[relative] = ("other", mode & 0o777)
+
+    if root.exists() or root.is_symlink():
+        visit(root, ".")
+    return result
+
+
 def fixture(temp: pathlib.Path) -> dict[str, pathlib.Path]:
     home = temp / "home"
     config_home = temp / "xdg-config"
@@ -66,7 +92,19 @@ def fixture(temp: pathlib.Path) -> dict[str, pathlib.Path]:
     state_opencode = state_home / "opencode"
     for path in (config, install_bin, data_opencode, anvil_data / "memory" / "company", state_opencode):
         path.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(V1_CONFIG, config / "opencode.jsonc")
+    paths = {
+        "home": home, "config_home": config_home, "data_home": data_home,
+        "state_home": state_home, "config": config, "install_bin": install_bin,
+        "data_opencode": data_opencode, "anvil_data": anvil_data,
+        "memory": anvil_data / "memory", "state_opencode": state_opencode,
+    }
+    generated = temp / "generated-v1-config"
+    run(["bash", "-c", "source \"$ANVIL_ROOT/scripts/lib/common.sh\"; "
+         "source \"$ANVIL_ROOT/scripts/lib/install.sh\"; anvil_build_config \"$1\" '' no 1",
+         "_", str(generated)], env_for(paths, ANVIL_ROOT=str(ROOT)))
+    shutil.rmtree(config)
+    shutil.copytree(generated, config)
+    shutil.rmtree(generated)
     original = json.loads((config / "opencode.jsonc").read_text(encoding="utf-8"))
     original["provider"] = {
         "custom": {
@@ -84,16 +122,19 @@ def fixture(temp: pathlib.Path) -> dict[str, pathlib.Path]:
         }
     }
     write_json(config / "opencode.jsonc", original)
-    (config / "AGENTS.md").write_text("V1 global Anvil rules fixture\n", encoding="utf-8")
     (config / "cli.json").write_text('{"theme":"fixture"}\n', encoding="utf-8")
     (config / "tui.json").write_text('{"tabs":{"mode":"off"}}\n', encoding="utf-8")
-    (config / "commands").mkdir(exist_ok=True)
     (config / "commands" / "user-command.md").write_text("legacy user command\n", encoding="utf-8")
+    (config / "scripts" / "user-helper.py").write_text("# user-owned helper\n", encoding="utf-8")
+    downgrade_to_legacy_profile(paths, "2.6.1")
     (home / ".bashrc").write_text("# fixture shell startup\n", encoding="utf-8")
     (data_opencode / "auth.json").write_text('{"fixture":true}\n', encoding="utf-8")
     (state_opencode / "state.fixture").write_text("opaque OpenCode state fixture\n", encoding="utf-8")
     shutil.copy2(V1_MEMORY, anvil_data / "memory" / "company" / V1_MEMORY.name)
-    write_json(anvil_data / "installation.json", {"version": "1.19.0", "fixture": True})
+    write_json(anvil_data / "installation.json", {
+        "schema_version": 2, "anvil_version": "2.6.1", "version": "1.19.0",
+        "runtime_major": 1, "binary": str(install_bin / "opencode"), "fixture": True,
+    })
     fake_binary = install_bin / "opencode"
     fake_binary.write_text(
         "#!/usr/bin/env bash\n"
@@ -108,13 +149,55 @@ def fixture(temp: pathlib.Path) -> dict[str, pathlib.Path]:
         encoding="utf-8",
     )
     fake_binary.chmod(0o755)
-    return {
-        "home": home, "config_home": config_home, "data_home": data_home,
-        "state_home": state_home, "config": config, "install_bin": install_bin,
-        "binary": fake_binary, "data_opencode": data_opencode,
-        "anvil_data": anvil_data, "memory": anvil_data / "memory",
-        "state_opencode": state_opencode,
-    }
+    paths["binary"] = fake_binary
+    return paths
+
+
+def downgrade_to_legacy_profile(paths: dict[str, pathlib.Path], version: str) -> None:
+    config_dir = paths["config"]
+    config_path = config_dir / "opencode.jsonc"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    if isinstance(config.get("agent"), dict):
+        config["agent"]["anvil"]["permission"]["skill"].pop("anvil-communication", None)
+    elif isinstance(config.get("agents"), dict):
+        config["agents"]["anvil"]["permissions"] = [
+            rule for rule in config["agents"]["anvil"]["permissions"]
+            if not (rule.get("action") == "skill" and rule.get("resource") == "anvil-communication")
+        ]
+    write_json(config_path, config)
+    for path in (config_dir / "skills" / "anvil-communication", config_dir / "scripts" / "communication"):
+        shutil.rmtree(path, ignore_errors=True)
+    for path in (config_dir / "commands" / "review.md", config_dir / "scripts" / "artifacts.py",
+                 config_dir / ".anvil-managed.json"):
+        path.unlink(missing_ok=True)
+    installation_path = paths["anvil_data"] / "installation.json"
+    try:
+        installation = json.loads(installation_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        installation = {}
+    installation["anvil_version"] = version
+    installation.pop("managed_config_manifest_sha256", None)
+    write_json(installation_path, installation)
+
+
+def promote_fixture_to_current_anvil(paths: dict[str, pathlib.Path], temp: pathlib.Path) -> None:
+    """Prepare a current managed Anvil fixture for runtime-major migration tests."""
+    generated = temp / "current-anvil-config"
+    run(
+        ["bash", "-c", "source \"$ANVIL_ROOT/scripts/lib/common.sh\"; "
+         "source \"$ANVIL_ROOT/scripts/lib/install.sh\"; anvil_build_config \"$1\" \"$2\" yes 1",
+         "_", str(generated), str(paths["config"])],
+        env_for(paths, ANVIL_ROOT=str(ROOT)),
+    )
+    shutil.rmtree(paths["config"])
+    shutil.copytree(generated, paths["config"])
+    shutil.rmtree(generated)
+    installation_path = paths["anvil_data"] / "installation.json"
+    installation = json.loads(installation_path.read_text(encoding="utf-8"))
+    installation["schema_version"] = 3
+    installation["anvil_version"] = ANVIL_VERSION
+    installation["managed_config_manifest_sha256"] = file_hash(paths["config"] / ".anvil-managed.json")
+    write_json(installation_path, installation)
 
 
 def fresh_environment(temp: pathlib.Path) -> dict[str, str]:
@@ -291,6 +374,358 @@ def partial_lifecycle_matrix_test(temp: pathlib.Path, wrapper_v1: pathlib.Path) 
     print("PASS config-only, runtime-only, corrupted config, non-executable runtime, and invalid VERSION states")
 
 
+def lifecycle_version_order_test() -> None:
+    check(parse_version("2.10.0") == (2, 10, 0), "semantic version parser did not retain numeric minor ordering")
+    check(compare_versions("2.10.0", "2.9.9") == 1, "semantic version ordering compared minor releases lexically")
+    check(compare_versions("2.08.0", "2.8.0") is None, "semantic version parser accepted a non-canonical leading zero")
+    check(supported_migration("2.6.1", "2.8.0"), "two-minor source window was rejected")
+    check(not supported_migration("2.5.9", "2.8.0"), "source outside the two-minor window was accepted")
+    check(not supported_migration("2.9.0", "2.8.0"), "a newer installed release was treated as migratable")
+    print("PASS semantic release ordering, supported source window, and downgrade rejection")
+
+
+def config_ownership_transition_test(temp: pathlib.Path) -> None:
+    paths = fixture(temp / "preserve")
+    source_config_path = paths["config"] / "opencode.jsonc"
+    source_config = json.loads(source_config_path.read_text(encoding="utf-8"))
+    source_config["agent"]["retired-source-agent"] = {"disable": True}
+    source_config["agent"]["anvil"]["permission"]["skill"]["company-private"] = "allow"
+    write_json(source_config_path, source_config)
+    custom_skill = paths["config"] / "skills/company-private/SKILL.md"
+    custom_skill.parent.mkdir(parents=True)
+    custom_skill.write_text("---\nname: company-private\ndescription: Company skill fixture\n---\n# Company private skill\n",
+                            encoding="utf-8")
+    changed_nested = paths["config"] / "skills/anvil-databricks/references/authentication.md"
+    check(changed_nested.is_file(), "legacy fixture lacks the nested skill file evolution regression target")
+    changed_nested.unlink()
+    env = offline_env(paths, temp / "preserve", ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    source_inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
+    check("Status                MIGRATION_REQUIRED" in source_inspect.stdout,
+          "a valid source profile with changed nested skill files and an older agent inventory was called corrupted")
+    before_dry = tree_hash(paths["config"])
+    dry = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env)
+    check(tree_hash(paths["config"]) == before_dry, "upgrade dry run modified the live configuration")
+    check("preserved user" in dry.stdout and "scripts/user-helper.py" in dry.stdout,
+          "dry-run migration plan omitted preserved user-owned files")
+    run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
+    manifest = json.loads((paths["config"] / ".anvil-managed.json").read_text(encoding="utf-8"))
+    check(set(manifest.get("config", {}).get("managed_agents", [])) ==
+          {"build", "plan", "general", "explore", "anvil"},
+          "managed config manifest did not record ownership of the shipped inline agent set")
+    installation = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
+    check((paths["config"] / "commands/user-command.md").read_text(encoding="utf-8") == "legacy user command\n",
+          "Anvil upgrade overwrote or lost a user-owned command")
+    check((paths["config"] / "scripts/user-helper.py").read_text(encoding="utf-8") == "# user-owned helper\n",
+          "Anvil upgrade overwrote or lost a user-owned helper script")
+    check(custom_skill.read_text(encoding="utf-8").endswith("# Company private skill\n"),
+          "Anvil upgrade overwrote or lost a user-owned custom skill")
+    upgraded_config = json.loads((paths["config"] / "opencode.jsonc").read_text(encoding="utf-8"))
+    check(upgraded_config["agent"]["anvil"]["permission"]["skill"].get("company-private") == "allow",
+          "Anvil upgrade did not preserve the user's custom skill permission")
+    check(upgraded_config["agent"].get("retired-source-agent", {}).get("disable") is True,
+          "Anvil upgrade dropped a user-owned disabled inline agent")
+    check(changed_nested.is_file(), "Anvil upgrade did not add the target version's updated nested skill file")
+    check("commands/user-command.md" not in manifest["files"] and "scripts/user-helper.py" not in manifest["files"],
+          "Anvil incorrectly claimed ownership of preserved user files")
+    check("skills/company-private/SKILL.md" not in manifest["files"],
+          "Anvil incorrectly claimed ownership of the preserved custom skill")
+    check(installation["managed_config_manifest_sha256"] == file_hash(paths["config"] / ".anvil-managed.json"),
+          "installation metadata did not bind the managed-file manifest checksum")
+    (paths["config"] / "scripts/user-helper.py").write_text("# user changed this after installation\n", encoding="utf-8")
+    after_edit = tree_hash(paths["config"])
+    second_dry = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env)
+    check(tree_hash(paths["config"]) == after_edit, "dry run changed a modified user-owned extra")
+    check("scripts/user-helper.py" in second_dry.stdout,
+          "later migration stopped preserving a modified user-owned extra")
+
+    collision = fixture(temp / "collision")
+    collision_config_path = collision["config"] / "opencode.jsonc"
+    collision_config = json.loads(collision_config_path.read_text(encoding="utf-8"))
+    collision_config["agent"]["anvil"]["permission"]["skill"]["anvil-communication"] = "allow"
+    write_json(collision_config_path, collision_config)
+    collision_path = collision["config"] / "skills/anvil-communication/SKILL.md"
+    collision_path.parent.mkdir(parents=True)
+    collision_path.write_text("user-owned skill collision\n", encoding="utf-8")
+    collision_before = tree_hash(collision["config"])
+    collision_env = offline_env(collision, temp / "collision")
+    blocked = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"],
+                  collision_env, expected=2)
+    check("user-owned files conflict" in blocked.stderr,
+          "migration did not stop on a user-owned path that collides with a target Anvil skill")
+    check(tree_hash(collision["config"]) == collision_before and not (collision["anvil_data"] / "backups").exists(),
+          "path collision changed live state or created a snapshot")
+    print("PASS upgrade preserves user-owned extras, binds the manifest, and blocks target-path collisions")
+
+
+def custom_agent_transition_test(temp: pathlib.Path) -> None:
+    env_home = temp / "home with spaces"
+    env_data = temp / "data ü"
+    env = {"HOME": str(env_home), "XDG_CONFIG_HOME": str(temp / "config home"),
+           "XDG_DATA_HOME": str(env_data), "XDG_STATE_HOME": str(temp / "state home"),
+           "PATH": os.defpath, "PYTHONUTF8": "1"}
+    env_home.mkdir(parents=True)
+    env_data.mkdir(parents=True)
+    for source_major in (1, 2):
+        for target_major in (1, 2):
+            case = temp / f"v{source_major}-to-v{target_major} with spaces"
+            prior = case / "prior"
+            target = case / "target"
+            prior.mkdir(parents=True)
+            template = ROOT / ("config/runtimes/opencode-v1.jsonc" if source_major == 1
+                               else "config/opencode.jsonc")
+            config = json.loads(template.read_text(encoding="utf-8"))
+            agents_key = "agent" if source_major == 1 else "agents"
+            disabled_key = "disable" if source_major == 1 else "disabled"
+            config[agents_key]["company-audit-agent"] = {
+                disabled_key: True, "description": "Company-owned disabled agent",
+                "prompt": "Keep this user configuration during Anvil rebuilds.",
+            }
+            retired_name = "retired-anvil-agent"
+            config[agents_key][retired_name] = {
+                disabled_key: True, "description": "Managed by the source Anvil release",
+            }
+            (prior / "opencode.jsonc").write_text(json.dumps(config), encoding="utf-8")
+            (prior / ".anvil-managed.json").write_text(json.dumps({
+                "schema_version": 1, "anvil_version": ANVIL_VERSION,
+                "files": {"opencode.jsonc": None},
+                "config": {"managed_agents": sorted(set(config[agents_key]) - {"company-audit-agent"})},
+            }), encoding="utf-8")
+            source_audit = "audit-v1-compatible" if source_major == 1 else "audit-compatible"
+            target_audit = "audit-v1" if target_major == 1 else "audit"
+            run([sys.executable, str(ROOT / "scripts/configure.py"), source_audit,
+                 str(prior / "opencode.jsonc")], env)
+            run([sys.executable, str(ROOT / "scripts/configure.py"), "build", "--source", str(ROOT / "config"),
+                 "--destination", str(target), "--prior-config-dir", str(prior), "--major", str(target_major)], env)
+            target_config_path = target / "opencode.jsonc"
+            run([sys.executable, str(ROOT / "scripts/configure.py"), target_audit,
+                 str(target_config_path)], env)
+            result = json.loads(target_config_path.read_text(encoding="utf-8"))
+            agents = result["agent" if target_major == 1 else "agents"]
+            custom = agents.get("company-audit-agent", {})
+            check(custom.get("disable" if target_major == 1 else "disabled") is True,
+                  f"disabled custom agent was lost converting OpenCode {source_major} to {target_major}")
+            check(retired_name not in agents,
+                  "a source-manifest-owned agent removed by the target release was retained as user-owned")
+            check("disable" not in custom or target_major == 1,
+                  "OpenCode V2 output retained the legacy disable property")
+            check("disabled" not in custom or target_major == 2,
+                  "OpenCode V1 output retained the native disabled property")
+            if target_major == 2:
+                expected_knowledge = str(env_data / "anvil" / "knowledge")
+                check(result.get("references", {}).get("anvil-knowledge", {}).get("path") == expected_knowledge,
+                      "config generation did not honor the isolated Unicode XDG data path")
+    print("PASS disabled user agents survive config rebuilds and V1/V2 adapter transitions")
+
+
+def filesystem_and_working_directory_test(temp: pathlib.Path) -> None:
+    machine_root = temp / "machine with spaces ü"
+    paths = fixture(machine_root)
+    env = offline_env(paths, temp, ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    external_cwd = temp / "external working directory"
+    external_cwd.mkdir()
+    observed_roots = [paths["home"], paths["config_home"], paths["data_home"], paths["state_home"]]
+    before_inspect = {str(root): filesystem_snapshot(root) for root in observed_roots}
+    runtime_before = file_hash(paths["binary"])
+
+    inspect = run(["/usr/bin/make", "--no-print-directory", "-C", str(ROOT), "inspect"],
+                  env, cwd=external_cwd)
+    check("MIGRATION_REQUIRED" in inspect.stdout,
+          "make -C from an external cwd did not inspect the Anvil state under spaced/Unicode XDG paths")
+    check(before_inspect == {str(root): filesystem_snapshot(root) for root in observed_roots},
+          "read-only make inspect changed isolated HOME or XDG state")
+    before = {
+        "home": filesystem_snapshot(paths["home"]),
+        "config": filesystem_snapshot(paths["config_home"]),
+        "data": filesystem_snapshot(paths["data_home"]),
+        "state": filesystem_snapshot(paths["state_home"]),
+    }
+    dry = run(["/usr/bin/make", "--no-print-directory", "-C", str(ROOT), "upgrade", "DRY_RUN=1"],
+              env, cwd=external_cwd)
+    check("No changes performed" in dry.stdout,
+          "external-cwd dry run did not report its no-mutation result")
+    check(before == {
+        "home": filesystem_snapshot(paths["home"]),
+        "config": filesystem_snapshot(paths["config_home"]),
+        "data": filesystem_snapshot(paths["data_home"]),
+        "state": filesystem_snapshot(paths["state_home"]),
+    }, "dry run changed managed state with spaced/Unicode HOME/XDG paths")
+
+    run(["/usr/bin/make", "--no-print-directory", "-C", str(ROOT), "upgrade"], env, cwd=external_cwd)
+    check(lifecycle_state_for_env(env) == "READY",
+          "upgrade from an external cwd did not complete with spaced/Unicode HOME/XDG paths")
+    check(file_hash(paths["binary"]) == runtime_before,
+          "Anvil upgrade changed the runtime when HOME/XDG paths contained spaces and Unicode")
+    reforge = run(["/usr/bin/make", "--no-print-directory", "-C", str(ROOT), "reforge"],
+                  dict(env, ANVIL_YES="1"), cwd=external_cwd)
+    check("Status: HEALTHY" in reforge.stdout,
+          "make -C reforge did not reuse the runtime under a spaced/Unicode HOME path")
+    check(lifecycle_state_for_env(env) == "READY" and file_hash(paths["binary"]) == runtime_before,
+          "reforge from an external cwd did not preserve the runtime and produce READY state")
+
+    updated_candidate = temp / "OpenCode update candidate ü"
+    updated_candidate.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"${1:-}\" == --version ]]; then printf 'opencode v1.20.0\\n'; "
+        f"else exec {shlex.quote(str(FIXTURES / 'bin' / 'opencode-v1'))} \"$@\"; fi\n",
+        encoding="utf-8",
+    )
+    updated_candidate.chmod(0o755)
+    config_before_runtime_update = tree_hash(paths["config"])
+    runtime_update_env = dict(env, ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(updated_candidate),
+                             ANVIL_YES="1")
+    run(["/usr/bin/make", "--no-print-directory", "-C", str(ROOT), "update-runtime"],
+        runtime_update_env, cwd=external_cwd)
+    updated_installation = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
+    check(updated_installation["version"] == "1.20.0" and updated_installation["binary"] == str(paths["binary"]),
+          "runtime update did not rediscover and install through the spaced managed executable path")
+    check(updated_installation["anvil_version"] == ANVIL_VERSION and tree_hash(paths["config"]) == config_before_runtime_update,
+          "runtime update changed the Anvil release/config while exercising spaced paths")
+    check(lifecycle_state_for_env(runtime_update_env) == "READY",
+          "runtime update from an external cwd with spaced paths did not finish READY")
+    assert_no_external_network(temp)
+    print("PASS make -C lifecycle dry-run, upgrade, reforge and runtime update work with spaced Unicode HOME/XDG paths")
+
+
+def readonly_config_parent_preflight_test(temp: pathlib.Path) -> None:
+    paths = fixture(temp / "machine")
+    env = offline_env(paths, temp, ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    before_config = tree_hash(paths["config"])
+    before_data = tree_hash(paths["anvil_data"])
+    runtime = start_runtime(paths, marker=temp / "runtime-ready")
+    paths["config_home"].chmod(0o555)
+    try:
+        dry = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env, expected=2)
+        check("configuration parent is not writable" in dry.stdout.casefold(),
+              "read-only config parent was not reported as an upgrade preflight blocker")
+        check(tree_hash(paths["config"]) == before_config and tree_hash(paths["anvil_data"]) == before_data,
+              "blocked dry-run changed Anvil configuration or lifecycle state")
+        check(runtime.poll() is None, "read-only config preflight stopped the active OpenCode runtime")
+
+        blocked = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env, expected=2)
+        check("configuration parent is not writable" in blocked.stdout.casefold(),
+              "real upgrade did not stop at the read-only config preflight")
+        check(tree_hash(paths["config"]) == before_config and tree_hash(paths["anvil_data"]) == before_data,
+              "read-only config preflight created a backup/journal or changed managed state")
+        check(runtime.poll() is None, "blocked real upgrade stopped OpenCode before the writable-path check")
+    finally:
+        paths["config_home"].chmod(0o700)
+        runtime.terminate()
+        runtime.wait(timeout=3)
+    print("PASS read-only config parent blocks before backup, transaction, or runtime shutdown")
+
+
+def concurrent_lifecycle_test(temp: pathlib.Path) -> None:
+    paths = fixture(temp / "machine")
+    env = offline_env(paths, temp, ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    runtime_before = file_hash(paths["binary"])
+    command = ["/usr/bin/make", "--no-print-directory", "-C", str(ROOT), "upgrade"]
+    processes = [subprocess.Popen(command, cwd=temp, env=env, text=True,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                 for _ in range(2)]
+    for process in processes:
+        stdout, stderr = process.communicate(timeout=180)
+        check(process.returncode in {0, 2},
+              f"concurrent lifecycle command returned an unexpected exit code: {process.returncode}\n{stderr[-2000:]}")
+        if process.returncode != 0:
+            check("another lifecycle transaction" in stderr.casefold(),
+                  "concurrent lifecycle loser did not report the active transaction blocker")
+    check(lifecycle_state_for_env(env) == "READY",
+          "overlapping Anvil upgrades left a non-ready installation")
+    check(not (paths["anvil_data"] / "lifecycle-transaction.json").exists(),
+          "overlapping Anvil upgrades left an orphaned transaction journal")
+    check(file_hash(paths["binary"]) == runtime_before,
+          "Anvil upgrade changed the OpenCode runtime during a concurrent invocation")
+    backup_root = paths["anvil_data"] / "backups"
+    backups = sorted(item for item in backup_root.iterdir() if item.is_dir())
+    check(bool(backups), "concurrent upgrade did not produce a rollback snapshot")
+    for backup in backups:
+        verify = subprocess.run([sys.executable, str(ROOT / "scripts" / "state.py"), "verify", str(backup)],
+                                text=True, capture_output=True, timeout=20)
+        check(verify.returncode == 0, f"concurrent lifecycle left an invalid snapshot: {backup.name}")
+    print("PASS overlapping lifecycle invocations leave coherent state and verified snapshots")
+
+
+def interrupted_transaction_recovery_test(temp: pathlib.Path) -> None:
+    paths = fixture(temp)
+    env = offline_env(paths, temp, ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0",
+                      ANVIL_TEST_KILL_AFTER_CONFIG_RENAME="1")
+    crashed = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env, expected=2)
+    check("Killed" in crashed.stderr or "137" in crashed.stderr,
+          "failure injection did not terminate the upgrade process at the config rename boundary")
+    inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
+    check("Status                RECOVERY_REQUIRED" in inspect.stdout,
+          "interrupted config activation was not classified as RECOVERY_REQUIRED")
+    before_dry = tree_hash(paths["config_home"])
+    dry = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env, expected=2)
+    check("DRY_RUN is read-only" in dry.stderr, "dry run attempted recovery instead of remaining read-only")
+    check(tree_hash(paths["config_home"]) == before_dry,
+          "dry-run operation modified an interrupted configuration state")
+    retry_env = dict(env)
+    retry_env.pop("ANVIL_TEST_KILL_AFTER_CONFIG_RENAME", None)
+    recovered = run(["/usr/bin/make", "--no-print-directory", "upgrade"], retry_env)
+    check("Interrupted operation recovered" in recovered.stderr,
+          "retry did not restore the verified snapshot before continuing")
+    check(not (paths["anvil_data"] / "lifecycle-transaction.json").exists(),
+          "successful retry left a pending lifecycle journal")
+    check(not list(paths["config_home"].glob(".anvil-config-stage.*"))
+          and not list(paths["config_home"].glob(".anvil-config-previous-*")),
+          "recovery left an orphaned config staging directory")
+    check(lifecycle_state_for_env(retry_env) == "READY",
+          "recovered retry did not finish in READY state")
+    print("PASS interrupted config activation is journaled, dry run stays read-only, and retry recovers idempotently")
+
+
+def managed_file_repair_test(temp: pathlib.Path) -> None:
+    paths = fixture(temp)
+    env = offline_env(paths, temp, ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
+    managed_script = paths["config"] / "scripts/memory.py"
+    managed_script.write_text("# injected managed-file modification\n", encoding="utf-8")
+    inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
+    check("Status                CORRUPTED" in inspect.stdout,
+          "modified manifest-owned script was not diagnosed as corruption")
+    reforge = run(["/usr/bin/make", "--no-print-directory", "reforge"],
+                  dict(env, ANVIL_YES="1"))
+    check("Status: HEALTHY" in reforge.stdout, "reforge could not rebuild a modified manifest-owned file")
+    check(managed_script.read_bytes() == (ROOT / "scripts/memory.py").read_bytes(),
+          "reforge did not restore the shipped Anvil-owned helper")
+    check(lifecycle_state_for_env(env) == "READY", "manifest repair did not restore READY lifecycle state")
+    print("PASS reforge repairs a modified managed file while retaining trusted ownership metadata")
+
+
+def future_install_downgrade_test(temp: pathlib.Path) -> None:
+    paths = fixture(temp / "future")
+    promote_fixture_to_current_anvil(paths, temp / "future")
+    runtime_before = file_hash(paths["binary"])
+    installation_path = paths["anvil_data"] / "installation.json"
+    installation = json.loads(installation_path.read_text(encoding="utf-8"))
+    manifest_path = paths["config"] / ".anvil-managed.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["anvil_version"] = "2.9.0"
+    write_json(manifest_path, manifest)
+    installation["anvil_version"] = "2.9.0"
+    installation["managed_config_manifest_sha256"] = file_hash(manifest_path)
+    write_json(installation_path, installation)
+    config_before = tree_hash(paths["config"])
+    installation_before = file_hash(installation_path)
+    env = offline_env(paths, temp / "future")
+
+    inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
+    check("Status                UNSUPPORTED" in inspect.stdout,
+          "a valid future Anvil install was not classified as an unsupported downgrade")
+    upgrade = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env, expected=2)
+    check("refusing a downgrade" in upgrade.stderr,
+          "Anvil upgrade did not explicitly refuse a future installed version")
+    reforge = run(["/usr/bin/make", "--no-print-directory", "reforge"], env, expected=2)
+    check("reforge refuses to downgrade" in reforge.stderr,
+          "reforge did not explicitly refuse to downgrade a future installed version")
+    check(tree_hash(paths["config"]) == config_before and file_hash(paths["binary"]) == runtime_before
+          and file_hash(installation_path) == installation_before
+          and not (paths["anvil_data"] / "backups").exists(),
+          "future-version downgrade attempts changed configuration/runtime or created a snapshot")
+    print("PASS a future managed Anvil installation blocks upgrade and reforge downgrades without mutation")
+
+
 def use_v2_profile(paths: dict[str, pathlib.Path], temp: pathlib.Path, wrapper: pathlib.Path) -> None:
     built = temp / "opencode-v2-config"
     run(
@@ -309,13 +744,14 @@ def use_v2_profile(paths: dict[str, pathlib.Path], temp: pathlib.Path, wrapper: 
     paths["binary"].chmod(0o755)
     write_json(paths["anvil_data"] / "installation.json", {
         "schema_version": 2,
-        "anvil_version": "2.0.0",
+        "anvil_version": "2.6.1",
         "version": VERSION_V2,
         "runtime_major": 2,
         "profile": "opencode-v2",
         "binary_path": str(paths["binary"]),
         "migration": {"status": "completed"},
     })
+    downgrade_to_legacy_profile(paths, "2.6.1")
 
 
 def env_for(paths: dict[str, pathlib.Path], **extra: str) -> dict[str, str]:
@@ -384,7 +820,7 @@ def provider_migration_test(temp: pathlib.Path) -> None:
     check((temp / "built-config" / "tui.json").is_file(), "V1 TUI config needed for native migration was not preserved")
     run(
         ["bash", "-c", "source \"$ANVIL_ROOT/scripts/lib/common.sh\"; "
-         "source \"$ANVIL_ROOT/scripts/lib/install.sh\"; anvil_build_config \"$1\" \"$2\" yes 1",
+         "source \"$ANVIL_ROOT/scripts/lib/install.sh\"; anvil_build_config \"$1\" \"$2\" yes 1 \"$(cat \"$ANVIL_ROOT/VERSION\")\"",
          "_", str(temp / "rebuilt-v1"), str(temp / "built-config")],
         env_for(paths, ANVIL_ROOT=str(ROOT)),
     )
@@ -539,18 +975,41 @@ def anvil_upgrade_rollback_test(temp: pathlib.Path) -> None:
     assert_no_external_network(temp)
     print("PASS Anvil-only post-mutation failure restores Anvil files without changing OpenCode runtime/data/state")
 
+    before_metadata_paths = fixture(temp / "before-metadata")
+    before_metadata = {
+        "config": tree_hash(before_metadata_paths["config"]),
+        "installation": file_hash(before_metadata_paths["anvil_data"] / "installation.json"),
+        "runtime": file_hash(before_metadata_paths["binary"]),
+        "data": tree_hash(before_metadata_paths["data_opencode"]),
+        "state": tree_hash(before_metadata_paths["state_opencode"]),
+    }
+    before_metadata_env = offline_env(
+        before_metadata_paths, temp / "before-metadata", ANVIL_YES="1",
+        ANVIL_TEST_FAIL_BEFORE_METADATA="1",
+    )
+    before_metadata_failure = run(
+        ["/usr/bin/make", "--no-print-directory", "upgrade"], before_metadata_env, expected=2,
+    )
+    after_metadata_failure = {
+        "config": tree_hash(before_metadata_paths["config"]),
+        "installation": file_hash(before_metadata_paths["anvil_data"] / "installation.json"),
+        "runtime": file_hash(before_metadata_paths["binary"]),
+        "data": tree_hash(before_metadata_paths["data_opencode"]),
+        "state": tree_hash(before_metadata_paths["state_opencode"]),
+    }
+    check(after_metadata_failure == before_metadata,
+          "failure immediately before metadata commit left source config or runtime state changed")
+    check("Automatic Anvil rollback completed" in before_metadata_failure.stderr,
+          "pre-metadata failure did not report successful source-state restoration")
+    check(not (before_metadata_paths["anvil_data"] / "lifecycle-transaction.json").exists(),
+          "pre-metadata rollback left a pending transaction journal")
+    print("PASS failure before metadata commit restores the source release coherently")
+
 
 def update_runtime_test(temp: pathlib.Path, wrapper_v1: pathlib.Path) -> None:
     paths = fixture(temp)
-    staged_config = temp / "current-anvil-v1-config"
-    run(["bash", "-c", "source \"$ANVIL_ROOT/scripts/lib/common.sh\"; "
-         "source \"$ANVIL_ROOT/scripts/lib/install.sh\"; anvil_build_config \"$1\" \"$2\" yes 1",
-         "_", str(staged_config), str(paths["config"])],
-        env_for(paths, ANVIL_ROOT=str(ROOT)))
-    shutil.rmtree(paths["config"])
-    shutil.move(str(staged_config), paths["config"])
     installation = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
-    installation.update({"anvil_version": "2.2.0", "version": "1.19.0", "runtime_major": 1,
+    installation.update({"anvil_version": "2.6.1", "version": "1.19.0", "runtime_major": 1,
                          "binary": str(paths["binary"])})
     write_json(paths["anvil_data"] / "installation.json", installation)
     updated_candidate = temp / "opencode-v1-update-candidate"
@@ -569,14 +1028,14 @@ def update_runtime_test(temp: pathlib.Path, wrapper_v1: pathlib.Path) -> None:
     updated = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
     check(updated["version"] == "1.20.0" and updated["runtime_major"] == 1,
           "same-major runtime update did not install the validated candidate")
-    check(updated["anvil_version"] == "2.2.0", "runtime-only update advanced the installed Anvil release")
+    check(updated["anvil_version"] == "2.6.1", "runtime-only update advanced the installed Anvil release")
     check(tree_hash(paths["config"]) == before_config, "same-major runtime update changed Anvil config")
     check(tree_hash(paths["data_opencode"]) == before_data and tree_hash(paths["state_opencode"]) == before_state,
           "same-major runtime update rewrote OpenCode data/state")
     backup = pathlib.Path(updated["migration"]["backup"])
     check(json.loads((backup / "manifest.json").read_text(encoding="utf-8"))["scope"] == "runtime",
           "runtime update did not create a runtime-scoped snapshot")
-    check("Anvil 2.2.0 was preserved" in proc.stderr, "runtime update did not report Anvil release preservation")
+    check("Anvil 2.6.1 was preserved" in proc.stderr, "runtime update did not report Anvil release preservation")
     assert_no_external_network(temp)
     print("PASS make update-runtime changes OpenCode within the same major while preserving Anvil release/config")
 
@@ -663,6 +1122,8 @@ def upgrade_test(
         stats = run(["/usr/bin/make", "--no-print-directory", "stats"], doctor_env)
         check("Sessions" in stats.stdout and "Input" in stats.stdout, "V1 native text stats were not forwarded")
         check("ERROR" not in stats.stderr, "V1 stats should not report an error")
+
+    promote_fixture_to_current_anvil(paths, temp)
 
     original_config = tree_hash(paths["config"])
     original_data = tree_hash(paths["data_opencode"])
@@ -755,14 +1216,14 @@ def upgrade_test(
 def upgrade_preserves_v1_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
     paths = fixture(temp)
     config = json.loads((paths["config"] / "opencode.jsonc").read_text(encoding="utf-8"))
-    config["agent"]["anvil"]["permission"]["skill"].pop("anvil-communication")
+    config["agent"]["anvil"]["permission"]["skill"].pop("anvil-communication", None)
     write_json(paths["config"] / "opencode.jsonc", config)
     installation = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
     installation["anvil_version"] = "2.6.1"
     write_json(paths["anvil_data"] / "installation.json", installation)
     env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper), ANVIL_YES="1")
     before_inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
-    check("Status                INSTALLED" in before_inspect.stdout,
+    check("Status                MIGRATION_REQUIRED" in before_inspect.stdout,
           "a valid Anvil 2.6.1 OpenCode 1 profile was treated as corrupted by the 2.7 repository")
     before_doctor = run(["/usr/bin/make", "--no-print-directory", "doctor"], env)
     check("Status: UPGRADE AVAILABLE" in before_doctor.stdout,
@@ -826,6 +1287,7 @@ def upgrade_preserves_v2_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
 
 def dry_run_test(temp: pathlib.Path, wrapper_v1: pathlib.Path, wrapper_v2: pathlib.Path) -> None:
     paths = fixture(temp)
+    promote_fixture_to_current_anvil(paths, temp)
     before = {
         "config": tree_hash(paths["config"]), "data": tree_hash(paths["data_opencode"]),
         "state": tree_hash(paths["state_opencode"]), "binary": file_hash(paths["binary"]),
@@ -1011,6 +1473,23 @@ def main() -> int:
         fresh_machine_command_contract_test(pathlib.Path(name), wrapper_v1)
     with tempfile.TemporaryDirectory(prefix="anvil-partial-lifecycle-", dir=TEST_ROOT) as name:
         partial_lifecycle_matrix_test(pathlib.Path(name), wrapper_v1)
+    lifecycle_version_order_test()
+    with tempfile.TemporaryDirectory(prefix="anvil-config-ownership-", dir=TEST_ROOT) as name:
+        config_ownership_transition_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-custom-agent-transition-", dir=TEST_ROOT) as name:
+        custom_agent_transition_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-filesystem-paths-", dir=TEST_ROOT) as name:
+        filesystem_and_working_directory_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-readonly-config-parent-", dir=TEST_ROOT) as name:
+        readonly_config_parent_preflight_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-concurrent-lifecycle-", dir=TEST_ROOT) as name:
+        concurrent_lifecycle_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-interrupted-transaction-", dir=TEST_ROOT) as name:
+        interrupted_transaction_recovery_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-managed-file-repair-", dir=TEST_ROOT) as name:
+        managed_file_repair_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-future-version-downgrade-", dir=TEST_ROOT) as name:
+        future_install_downgrade_test(pathlib.Path(name))
 
     with tempfile.TemporaryDirectory(prefix="anvil-provider-migration-", dir=TEST_ROOT) as name:
         provider_migration_test(pathlib.Path(name))

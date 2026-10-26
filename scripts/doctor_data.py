@@ -12,6 +12,7 @@ from pathlib import Path
 
 from configure import _audit_v1, audit, parse_jsonc
 import memory
+import managed_config
 import runtime
 import source_registry
 
@@ -126,10 +127,20 @@ def main() -> int:
         capture_output=True, text=True, check=False,
     )
 
-    if skills != EXPECTED_SKILLS:
-        problems.append(f"Anvil skill set mismatch: missing={sorted(EXPECTED_SKILLS - skills)}, extra={sorted(skills - EXPECTED_SKILLS)}")
-    if commands != EXPECTED_COMMANDS:
-        problems.append(f"Anvil command set mismatch: missing={sorted(EXPECTED_COMMANDS - commands)}, extra={sorted(commands - EXPECTED_COMMANDS)}")
+    missing_skills = EXPECTED_SKILLS - skills
+    missing_commands = EXPECTED_COMMANDS - commands
+    if missing_skills:
+        problems.append(f"Anvil managed skills are missing: {sorted(missing_skills)}")
+    if missing_commands:
+        problems.append(f"Anvil managed commands are missing: {sorted(missing_commands)}")
+    if installation.get("anvil_version"):
+        try:
+            managed_config.validate_installed(
+                args.config_dir, installation.get("anvil_version"), installation.get("anvil_version"),
+                installation.get("managed_config_manifest_sha256"),
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            problems.append(f"managed configuration integrity check failed: {exc}")
     if runtime_major == 2 and (not plugin_file.is_file() or "anvil_memory_search" not in plugin_file.read_text(encoding="utf-8", errors="replace")):
         problems.append("anvil-core memory search plugin entrypoint is missing")
     if unexpected_plugins:

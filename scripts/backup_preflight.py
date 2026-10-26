@@ -32,6 +32,9 @@ def check(config: Path, data: Path) -> tuple[bool, str]:
             return False, f"backup preflight found a symbolic-link path: {path}"
     if not config.is_dir() or not os.access(config, os.R_OK | os.X_OK):
         return False, f"Anvil configuration is not a readable directory: {config}"
+    config_parent = config.parent
+    if not config_parent.is_dir() or not os.access(config_parent, os.W_OK | os.X_OK):
+        return False, f"Anvil configuration parent is not writable: {config_parent}"
     probe = destination
     while not probe.exists() and probe != probe.parent:
         probe = probe.parent

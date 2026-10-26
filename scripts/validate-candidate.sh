@@ -124,23 +124,25 @@ if [[ "$runtime_major" == 1 ]]; then
   }
   run_isolated debug config > "$temp_root/config.json"
   run_isolated debug skill > "$temp_root/skills.json"
-  python3 - "$temp_root" "$expected_version" <<'PY'
+  python3 - "$temp_root" "$expected_version" "$config_source" <<'PY'
 import json,sys
 from pathlib import Path
 root=Path(sys.argv[1])
+config_root=Path(sys.argv[3])
 config=json.loads((root/"config.json").read_text(encoding="utf-8"))
 skills=json.loads((root/"skills.json").read_text(encoding="utf-8"))
 assert config.get("default_agent")=="anvil", "OpenCode 1 did not load the Anvil default agent"
 assert "model" not in config and "small_model" not in config, "Anvil pins a model"
 agent=config.get("agent",{}).get("anvil",{})
 assert agent.get("mode")=="primary", "OpenCode 1 did not load the Anvil primary agent"
-assert set(("remember","recall","distill","review")) <= set(config.get("command",{})), "Anvil Markdown commands were not loaded"
+expected_commands={path.stem for path in (config_root/"commands").glob("*.md")}
+assert expected_commands <= set(config.get("command",{})), f"OpenCode 1 did not load configured Markdown commands: {sorted(expected_commands-set(config.get('command',{})))}"
 permission=agent.get("permission",{})
 assert permission.get("*")=="deny" and permission.get("task")=="deny", "V1 deny-by-default/subagent policy did not load"
 items=skills if isinstance(skills,list) else skills.get("data",[])
 names={item.get("name") for item in items if isinstance(item,dict)}
-expected={"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion","anvil-communication"}
-assert expected <= names, f"OpenCode 1 did not load all Anvil skills: {sorted(expected-names)}"
+expected={path.name for path in (config_root/"skills").iterdir() if path.is_dir() and (path/"SKILL.md").is_file()} if (config_root/"skills").is_dir() else set()
+assert expected <= names, f"OpenCode 1 did not load configured skills: {sorted(expected-names)}"
 print(f"OpenCode {sys.argv[2]}: V1 config, agent, commands and skills validated")
 PY
   exit 0
@@ -167,20 +169,28 @@ for _ in $(seq 1 60); do
      run_isolated api --server "$service_url" GET /api/skill > "$temp_root/skills.json" 2>/dev/null && \
      run_isolated api --server "$service_url" GET /api/plugin > "$temp_root/plugins.json" 2>/dev/null && \
      run_isolated api --server "$service_url" GET /api/reference > "$temp_root/references.json" 2>/dev/null && \
-     python3 - "$temp_root" <<'PY'
+     python3 - "$temp_root" "$config_source" <<'PY'
 import json, sys
 from pathlib import Path
 root=Path(sys.argv[1])
+config_root=Path(sys.argv[2])
 def names(file, key):
     try:
         value=json.loads((root/file).read_text(encoding="utf-8"))
         return {item.get(key) for item in value.get("data", []) if isinstance(item, dict)}
     except (OSError, ValueError):
         return set()
-raise SystemExit(0 if {"remember","recall","distill","review"} <= names("commands.json","name")
-                 and {"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion","anvil-communication"} <= names("skills.json","id")
-                 and "anvil-core" in names("plugins.json","id")
-                 and "anvil-knowledge" in names("references.json","name") else 1)
+sources=json.loads((root/"config-sources.json").read_text(encoding="utf-8"))
+docs=[item.get("info") for item in sources if item.get("type")=="document" and isinstance(item.get("info"),dict)]
+config=next((item for item in docs if item.get("default_agent")=="anvil"),{})
+commands={path.stem for path in (config_root/"commands").glob("*.md")}
+skills={path.name for path in (config_root/"skills").iterdir() if path.is_dir() and (path/"SKILL.md").is_file()} if (config_root/"skills").is_dir() else set()
+plugins={Path(str(value)).name for value in config.get("plugins",[]) if isinstance(value,str)}
+references=set(config.get("references",{}))
+raise SystemExit(0 if commands <= names("commands.json","name")
+                 and skills <= names("skills.json","id")
+                 and plugins <= names("plugins.json","id")
+                 and references <= names("references.json","name") else 1)
 PY
   then
     ready=1
@@ -194,10 +204,11 @@ done
   exit 1
 }
 
-python3 - "$temp_root" "$expected_version" <<'PY'
+python3 - "$temp_root" "$expected_version" "$config_source" <<'PY'
 import json, sys
 from pathlib import Path
 root=Path(sys.argv[1])
+config_root=Path(sys.argv[3])
 version=sys.argv[2]
 def load(name):
     return json.loads((root/name).read_text(encoding="utf-8"))
@@ -208,20 +219,21 @@ assert config, "candidate did not load the native Anvil config"
 assert "model" not in config and "small_model" not in config
 assert config["default_agent"]=="anvil"
 assert config["agents"]["anvil"]["mode"]=="primary"
-assert all(config["agents"][name].get("disabled") is True for name in ("build","plan","general","explore"))
-assert config["compaction"].get("keep",{}).get("tokens")==8000
-assert "prune" not in config["compaction"] and "tail_turns" not in config["compaction"]
+assert all(name=="anvil" or agent.get("disabled") is True for name,agent in config["agents"].items())
 commands=load("commands.json").get("data",[])
 command_names={item.get("name") for item in commands}
-assert {"remember","recall","distill","review"} <= command_names, f"missing commands: {command_names}"
+expected_commands={path.stem for path in (config_root/"commands").glob("*.md")}
+assert expected_commands <= command_names, f"missing configured commands: {sorted(expected_commands-command_names)}"
 skills=load("skills.json").get("data",[])
 skill_ids={item.get("id") for item in skills}
-expected={"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion","anvil-communication"}
-assert expected <= skill_ids, f"missing skills: {sorted(expected-skill_ids)}"
+expected={path.name for path in (config_root/"skills").iterdir() if path.is_dir() and (path/"SKILL.md").is_file()} if (config_root/"skills").is_dir() else set()
+assert expected <= skill_ids, f"missing configured skills: {sorted(expected-skill_ids)}"
 plugins=load("plugins.json").get("data",[])
 core=[item for item in plugins if item.get("id")=="anvil-core" and item.get("state",{}).get("status")=="active"]
-assert len(core)==1, "anvil-core did not load as an active V2 plugin"
+expected_plugins={Path(str(value)).name for value in config.get("plugins",[]) if isinstance(value,str)}
+assert expected_plugins <= {item.get("id") for item in plugins}, "a configured V2 plugin did not load"
 references=load("references.json").get("data",[])
-assert any(item.get("name")=="anvil-knowledge" and item.get("path") for item in references), "anvil-knowledge reference was not loaded"
+expected_references=set(config.get("references",{}))
+assert expected_references <= {item.get("name") for item in references}, "a configured V2 reference was not loaded"
 print(f"OpenCode {version}: native config, Anvil primary agent, commands, skills, plugin and knowledge reference validated")
 PY

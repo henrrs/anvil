@@ -62,6 +62,18 @@ if [[ -z "$binary" || ! -x "$binary" ]]; then
     anvil_warn "Databricks status could not be completed (exit $databricks_probe_status)."
   fi
   case "$lifecycle_status" in
+    UNSUPPORTED)
+      anvil_error 'Installed Anvil/runtime state is outside the supported migration policy; use a compatible checkout and runtime.'
+      printf '\nStatus: UNSUPPORTED\n'
+      exit 1 ;;
+    RECOVERY_REQUIRED)
+      anvil_warn 'A lifecycle transaction was interrupted. Close OpenCode and rerun the interrupted lifecycle command to restore its verified snapshot.'
+      printf '\nStatus: RECOVERY REQUIRED\n'
+      exit 2 ;;
+    TRANSITION_IN_PROGRESS)
+      anvil_warn 'An Anvil lifecycle command is still running. Wait for it to finish before starting another operation.'
+      printf '\nStatus: TRANSITION IN PROGRESS\n'
+      exit 2 ;;
     CORRUPTED)
       anvil_error 'Managed Anvil state is corrupted; review the lifecycle findings above before using it.'
       printf '\nStatus: BROKEN\n'
@@ -88,6 +100,19 @@ printf 'OpenCode runtime        %s (%s)\n' "${major:-unknown}" "${major:+opencod
 printf 'Approved policy major   %s\n' "$policy_major"
 printf 'Supported majors        %s\n' "$policy_majors"
 printf 'Major auto-upgrade      %s\n' "$( [[ "$automatic_major_upgrade" == True ]] && printf 'YES' || printf 'NO')"
+if [[ "$lifecycle_status" == UNSUPPORTED ]]; then
+  anvil_error 'Installed Anvil/runtime state is outside the supported migration policy; automatic downgrade or migration is blocked.'
+  printf '\nStatus: UNSUPPORTED\n'
+  exit 1
+elif [[ "$lifecycle_status" == RECOVERY_REQUIRED ]]; then
+  anvil_warn 'A lifecycle transaction was interrupted. Close OpenCode and rerun the interrupted lifecycle command to restore its verified snapshot.'
+  printf '\nStatus: RECOVERY REQUIRED\n'
+  exit 2
+elif [[ "$lifecycle_status" == TRANSITION_IN_PROGRESS ]]; then
+  anvil_warn 'An Anvil lifecycle command is still running. Wait for it to finish before starting another operation.'
+  printf '\nStatus: TRANSITION IN PROGRESS\n'
+  exit 2
+fi
 if [[ "$lifecycle_status" == PARTIALLY_INSTALLED && ! -f "$ANVIL_CONFIG_DIR/opencode.jsonc" ]]; then
   anvil_warn "OpenCode $normalized is present but the managed Anvil config is missing. Run 'make reforge' to complete installation."
   printf '\nStatus: PARTIALLY INSTALLED\n'

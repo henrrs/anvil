@@ -8,6 +8,7 @@ source "$ROOT/scripts/lib/backup.sh"
 ANVIL_VERSION="$(cat "$ROOT/VERSION")"
 
 anvil_need python3 tar cp mv install chmod date ps
+anvil_recover_pending
 python3 - <<'PY'
 import sys
 if sys.version_info < (3, 11):
@@ -43,6 +44,19 @@ print(f"{value.get('anvil_version','')}\t{value.get('version','')}")
 PY
 )
 fi
+if [[ -n "$previous_anvil_version" ]]; then
+  version_relation="$(python3 - "$ROOT" "$previous_anvil_version" "$ANVIL_VERSION" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts")
+from semver import compare
+print(compare(sys.argv[2], sys.argv[3]))
+PY
+)"
+  if [[ "$version_relation" == 1 ]]; then
+    anvil_error "Installed Anvil $previous_anvil_version is newer than checkout $ANVIL_VERSION; reforge refuses to downgrade it. Use this release or a newer checkout, then run make upgrade."
+    exit 1
+  fi
+fi
 if python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
   from_generation=1
 elif python3 "$ROOT/scripts/configure.py" audit-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
@@ -72,6 +86,7 @@ on_error() {
   if (( transaction_active )) && [[ -n "$backup_dir" ]]; then
     anvil_error "Reforge failed after Anvil config replacement (exit $status); attempting rollback."
     if ANVIL_INTERNAL_MODE=1 bash "$ROOT/scripts/rollback.sh" --backup "$backup_dir" --internal; then
+      python3 "$ROOT/scripts/lifecycle_transaction.py" clear || anvil_error 'Automatic rollback completed, but the recovery journal could not be cleared.'
       anvil_ok 'Automatic rollback completed.'
     else
       anvil_error "Automatic rollback failed. Verified backup remains at $backup_dir"
@@ -84,7 +99,7 @@ trap on_error ERR INT TERM
 trap cleanup_temp EXIT
 
 runtime_json="$(anvil_runtime_json)"
-read -r binary version major supported usable installed < <(python3 - "$runtime_json" <<'PY'
+IFS=$'\t' read -r binary version major supported usable installed < <(python3 - "$runtime_json" <<'PY'
 import json,sys
 d=json.loads(sys.argv[1]); r=d.get("runtime") or {}
 present=any(bool(item.get("installed")) for item in d.get("candidates",[]) if isinstance(item,dict))
@@ -147,7 +162,7 @@ printf 'Runtime action         %s\n' "$( [[ "$runtime_action" == reuse ]] && pri
 bash "$ROOT/scripts/inspect.sh"
 
 ready_config="$tmp_root/global-config"
-anvil_build_config "$ready_config" "$ANVIL_CONFIG_DIR" no "$target_major"
+anvil_build_config "$ready_config" "$ANVIL_CONFIG_DIR" yes "$target_major" "$previous_anvil_version" yes
 if [[ "$target_major" == 1 ]]; then
   python3 "$ROOT/scripts/configure.py" audit-v1 "$ready_config/opencode.jsonc"
 else
@@ -200,8 +215,12 @@ if [[ "${ANVIL_YES:-0}" != 1 ]]; then
   }
 fi
 
+python3 "$ROOT/scripts/lifecycle_transaction.py" begin --operation reforge \
+  --backup "$backup_dir" --source-version "$previous_anvil_version" --target-version "$ANVIL_VERSION" --owner-pid "$$"
 transaction_active=1
+python3 "$ROOT/scripts/lifecycle_transaction.py" phase applying-config
 anvil_apply_config "$ready_config"
+python3 "$ROOT/scripts/lifecycle_transaction.py" phase config-applied
 if [[ "$runtime_action" == install ]]; then
   bash "$ROOT/scripts/install-opencode.sh" install "$candidate" "$candidate_version" "$target_major"
   path_result="$(python3 "$ROOT/scripts/path_edit.py" apply \
@@ -210,10 +229,16 @@ if [[ "$runtime_action" == install ]]; then
   export PATH="$ANVIL_INSTALL_BIN:$PATH"
 fi
 XDG_DATA_HOME="$ANVIL_DATA_HOME" python3 "$ANVIL_CONFIG_DIR/scripts/memory.py" init >/dev/null
+python3 "$ROOT/scripts/lifecycle_transaction.py" phase before-installation-metadata
+if [[ "${ANVIL_TEST_FAIL_BEFORE_METADATA:-0}" == 1 ]]; then
+  anvil_error 'Injected failure before installation metadata was written.'
+  false
+fi
 
 if [[ "$runtime_action" == reuse ]]; then
   python3 "$ROOT/scripts/installation.py" \
     --destination "$ANVIL_DATA_DIR/installation.json" --opencode-version "$candidate_version" \
+    --config-dir "$ANVIL_CONFIG_DIR" \
     --anvil-version "$ANVIL_VERSION" --opencode-major "$target_major" \
     --binary "$candidate" --anvil-only --migration-status reforge \
     --previous-anvil-version "$previous_anvil_version" --previous-opencode-version "$previous_opencode_version" \
@@ -221,6 +246,7 @@ if [[ "$runtime_action" == reuse ]]; then
 else
   python3 "$ROOT/scripts/installation.py" \
     --destination "$ANVIL_DATA_DIR/installation.json" --opencode-version "$candidate_version" \
+    --config-dir "$ANVIL_CONFIG_DIR" \
     --anvil-version "$ANVIL_VERSION" --opencode-major "$target_major" \
     --binary "$ANVIL_INSTALLED_BINARY" --release-json "$release_json" \
     --migration-status reforge --previous-anvil-version "$previous_anvil_version" \
@@ -232,7 +258,7 @@ if [[ "$runtime_action" == install ]]; then recorded_binary="$ANVIL_INSTALLED_BI
 python3 "$ROOT/scripts/runtime_state.py" record --binary "$recorded_binary" >/dev/null
 
 doctor_status=0
-ANVIL_DOCTOR_LOCAL=1 bash "$ROOT/scripts/doctor.sh" || doctor_status=$?
+ANVIL_TRANSACTION_POSTFLIGHT=1 ANVIL_DOCTOR_LOCAL=1 bash "$ROOT/scripts/doctor.sh" || doctor_status=$?
 if (( doctor_status == 1 || doctor_status > 2 )); then
   anvil_error 'Postflight doctor reported a broken installation.'
   false
@@ -240,6 +266,8 @@ elif (( doctor_status == 2 )); then
   anvil_warn 'Reforge completed with project or environment override warnings.'
 fi
 
+python3 "$ROOT/scripts/lifecycle_transaction.py" phase postflight-validated
+python3 "$ROOT/scripts/lifecycle_transaction.py" clear
 transaction_active=0
 anvil_ok "Anvil $ANVIL_VERSION installed with OpenCode $candidate_version."
 anvil_ok "Verified $backup_scope-scope backup: $backup_dir"
