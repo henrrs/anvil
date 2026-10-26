@@ -68,25 +68,32 @@ PY
 }
 
 anvil_print_config_plan() {
-  local source_config="$1" target_config="$2" source_version="${3:-}" target_version="${4:-$(cat "$ANVIL_ROOT/VERSION")}" plan_json
+  local source_config="$1" target_config="$2" source_version="${3:-}" target_version="${4:-$(cat "$ANVIL_ROOT/VERSION")}"
   local plan_args=(plan --source "$source_config" --target "$target_config" --target-version "$target_version")
   if [[ -n "$source_version" ]]; then plan_args+=(--source-version "$source_version"); fi
-  plan_json="$(python3 "$ANVIL_ROOT/scripts/managed_config.py" "${plan_args[@]}")"
-  python3 - "$plan_json" <<'PY'
-import json,sys
-plan=json.loads(sys.argv[1])
-changes=plan["changes"]
+  (
+    set -o pipefail
+    python3 "$ANVIL_ROOT/scripts/managed_config.py" "${plan_args[@]}" | python3 -c '
+import json
+import sys
+
+plan = json.load(sys.stdin)
+changes = plan["changes"]
 print("\nManaged configuration transition")
 print("─────────────────────────────────")
-print(f"  source release     {plan['source_version']}")
-print(f"  target release     {plan['target_version']}")
-for key,label in (("added","add"),("updated","update"),("removed","remove"),("preserved_user_files","preserved user files"),("unchanged","unchanged")):
-    items=changes.get(key,[])
+print("  source release     " + plan["source_version"])
+print("  target release     " + plan["target_version"])
+for key, label in (("added", "add"), ("updated", "update"), ("removed", "remove"),
+                   ("preserved_user_files", "preserved user files"), ("unchanged", "unchanged")):
+    items = changes.get(key, [])
     print(f"  {label:18} {len(items)}")
-    for item in items:
+    for item in items[:10]:
         print(f"    {item}")
-print(f"  runtime action    {plan['runtime_action']}")
-PY
+    if len(items) > 10:
+        print(f"    ... {len(items) - 10} more paths omitted from display")
+print("  runtime action    " + plan["runtime_action"])
+'
+  )
 }
 
 anvil_apply_config() {

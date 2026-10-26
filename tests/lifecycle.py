@@ -457,6 +457,46 @@ def config_ownership_transition_test(temp: pathlib.Path) -> None:
     print("PASS upgrade preserves user-owned extras, binds the manifest, and blocks target-path collisions")
 
 
+def large_config_upgrade_plan_test(temp: pathlib.Path) -> None:
+    """A large external dependency tree must fit through the human upgrade plan."""
+    paths = fixture(temp)
+    external = paths["config"] / "node_modules" / "long-package-names"
+    external.mkdir(parents=True)
+    for index in range(720):
+        name = f"package-{index:04d}-" + "x" * 180 + ".js"
+        (external / name).write_text("module.exports = true;\n", encoding="utf-8")
+    before_external = filesystem_snapshot(external)
+    before_config = filesystem_snapshot(paths["config"])
+    before_installation = filesystem_snapshot(paths["anvil_data"])
+    before_runtime = file_hash(paths["binary"])
+    env = offline_env(paths, temp)
+
+    dry = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env)
+    preserved = next((line for line in dry.stdout.splitlines()
+                      if line.lstrip().startswith("preserved user files")), "")
+    check(preserved and int(preserved.split()[-1]) >= 720,
+          "large upgrade plan omitted the count of external files to preserve")
+    check("more paths omitted from display" in dry.stdout and len(dry.stdout) < 20000,
+          "large upgrade plan printed an unbounded list of external files")
+    check("No files changed." in dry.stdout and
+          filesystem_snapshot(paths["config"]) == before_config and
+          filesystem_snapshot(paths["anvil_data"]) == before_installation and
+          file_hash(paths["binary"]) == before_runtime,
+          "large upgrade dry-run changed the installation")
+
+    upgrade_env = dict(env, ANVIL_TEST_MODE="1", ANVIL_YES="1",
+                       ANVIL_UPGRADE_COUNTDOWN_SECONDS="0", ANVIL_SKIP_RUNTIME_PROBE="1")
+    run(["/usr/bin/make", "--no-print-directory", "upgrade"], upgrade_env)
+    manifest = json.loads((paths["config"] / ".anvil-managed.json").read_text(encoding="utf-8"))
+    check(filesystem_snapshot(external) == before_external and
+          not any(path.startswith("node_modules/") for path in manifest["files"]),
+          "large upgrade changed external dependency files or adopted their ownership")
+    check(file_hash(paths["binary"]) == before_runtime,
+          "large Anvil-only upgrade changed the OpenCode runtime")
+    assert_no_external_network(temp)
+    print("PASS large external config plans preview safely and upgrade while preserving dependency files")
+
+
 def brownfield_legacy_npm_symlink_test(temp: pathlib.Path) -> None:
     """Exercise a lived-in pre-manifest install through inspect, doctor, upgrade, and reforge."""
     paths = fixture(temp / "machine")
@@ -1704,6 +1744,8 @@ def main() -> int:
     lifecycle_version_order_test()
     with tempfile.TemporaryDirectory(prefix="anvil-config-ownership-", dir=TEST_ROOT) as name:
         config_ownership_transition_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-large-config-plan-", dir=TEST_ROOT) as name:
+        large_config_upgrade_plan_test(pathlib.Path(name))
     with tempfile.TemporaryDirectory(prefix="anvil-brownfield-npm-link-", dir=TEST_ROOT) as name:
         brownfield_legacy_npm_symlink_test(pathlib.Path(name))
     with tempfile.TemporaryDirectory(prefix="anvil-managed-symlink-recovery-", dir=TEST_ROOT) as name:
