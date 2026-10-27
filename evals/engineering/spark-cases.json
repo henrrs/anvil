@@ -1,0 +1,160 @@
+{
+  "cases": [
+    {
+      "id": "jdbc",
+      "request": "Four JDBC tasks are slow, executor CPU is low, database query waits rise as sessions increase.",
+      "evidence_confidence": "OBSERVED",
+      "relevant_reference": "jdbc",
+      "rubric": [
+        "Compare source-only throughput at controlled concurrency",
+        "Inspect query plan, waits, driver fetch and network before Spark partition changes"
+      ],
+      "expected_reasoning_scope": "source boundary",
+      "grading": "Semantic judgment required; deterministic core does not infer the answer"
+    },
+    {
+      "id": "map-in-arrow",
+      "request": "Source fetch takes 2s; batch conversion takes 18s and Python/native RSS grows.",
+      "evidence_confidence": "OBSERVED",
+      "relevant_reference": "arrow",
+      "rubric": [
+        "Separate Arrow conversion from external read and JVM execution",
+        "Measure batch bytes and variable-width types"
+      ],
+      "expected_reasoning_scope": "conversion boundary",
+      "grading": "Semantic judgment required; deterministic core does not infer the answer"
+    },
+    {
+      "id": "python-jvm",
+      "request": "Python operator dominates stage wall time, JVM tasks show low CPU; no profile inside Python is available.",
+      "evidence_confidence": "OBSERVED",
+      "relevant_reference": "arrow",
+      "rubric": [
+        "Request worker/profile and copy/serialization evidence",
+        "Do not call arbitrary Python zero-copy or Photon accelerated"
+      ],
+      "expected_reasoning_scope": "Python/JVM boundary",
+      "grading": "Semantic judgment required; deterministic core does not infer the answer"
+    },
+    {
+      "id": "arrow-types",
+      "request": "Decimals/nulls/timezones differ after Arrow roundtrip, with larger batches increasing RSS.",
+      "evidence_confidence": "OBSERVED",
+      "relevant_reference": "arrow",
+      "rubric": [
+        "Validate deployed type semantics and output equivalence",
+        "Treat row-count limits separately from byte bounds"
+      ],
+      "expected_reasoning_scope": "Arrow correctness",
+      "grading": "Semantic judgment required; deterministic core does not infer the answer"
+    },
+    {
+      "id": "spill",
+      "request": "Sort stage spills 80 GiB; a few tasks have much larger input and longer GC.",
+      "evidence_confidence": "OBSERVED",
+      "relevant_reference": "memory-spill",
+      "rubric": [
+        "Correlate spill, task bytes, GC, native/Python and heap budgets",
+        "Compare distribution before increasing memory"
+      ],
+      "expected_reasoning_scope": "memory and distribution",
+      "grading": "Semantic judgment required; deterministic core does not infer the answer"
+    },
+    {
+      "id": "shuffle",
+      "request": "Exchange writes dominate; remote fetch waits are high but host network telemetry is missing.",
+      "evidence_confidence": "OBSERVED",
+      "relevant_reference": "shuffle",
+      "rubric": [
+        "Keep network saturation as inferred",
+        "Inspect critical stages, blocks, remote/local fetch and reduce-before-exchange semantics"
+      ],
+      "expected_reasoning_scope": "shuffle/fetch",
+      "grading": "Semantic judgment required; deterministic core does not infer the answer"
+    },
+    {
+      "id": "skew",
+      "request": "p50 task reads 80 MiB in 2s; max reads 4 GiB in 100s; one key is highly concentrated.",
+      "evidence_confidence": "OBSERVED",
+      "relevant_reference": "skew",
+      "rubric": [
+        "Correlate heavy-key cardinality with task distributions",
+        "Validate correctness and extra work for any salting experiment"
+      ],
+      "expected_reasoning_scope": "key/partition skew",
+      "grading": "Semantic judgment required; deterministic core does not infer the answer"
+    },
+    {
+      "id": "source-partitioning",
+      "request": "Database partitions vary from 10k to 20m rows; parallelism is capped by the source owner.",
+      "evidence_confidence": "OBSERVED",
+      "relevant_reference": "jdbc",
+      "rubric": [
+        "Rebalance ranges within connection budget",
+        "Verify nulls/bounds/coverage and snapshot semantics"
+      ],
+      "expected_reasoning_scope": "source range distribution",
+      "grading": "Semantic judgment required; deterministic core does not infer the answer"
+    },
+    {
+      "id": "aqe",
+      "request": "Initial plan has many shuffle partitions; final adaptive plan coalesces them; tasks become memory-heavy.",
+      "evidence_confidence": "OBSERVED",
+      "relevant_reference": "catalyst-aqe",
+      "rubric": [
+        "Inspect final plan and effective version/settings",
+        "Do not assume initial partition count is actual task count"
+      ],
+      "expected_reasoning_scope": "adaptive physical choice",
+      "grading": "Semantic judgment required; deterministic core does not infer the answer"
+    },
+    {
+      "id": "datasource-v2",
+      "request": "Connector advertises pushdown, but source requests still include all columns and predicates.",
+      "evidence_confidence": "OBSERVED",
+      "relevant_reference": "datasource-v2",
+      "rubric": [
+        "Verify actual requests and deployed API support",
+        "Keep source intent, scan planning and reader execution separate"
+      ],
+      "expected_reasoning_scope": "connector evidence",
+      "grading": "Semantic judgment required; deterministic core does not infer the answer"
+    },
+    {
+      "id": "photon",
+      "request": "External SQL read consumes 90% of job time and Python conversion consumes the rest.",
+      "evidence_confidence": "OBSERVED",
+      "relevant_reference": "photon",
+      "rubric": [
+        "Do not promise an end-to-end Photon speedup",
+        "Identify supported native operators and fallback with actual profile"
+      ],
+      "expected_reasoning_scope": "Photon applicability",
+      "grading": "Semantic judgment required; deterministic core does not infer the answer"
+    },
+    {
+      "id": "delta-write",
+      "request": "Write tasks finish quickly; transaction commit and many small output files dominate end-to-end time.",
+      "evidence_confidence": "OBSERVED",
+      "relevant_reference": "delta",
+      "rubric": [
+        "Separate commit, file layout, write tasks and downstream scans",
+        "Preserve transaction/retention constraints"
+      ],
+      "expected_reasoning_scope": "Delta physical write path",
+      "grading": "Semantic judgment required; deterministic core does not infer the answer"
+    },
+    {
+      "id": "unknown-slow",
+      "request": "Spark job is slow.",
+      "evidence_confidence": "UNKNOWN",
+      "relevant_reference": "diagnostics",
+      "rubric": [
+        "Ask for workload, runtime, input shape, timeline/plan/task evidence",
+        "Do not prescribe cache, workers or partition increases without a supported mechanism"
+      ],
+      "expected_reasoning_scope": "missing evidence",
+      "grading": "Semantic judgment required; deterministic core does not infer the answer"
+    }
+  ]
+}

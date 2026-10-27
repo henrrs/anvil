@@ -39,6 +39,8 @@
         { "action": "skill", "resource": "anvil-databricks", "effect": "allow" },
         { "action": "skill", "resource": "anvil-data-ingestion", "effect": "allow" },
         { "action": "skill", "resource": "anvil-communication", "effect": "allow" },
+        { "action": "skill", "resource": "anvil-engineering", "effect": "allow" },
+        { "action": "skill", "resource": "anvil-system-design", "effect": "allow" },
         { "action": "subagent", "resource": "*", "effect": "deny" },
         { "action": "anvil_memory_search", "resource": "*", "effect": "allow" }
       ]

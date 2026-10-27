@@ -1,0 +1,356 @@
+{
+  "requirements": {
+    "objective": "Implement a bounded local scheduler with separate intent, queue policy and effects",
+    "items": [
+      {
+        "id": "R1",
+        "statement": "Job identity and retry budget are immutable and validated",
+        "type": "functional",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Public intent"
+        }
+      },
+      {
+        "id": "R2",
+        "statement": "Public intent cannot depend on execution or policy",
+        "type": "functional",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Public intent"
+        }
+      },
+      {
+        "id": "R3",
+        "statement": "Ready work is ordered and capacity bounded",
+        "type": "functional",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Queue policy"
+        }
+      },
+      {
+        "id": "R4",
+        "statement": "Queue policy does not execute or mutate progress",
+        "type": "functional",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Queue policy"
+        }
+      },
+      {
+        "id": "R5",
+        "statement": "Two real injected handlers use a minimal callable seam",
+        "type": "verification",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Execution and recovery"
+        }
+      },
+      {
+        "id": "R6",
+        "statement": "Retry accounting has one owner and completed work is not replayed",
+        "type": "verification",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Execution and recovery"
+        }
+      },
+      {
+        "id": "R7",
+        "statement": "Failures consume a bounded budget without false acknowledgement",
+        "type": "verification",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Execution and recovery"
+        }
+      }
+    ],
+    "constraints": [
+      "Offline; no service or compute mutation",
+      "Preserve generic ownership across current and future adapters"
+    ],
+    "risks": [
+      "A deterministic replay cannot establish LLM semantic extraction or coding quality"
+    ],
+    "deferred_scope": [
+      "Live providers and production scale"
+    ]
+  },
+  "architecture": {
+    "principles": [
+      "Intent, physical policy, execution and progress have separate owners"
+    ],
+    "boundaries": [
+      {
+        "id": "contract",
+        "owns": [
+          "job intent"
+        ],
+        "must_not_know": [
+          "handlers"
+        ]
+      },
+      {
+        "id": "policy",
+        "owns": [
+          "ready selection"
+        ],
+        "must_not_know": [
+          "effect implementation"
+        ],
+        "depends_on": [
+          "contract"
+        ]
+      },
+      {
+        "id": "executor",
+        "owns": [
+          "effects",
+          "attempt accounting"
+        ],
+        "must_not_know": [
+          "queue strategy"
+        ],
+        "depends_on": [
+          "contract"
+        ]
+      }
+    ],
+    "decisions": [
+      {
+        "id": "D1",
+        "context": "Two real handler functions and local-only scheduling",
+        "decision": "Inject callables; keep queue selection separate and avoid speculative plugin infrastructure",
+        "consequences": [
+          "Effects own idempotency",
+          "Executor owns attempt budget"
+        ],
+        "paths": [
+          "contracts.py",
+          "policy.py",
+          "executor.py"
+        ]
+      }
+    ],
+    "invariants": [
+      {
+        "id": "A1",
+        "statement": "Job contract is independent of policy and handlers",
+        "kind": "forbidden_imports",
+        "paths": [
+          "contracts.py"
+        ],
+        "forbidden": [
+          "executor",
+          "policy"
+        ]
+      },
+      {
+        "id": "A2",
+        "statement": "Queue policy cannot import execution implementation",
+        "kind": "forbidden_imports",
+        "paths": [
+          "policy.py"
+        ],
+        "forbidden": [
+          "executor"
+        ]
+      }
+    ],
+    "unknowns": []
+  },
+  "work": {
+    "milestones": [
+      {
+        "id": "M1",
+        "title": "Public intent",
+        "depends_on": [],
+        "invariant_ids": [
+          "A1"
+        ],
+        "done_when": [
+          {
+            "statement": "Behavior and scoped architecture established",
+            "check_ids": [
+              "C1"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "M2",
+        "title": "Queue policy",
+        "depends_on": [
+          "M1"
+        ],
+        "invariant_ids": [
+          "A1",
+          "A2"
+        ],
+        "done_when": [
+          {
+            "statement": "Behavior and scoped architecture established",
+            "check_ids": [
+              "C2"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "M3",
+        "title": "Execution and recovery",
+        "depends_on": [
+          "M2"
+        ],
+        "invariant_ids": [
+          "A1",
+          "A2"
+        ],
+        "done_when": [
+          {
+            "statement": "Behavior and scoped architecture established",
+            "check_ids": [
+              "C3"
+            ]
+          }
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "id": "T1",
+        "title": "Public intent",
+        "milestone": "M1",
+        "requirement_ids": [
+          "R1",
+          "R2"
+        ],
+        "decision_ids": [
+          "D1"
+        ],
+        "depends_on": [],
+        "paths": [
+          "contracts.py",
+          "acceptance.py"
+        ],
+        "checks": [
+          {
+            "id": "C1",
+            "kind": "command",
+            "argv": [
+              "python3",
+              "acceptance.py",
+              "contract"
+            ],
+            "timeout": 30
+          }
+        ],
+        "done_when": [
+          {
+            "statement": "Behavior verified at this boundary",
+            "check_ids": [
+              "C1"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "T2",
+        "title": "Queue policy",
+        "milestone": "M2",
+        "requirement_ids": [
+          "R3",
+          "R4"
+        ],
+        "decision_ids": [
+          "D1"
+        ],
+        "depends_on": [
+          "T1"
+        ],
+        "paths": [
+          "policy.py",
+          "acceptance.py"
+        ],
+        "checks": [
+          {
+            "id": "C2",
+            "kind": "command",
+            "argv": [
+              "python3",
+              "acceptance.py",
+              "policy"
+            ],
+            "timeout": 30
+          }
+        ],
+        "done_when": [
+          {
+            "statement": "Behavior verified at this boundary",
+            "check_ids": [
+              "C2"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "T3",
+        "title": "Execution and recovery",
+        "milestone": "M3",
+        "requirement_ids": [
+          "R5",
+          "R6",
+          "R7"
+        ],
+        "decision_ids": [
+          "D1"
+        ],
+        "depends_on": [
+          "T2"
+        ],
+        "paths": [
+          "executor.py",
+          "acceptance.py"
+        ],
+        "checks": [
+          {
+            "id": "C3",
+            "kind": "command",
+            "argv": [
+              "python3",
+              "acceptance.py",
+              "all"
+            ],
+            "timeout": 30
+          }
+        ],
+        "done_when": [
+          {
+            "statement": "Behavior verified at this boundary",
+            "check_ids": [
+              "C3"
+            ]
+          }
+        ]
+      }
+    ],
+    "done_when": [
+      {
+        "statement": "All required behavior and recovery checks pass",
+        "check_ids": [
+          "C1",
+          "C2",
+          "C3"
+        ]
+      }
+    ]
+  }
+}

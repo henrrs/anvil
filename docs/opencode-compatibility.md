@@ -1,12 +1,12 @@
 # OpenCode compatibility
 
-**checked_at:** 2026-10-16 (UTC)
-**Anvil version:** `2.3.1`
+**checked_at:** 2026-10-27
+**Anvil version:** `2.9.0`
 **Supported runtime majors:** OpenCode 1.x and 2.x
 **Default major for a first installation:** OpenCode 1.x
 **Automatic major upgrade:** disabled.
 
-Anvil version and OpenCode runtime major are independent. Compatibility limits and validation method are maintained in [runtime compatibility](runtime-compatibility.md). The 2.3 mandatory suite uses local CLI fixtures and does not resolve live release candidates. The last recorded official candidate resolution in the preceding runtime release docs was OpenCode 1 `1.19.3` and OpenCode 2 `2.0.31`.
+Anvil version and OpenCode runtime major are independent. Compatibility limits and validation method are maintained in [runtime compatibility](runtime-compatibility.md). The 2.9 mandatory suite uses local CLI fixtures and does not resolve live release candidates. Separate 2026-10-27 smoke checks downloaded and digest-verified official OpenCode 1 `1.19.3` and OpenCode 2 `2.0.31`, then validated generated candidate profiles in isolated HOME/XDG roots. Both discovered the engineering/system-design skills; V2 plugin/Reference checks also passed. No model or live workspace was invoked. Official native skill documentation was rechecked for lazy discovery on both generations.
 
 ## Runtime-specific behavior
 

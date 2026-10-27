@@ -18,7 +18,7 @@ BASELINE_SKILLS = {
     "anvil-memory", "anvil-spark-performance", "anvil-delta-lake",
     "anvil-databricks", "anvil-data-ingestion",
 }
-SKILLS = BASELINE_SKILLS | {"anvil-communication"}
+SKILLS = BASELINE_SKILLS | {"anvil-communication", "anvil-engineering", "anvil-system-design"}
 COMMANDS = {"remember", "recall", "distill", "review"}
 BUILTINS = {"build", "plan", "general", "explore"}
 PROTECTED_SHELL = (

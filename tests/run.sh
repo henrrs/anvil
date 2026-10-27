@@ -192,7 +192,7 @@ assert config["agents"]["anvil"]["permissions"][-2]["action"]=="subagent"
 assert config["mcp"]["servers"]=={}
 assert config["plugins"]==["./plugins/anvil-core"]
 assert {p.stem for p in (root/"config/commands").glob("*.md")}=={"remember","recall","distill","review"}
-assert {p.name for p in (root/"config/skills").iterdir()}=={"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion","anvil-communication"}
+assert {p.name for p in (root/"config/skills").iterdir()}=={"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion","anvil-communication","anvil-engineering","anvil-system-design"}
 plugin=(root/"config/plugins/anvil-core/index.ts").read_text(encoding="utf-8")
 assert "anvil_memory_search" in plugin and "ctx.tool.transform" in plugin
 for forbidden in ("chat.message", "session.created", "tool.execute", "provider.transform", "system.prompt", "session.compacting"):
@@ -243,6 +243,9 @@ pass 'V1 memory reads without rewrites; Python search works with ripgrep unavail
 python3 "$ROOT/tests/distill.py" || fail '/distill fixture, provenance, drift and idempotency checks'
 python3 "$ROOT/tests/communication.py" || fail 'communication/artifact intelligence offline contracts and regressions'
 pass 'Communication and artifact intelligence runs deterministic offline regressions'
+python3 "$ROOT/tests/engineering.py" || fail 'engineering state, interruption, stale evidence and direct-path regressions'
+python3 "$ROOT/evals/engineering/run.py" --mode replay --repeats 2 --output "$tmp_root/engineering-eval.json" || fail 'ingestion and unrelated scheduler engineering replays'
+pass 'Engineering models, atomic recovery, conformance, compaction and unrelated-domain replays'
 python3 "$ROOT/tests/lifecycle.py" "$ROOT" "$candidate_v2" "$version_v2" "$candidate_v1" "$version_v1" "$tmp_root" || fail 'upgrade/reforge/migrate-runtime/rollback lifecycle integration'
 
 python3 - "$ROOT" "$tmp_root/stats-sample.json" <<'PY' || fail 'native stats formatter'

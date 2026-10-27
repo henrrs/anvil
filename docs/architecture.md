@@ -12,7 +12,7 @@ Anvil's product release is independent of the OpenCode major. `config/runtime-po
 
 ## Lifecycle and managed configuration
 
-Anvil versions, installed config, and transitions are separate facts. The source config is audited for its runtime generation and source-release invariants; a staged target is audited strictly against the current release. The supported automatic source window is the same Anvil major and current plus two prior minor releases. A checkout older than the installed Anvil release is unsupported; both upgrade and reforge reject it before taking a snapshot or changing managed files.
+Anvil versions, installed config, and transitions are separate facts. The source config is audited for its runtime generation and source-release invariants; a staged target is audited strictly against the current release. The supported automatic source window is the same Anvil major and current plus three prior minor releases (2.9 retains the previously supported 2.6 source line). A checkout older than the installed Anvil release is unsupported; both upgrade and reforge reject it before taking a snapshot or changing managed files.
 
 New installations include `.anvil-managed.json`, a manifest of Anvil-owned paths and file hashes. The installation record pins the manifest hash. Integrity checks follow the manifest or the deterministic inventory for a supported legacy source; filesystem location alone does not imply Anvil ownership. Unowned files, package-manager trees, and symlinks are not followed or hashed as managed state. Rebuilds preserve regular extras and symlink objects, including broken links, without resolving their targets. If a new target path collides with a user-owned path, planning stops before any live change. Reforge can repair missing, changed, or symlink-replaced managed files when ownership remains trustworthy; it refuses an unreadable or altered manifest and an untrusted profile source.
 
@@ -36,6 +36,31 @@ OpenCode 2 uses plural `agents` and `plugins` fields and ordered permissions. It
 
 Callers use the central capability record rather than treating every Anvil release as one OpenCode generation. OpenCode 2 adds the local `anvil-core` plugin, native `anvil-knowledge` Reference, ordered permissions, bounded tool output, and structured stats JSON. OpenCode 1 uses its native config, commands/skills, and text stats; shared Python memory search and direct reads of explicitly named knowledge files provide the fallbacks. `scripts/capabilities.py` combines runtime, local/cached Databricks, and Anvil communication/artifact capabilities in one text or JSON result. Inventory commands do not contact Databricks; they show cached capability evidence and mark it stale after 15 minutes.
 
+## Progressive engineering continuity
+
+Complex engineering work uses the shared `engineering.py` CLI and `scripts/engineering/` package through a lazy skill. Requirements measure completeness, Architecture constrains implementation, and Work records progress. These are separate contracts published together in one private atomic generation under XDG_STATE_HOME/anvil/engineering. They are independent of durable memory, lifecycle transactions and OpenCode compaction internals. [Core contracts](engineering-internals.md) define evidence, revision, dependency and recovery behavior; [user guidance](engineering.md) describes activation/resume.
+
+```mermaid
+flowchart TD
+    Request --> Scope[Assess scope from available evidence]
+    Scope --> Direct[Small task: existing direct loop]
+    Scope --> Normalize[Complex task: semantic specification analysis]
+    Normalize --> Requirements[Requirements: completeness]
+    Normalize --> Architecture[Architecture: constraints and decisions]
+    Normalize --> Work[Work: milestones and progress]
+    Requirements --> Unit[Select one coherent work unit]
+    Architecture --> Unit
+    Work --> Unit
+    Design[Lazy system design] --> Unit
+    Domain[Relevant Spark / Delta / Databricks skill] --> Unit
+    Unit --> Verify[Verify and checkpoint architecture]
+    Verify --> Update[Update evidence, coverage and progress]
+    Update --> Replan[Continue or replan from new evidence]
+    Replan --> Unit
+```
+
+The agent owns semantic extraction, decomposition, design and diagnosis. Deterministic modules own state, dependencies, coverage, mechanically testable invariants, command evidence, stale detection and completion. Semantic reviews are attributed judgments, never mislabeled as observed tests. Resume reconstructs a bounded packet and executes nothing; partial effects require inspection/reconciliation. Only a compact routing instruction is always loaded. Direct tasks do not create state or require the helper. Native runtime ownership, permissions, plugins and memory remain unchanged.
+
 ## Public command presentation
 
 Databricks domain operations return structured results. `databricks_providers/presentation.py` formats those results for people, while `--format json` returns the structured result for scripts. `VERBOSE=1` adds provider diagnostics; default output emphasizes readiness, warnings, and next steps. Presenters do not own provider or auth decisions. Setup, `status`, and doctor consume the same readiness engine. Doctor performs bounded, read-only identity and core-list requests when a profile exists; with no Anvil profile it remains local and reports `NOT_CONFIGURED`. Capabilities remains local and reports Supported, Available, and Verified separately.
@@ -44,7 +69,7 @@ The V2 plugin uses the OpenCode 2 API to register only bounded, read-only `anvil
 
 ## Skills and commands
 
-Native lazy skills cover memory, Spark performance, Delta Lake, Databricks, data ingestion, and evidence-backed communication artifacts. Native Markdown commands provide `/remember`, `/recall`, `/distill`, and a generic `/review`, all assigned to the Anvil agent. Persistent memory writes require explicit `/remember`, `/distill`, or direct user intent.
+Native lazy skills cover memory, Spark performance, Delta Lake, Databricks, data ingestion, evidence-backed communication artifacts, engineering continuity and system design. Native Markdown commands provide `/remember`, `/recall`, `/distill`, and a generic `/review`, all assigned to the Anvil agent. Persistent memory writes require explicit `/remember`, `/distill`, or direct user intent.
 
 ## Communication and artifact intelligence
 

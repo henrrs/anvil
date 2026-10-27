@@ -1,15 +1,15 @@
 # Anvil runtime compatibility
 
-**Official runtime release metadata last checked:** 2026-10-16 (UTC)
-**Anvil release:** `2.7.1`
+**Official runtime release metadata and candidate profiles last checked:** 2026-10-27
+**Anvil release:** `2.9.0`
 **Policy:** OpenCode 1.x and 2.x supported; default major `1`; automatic major upgrade disabled.
 
 | Anvil | OpenCode runtime | Minimum | Offline profile fixture | Adapter | Support |
 |---|---|---:|---:|---|---|
-| 2.7.x | 1.x | 1.18.18 | 1.18.18 | `opencode-v1` | Supported |
-| 2.7.x | 2.x | 2.0.0 | 2.0.0 | `opencode-v2` | Supported |
+| 2.9.x | 1.x | 1.18.18 | 1.18.18 | `opencode-v1` | Supported |
+| 2.9.x | 2.x | 2.0.0 | 2.0.0 | `opencode-v2` | Supported |
 
-The 2.7.1 mandatory suite validates both adapter contracts using checked-in local CLI fixtures and denies external network access across the isolated test suite. It adds fresh HOME/XDG lifecycle journeys, partial/corrupt-state reporting, SDK missing-pip and venv-path checks, safe worker diagnostics, offline communication/artifact regression coverage, and upgrades from prior 2.6.x config profiles on both runtime adapters. It does not download or claim to smoke-test a live OpenCode release. The last recorded official candidate resolution in the preceding runtime release documentation was OpenCode 1 `1.19.3` and OpenCode 2 `2.0.31`; use the official release references below to revalidate live candidates before future releases.
+The 2.9.0 mandatory suite uses offline OpenCode 1/2 profile fixtures and isolated lifecycle, memory, Databricks, communication and engineering regressions. Separately, on 2026-10-27 official digest-verified OpenCode 1 `1.19.3` and OpenCode 2 `2.0.31` binaries validated generated candidate config/agent/command/skill discovery; V2 plugin and knowledge Reference also passed. Those native smoke checks do not exercise a model or live workspace. Minimum supported versions are unchanged; their mandatory validation remains through offline profile fixtures.
 
 ## Common and runtime-specific capabilities
 
@@ -67,3 +67,7 @@ OpenCode databases remain opaque files. Runtime-specific behavior is exercised u
 - [Databricks system tables](https://docs.databricks.com/aws/en/admin/system-tables)
 
 Recheck official runtime releases, configuration schemas, CLI auth behavior, APIs, and system-table documentation before each release that changes these integration contracts.
+
+## Engineering continuity
+
+Anvil 2.9 adds the shared engineering helper and lazy engineering/system-design skills on both runtime profiles. It uses no native compaction hook, model route, new plugin or runtime-specific API. Requirements, architecture and work state stay under the separate Anvil XDG state root. `make capabilities` adds an additive `engineering` JSON record; prior keys remain.

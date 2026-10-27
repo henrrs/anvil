@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +39,21 @@ def communication_state() -> dict:
     }
 
 
+def engineering_state() -> dict:
+    return {"status": "DISABLED" if os.environ.get("ANVIL_ENGINEERING") == "off" else "AVAILABLE",
+            "activation": "progressive; short tasks use the direct workflow without state",
+            "interface": "anvil-engineering / anvil-system-design skills and local engineering.py helper",
+            "models": ["requirements", "architecture", "work"],
+            "capabilities": ["atomic_task_state", "requirements_coverage", "dependency_checks", "bounded_resume",
+                             "repository_drift", "replanning", "architecture_invariants", "explicit_semantic_reviews",
+                             "failure_aware_checks", "progressive_spark_references"],
+            "state": "XDG_STATE_HOME/anvil/engineering; separate from durable memory; created explicitly",
+            "runtime_independent": True, "model_independent": True, "required_dependencies": [],
+            "limitations": ["Semantic extraction/design/review require agent judgment.",
+                            "Resume never executes work or proves external-operation idempotency.",
+                            "Deterministic fixtures do not measure real-model task success."]}
+
+
 def databricks_module():
     path = ROOT / "scripts" / "databricks.py"
     spec = importlib.util.spec_from_file_location("anvil_databricks_adapter", path)
@@ -60,6 +76,7 @@ def main() -> int:
     databricks_state = adapter.local_status()
     databricks_capabilities = adapter.capabilities(databricks_state)
     communication = communication_state()
+    engineering = engineering_state()
     if args.format == "json":
         print(json.dumps({
             "schema_version": 1,
@@ -68,6 +85,7 @@ def main() -> int:
             "databricks": databricks_state,
             "databricks_capabilities": databricks_capabilities,
             "communication": communication,
+            "engineering": engineering,
         }, indent=2))
         return 0
 
@@ -93,6 +111,12 @@ def main() -> int:
         print("  Optional inputs        " + ", ".join(communication["inputs"]["optional"]))
     print("  Outputs                Markdown, slide outline, accessible SVG")
     print("  Unavailable renderers  PPTX, DOCX, PDF, quantitative charts, OCR, animation")
+    print()
+    print("Engineering & system design")
+    print("  Status                 " + engineering["status"])
+    print("  Activation             Complex tasks; direct fast path for small edits")
+    print("  Models                 Requirements, architecture, work (separate from memory)")
+    print("  Resume                 Bounded, stale-aware; no automatic execution")
     return 0
 
 

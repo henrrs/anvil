@@ -1,0 +1,76 @@
+{
+  "cases": [
+    {
+      "id": "runtime-leak",
+      "request": "An intent contract starts importing Spark execution options because the first runtime is Databricks.",
+      "rubric": [
+        "Identify generic intent ownership and runtime leakage",
+        "Choose explicit capabilities/config beyond contract boundary"
+      ],
+      "grading": "Explicit human/model semantic review, not a regex pass"
+    },
+    {
+      "id": "state-is-plan",
+      "request": "A checkpoint begins choosing partitions and backends during resume.",
+      "rubric": [
+        "Separate durable progress from planning policy",
+        "Identify single planner owner and stale-plan recovery semantics"
+      ],
+      "grading": "Explicit human/model semantic review, not a regex pass"
+    },
+    {
+      "id": "retry-ownership",
+      "request": "Source adapter, runtime and caller each independently retry failed effects.",
+      "rubric": [
+        "Identify multiplicative retries and unknown outcomes",
+        "Assign one retry owner with bounds, idempotency and reconciliation"
+      ],
+      "grading": "Explicit human/model semantic review, not a regex pass"
+    },
+    {
+      "id": "positive-pattern",
+      "request": "Two provider implementations exist and share an execution contract; policy currently imports both implementations.",
+      "rubric": [
+        "Small strategy/adapter seam is justified by actual alternatives",
+        "Keep provider-specific execution out of policy"
+      ],
+      "grading": "Explicit human/model semantic review, not a regex pass"
+    },
+    {
+      "id": "negative-pattern",
+      "request": "A single stable local formatter needs one validation; no alternate backend is planned.",
+      "rubric": [
+        "Avoid speculative factory/registry/strategy abstractions",
+        "Keep direct behavior and focused verification"
+      ],
+      "grading": "Explicit human/model semantic review, not a regex pass"
+    },
+    {
+      "id": "local-versus-distributed",
+      "request": "A single-process state file needs crash-safe replacement.",
+      "rubric": [
+        "Prefer atomic local state to distributed leases/event infrastructure",
+        "Test crash boundary and reader visibility"
+      ],
+      "grading": "Explicit human/model semantic review, not a regex pass"
+    },
+    {
+      "id": "evolution",
+      "request": "Environment inputs will later be YAML while runtime options may change.",
+      "rubric": [
+        "Keep input adapter and runtime configuration outside generic intent",
+        "State compatibility/migration and operational consequences"
+      ],
+      "grading": "Explicit human/model semantic review, not a regex pass"
+    },
+    {
+      "id": "semantic-versus-static",
+      "request": "Imports pass, but a source callback chooses the runtime by string and progress stores a strategy JSON.",
+      "rubric": [
+        "Static import PASS is insufficient semantic conformance",
+        "Review responsibility and data ownership with explicit evidence"
+      ],
+      "grading": "Explicit human/model semantic review, not a regex pass"
+    }
+  ]
+}

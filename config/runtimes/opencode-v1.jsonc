@@ -43,7 +43,9 @@
           "anvil-delta-lake": "allow",
           "anvil-databricks": "allow",
           "anvil-data-ingestion": "allow",
-          "anvil-communication": "allow"
+          "anvil-communication": "allow",
+          "anvil-engineering": "allow",
+          "anvil-system-design": "allow"
         }
       }
     }

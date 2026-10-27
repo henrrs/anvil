@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "release": "2.9.0",
+  "checked_at": "2026-10-27",
+  "recommendation": "READY WITH KNOWN LIMITATIONS",
+  "mandatory_suite": {
+    "command": "make test",
+    "result": "PASS",
+    "exit_code": 0,
+    "elapsed_seconds": 367.06,
+    "log_sha256": "5cd7331d8790ad905703891b76be659ae9489f15db2926ce527e30e699beb327",
+    "external_network_required": false,
+    "engineering_unit_tests": 24
+  },
+  "protocol_evaluations": {
+    "command": "python3 evals/engineering/run.py --mode replay --repeats 3 --output evals/engineering/results.json",
+    "result": "PASS",
+    "fixtures": {
+      "ingestion": {
+        "runs": 3,
+        "required_verified": 12,
+        "invariants_passed": 4
+      },
+      "scheduler": {
+        "runs": 3,
+        "required_verified": 7,
+        "invariants_passed": 2
+      }
+    },
+    "method": "deterministic reference-implementation replay; not autonomous model coding"
+  },
+  "native_runtime_smoke": [
+    {
+      "version": "1.19.3",
+      "source": "https://github.com/anomalyco/opencode/releases/tag/v1.19.3",
+      "artifact_integrity": "sha256-13a8fb2978302071b86f9d7e00da9c8895f9cd846978379c3bdc6a5333536c9b",
+      "digest_verified": true,
+      "command": "bash scripts/validate-candidate.sh TEMP_CANDIDATE TEMP_CONFIG 1.19.3 1",
+      "result": "PASS",
+      "log_sha256": "e274c07b444dd968b9586115856b82c9a7fb31a928c44ec2d3eeab57bcfcc458",
+      "home_xdg_isolated": true,
+      "model_called": false
+    },
+    {
+      "version": "2.0.31",
+      "source": "https://www.npmjs.com/package/@opencode/cli-linux-x64/v/2.0.31",
+      "artifact_integrity": "sha512-RYbqR/HzKTH9OSh98VOt78bgQ8sgidUCCCKR9CABSc06AFxZdycezIg8dUmh+uBdp2mf4ckWVq9BbGblbxtFZQ==",
+      "digest_verified": true,
+      "command": "bash scripts/validate-candidate.sh TEMP_CANDIDATE TEMP_CONFIG 2.0.31 2",
+      "result": "PASS",
+      "log_sha256": "207990479bdae9d070be1e7777fb2952416e9a0a192b58269bf796192bd687cd",
+      "home_xdg_isolated": true,
+      "model_called": false
+    }
+  ],
+  "other_checks": {
+    "version_docs": "PASS",
+    "three_skill_validations": "PASS",
+    "local_documentation_links": "PASS",
+    "diff_whitespace": "PASS",
+    "optional_event_telemetry_contract": "PASS"
+  },
+  "compatibility": {
+    "runtime_policy_unchanged": true,
+    "one_user_facing_agent": true,
+    "model_pinning_added": false,
+    "new_required_dependencies": [],
+    "old_memory_format_preserved": true,
+    "prior_2_8_manifest_upgrade_and_rollback": "PASS",
+    "engineering_store_outside_lifecycle_snapshots": "PASS"
+  },
+  "context": {
+    "baseline_kernel_bytes": 3724,
+    "candidate_kernel_bytes": 3930,
+    "permanent_kernel_limit_bytes": 4200,
+    "measured_model_tokens": null,
+    "real_model_fast_path_latency": null
+  },
+  "engineering_core_sha256": "1ba1692143125f59ac1dd07d021c49866da97b865f160be42afc786e230819b2",
+  "limitations": [
+    "No real-model autonomous benchmark or semantic rubric adjudication was run.",
+    "No real Spark workload or live Databricks workspace was used.",
+    "Static invariant PASS and attributed semantic review remain distinct evidence classes.",
+    "External effects still require application-specific idempotency and partial-outcome inspection."
+  ]
+}

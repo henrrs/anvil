@@ -27,6 +27,13 @@ anvil_build_config() {
   install -m 0600 -- "$ANVIL_ROOT/scripts/databricks.py" "$destination/scripts/databricks.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/databricks_finops.py" "$destination/scripts/databricks_finops.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/artifacts.py" "$destination/scripts/artifacts.py"
+  install -m 0600 -- "$ANVIL_ROOT/scripts/engineering.py" "$destination/scripts/engineering.py"
+  install -m 0600 -- "$ANVIL_ROOT/scripts/public_errors.py" "$destination/scripts/public_errors.py"
+  rm -rf -- "$destination/scripts/engineering"
+  cp -R -- "$ANVIL_ROOT/scripts/engineering" "$destination/scripts/engineering"
+  find "$destination/scripts/engineering" -type d -name __pycache__ -prune -exec rm -rf -- {} +
+  find "$destination/scripts/engineering" -type f -name '*.pyc' -delete
+  find "$destination/scripts/engineering" -type f -exec chmod 600 -- {} +
   rm -rf -- "$destination/scripts/communication"
   cp -R -- "$ANVIL_ROOT/scripts/communication" "$destination/scripts/communication"
   find "$destination/scripts/communication" -type d -name __pycache__ -prune -exec rm -rf -- {} +
@@ -127,7 +134,7 @@ anvil_apply_config() {
   chmod 700 -- "$ANVIL_CONFIG_DIR/scripts/memory.py" "$ANVIL_CONFIG_DIR/scripts/source_registry.py" "$ANVIL_CONFIG_DIR/scripts/runtime.py" \
     "$ANVIL_CONFIG_DIR/scripts/runtime_state.py" \
     "$ANVIL_CONFIG_DIR/scripts/databricks.py" "$ANVIL_CONFIG_DIR/scripts/databricks_finops.py" \
-    "$ANVIL_CONFIG_DIR/scripts/artifacts.py"
+    "$ANVIL_CONFIG_DIR/scripts/artifacts.py" "$ANVIL_CONFIG_DIR/scripts/engineering.py"
   find "$ANVIL_CONFIG_DIR/scripts/communication" -type f -exec chmod 600 -- {} +
   find "$ANVIL_CONFIG_DIR/scripts/databricks_providers" -type f -exec chmod 600 -- {} +
 }

@@ -1,6 +1,6 @@
 # Anvil System Map
 
-This map describes the repository at Anvil 2.8.0. It follows the public Make targets through configuration, lifecycle, runtime, providers, persistent state, and local verification. The companion [quality audit](quality-audit.md) records evidence, findings, and confidence.
+This map describes the repository at Anvil 2.9.0. It follows the public Make targets through configuration, lifecycle, runtime, providers, persistent state, and local verification. The companion [quality audit](quality-audit.md) records evidence, findings, and confidence.
 
 ## Shape and data flow
 
@@ -52,6 +52,7 @@ The repository contains 56 Python files and 15 shell files under `scripts/` (71 
 | Databricks discovery/execution/FinOps | `scripts/databricks_providers/{resolver,discovery,process,sdk,sql_connector}.py`, `scripts/databricks_finops.py`, Databricks skills and SQL recipes | Read-only provider operations and bounded results → normalized workspace/resource/query/FinOps evidence | Optional provider state/cache; live workspace and optional specialized SDK/connector packages | Permission, timeout, result-size, mutation-policy, query-schema and evidence scenarios use fixtures; no live workspace execution was performed |
 | Communication and artifacts | `scripts/artifacts.py`, `scripts/communication/{inputs,contracts,quantitative,planning,materialize,diagrams,review}.py`, `anvil-communication`, `/review` | Named local inputs + evidence/plan → bounded extraction, analysis, Markdown or accessible SVG, review findings | User-selected output files; no memory write or remote lookup | Size/type/symlink checks, provenance and recomputed metrics, no-overwrite rules, SVG layout validation; deterministic offline tests |
 | Inspect/doctor/capabilities/stats | `scripts/inspect_data.py`, `scripts/doctor_data.py`, `scripts/capabilities.py`, `scripts/stats.sh`, `scripts/stats.py` | Current HOME/XDG/runtime and optional cached provider state → human or JSON diagnostics | Read-only apart from temporary stats output, removed on exit | Public exit/output contracts, first-use/partial/corrupt states, no-runtime stats and structured formatter fixtures |
+| Engineering continuity | `scripts/engineering.py`, `scripts/engineering/`, lazy engineering/system-design and deep Spark skills | Named specification + explicit models → work units, evidence, coverage, conformance, bounded resume | Optional XDG state task generations; never memory/source mutation on resume | Atomic checksum/revision/lock, scoped drift, dependency and completion gates, fault injection and unrelated-domain replays |
 | Test/release integrity | `scripts/test.sh`, `tests/run.sh`, test drivers, `scripts/version_docs.py`, `docs/RELEASING.md` | Repo tree and local fixtures → offline assurance and release consistency result | Temporary HOME/XDG and fixtures; no external network in lifecycle suite | Python/shell syntax, shipped-set/version docs, fake OpenCode/Databricks, denied external network; static third-party linters unavailable in this environment |
 
 ## Public commands and side effects
@@ -82,6 +83,7 @@ There is no `make setup` target. `make` prints help; fresh installation uses the
 | OpenCode user data and state | `$XDG_DATA_HOME/opencode`, `$XDG_STATE_HOME/opencode` | OpenCode-owned. Anvil-only upgrade/reforge never copies or rewrites it; runtime backups include it opaquely. |
 | Anvil release/runtime/transaction record | `$XDG_DATA_HOME/anvil/{installation.json,runtime.json,lifecycle-transaction.json}` | Anvil-owned, versioned/validated, private lifecycle state. A pending journal blocks a second mutation until snapshot recovery. |
 | Anvil backups | `$XDG_DATA_HOME/anvil/backups` | Checksummed scope-specific snapshots. Memory/knowledge/source registry are deliberately outside runtime snapshots. |
+| Engineering task state | `$XDG_STATE_HOME/anvil/engineering/<repo-id>/<task-id>/` | Optional project/task JSON, separate Requirements/Architecture/Work models. Explicit init/update/archive; outside config/runtime rollback snapshots and durable memory. |
 | Anvil memory, knowledge, sources | `$XDG_DATA_HOME/anvil/{memory,knowledge,sources}` | Separate user data; Markdown remains memory source of truth. Upgrade/reforge preserve it. |
 | Databricks profile/provider state | `$XDG_CONFIG_HOME/anvil/databricks/` and `anvil/databricks.json` | Anvil-owned profile and non-secret readiness metadata; external Databricks profiles are read-only diagnostics and are not adopted. |
 | Databricks client installs | Under Anvil XDG data | Explicit setup may install a user-local CLI or isolated SDK; general Anvil lifecycle does not. Provider-native credential storage handles secrets. |

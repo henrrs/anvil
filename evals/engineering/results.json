@@ -1,0 +1,379 @@
+{
+  "schema_version": 1,
+  "mode": "replay",
+  "results": [
+    {
+      "fixture": "ingestion",
+      "method": "deterministic protocol replay using explicit reference implementations; not an LLM coding run",
+      "runs": [
+        {
+          "run": 1,
+          "task_success": true,
+          "requirements": {
+            "total": 12,
+            "counts": {
+              "PENDING": 0,
+              "IN_PROGRESS": 0,
+              "IMPLEMENTED": 0,
+              "VERIFIED": 12,
+              "BLOCKED": 0,
+              "DEFERRED": 0,
+              "NOT_APPLICABLE": 0
+            },
+            "unverified_required": []
+          },
+          "architecture": {
+            "A1": "PASS",
+            "A2": "PASS",
+            "A3": "PASS",
+            "A4": "PASS"
+          },
+          "injected_boundary_violations_detected": {
+            "A1": true,
+            "A2": true,
+            "A3": true,
+            "A4": true
+          },
+          "interruption_and_compaction": "PASS",
+          "duplicate_resume_execution": false,
+          "counters": {
+            "architecture_checkpoint": 5,
+            "created": 1,
+            "implemented": 4,
+            "started": 5,
+            "verification": 4,
+            "revalidated": 1,
+            "reconciled": 1,
+            "reviewed": 1,
+            "completed": 1
+          },
+          "latency_seconds": 0.773,
+          "milestones_created": 4,
+          "tasks_completed": 4,
+          "replans": 0,
+          "verification_failures": 0,
+          "final_architecture_violations": 0,
+          "resume_observations": [
+            {
+              "resume_packet_bytes": 4529,
+              "current_milestone": "M2",
+              "verified_tasks_preserved": 1,
+              "state_stale_detected": true
+            }
+          ],
+          "unnecessary_exploration": null,
+          "tool_calls": null,
+          "model_tokens": null,
+          "unsupported_claims": null,
+          "semantic_design_quality": "NOT_MEASURED"
+        },
+        {
+          "run": 2,
+          "task_success": true,
+          "requirements": {
+            "total": 12,
+            "counts": {
+              "PENDING": 0,
+              "IN_PROGRESS": 0,
+              "IMPLEMENTED": 0,
+              "VERIFIED": 12,
+              "BLOCKED": 0,
+              "DEFERRED": 0,
+              "NOT_APPLICABLE": 0
+            },
+            "unverified_required": []
+          },
+          "architecture": {
+            "A1": "PASS",
+            "A2": "PASS",
+            "A3": "PASS",
+            "A4": "PASS"
+          },
+          "injected_boundary_violations_detected": {
+            "A1": true,
+            "A2": true,
+            "A3": true,
+            "A4": true
+          },
+          "interruption_and_compaction": "PASS",
+          "duplicate_resume_execution": false,
+          "counters": {
+            "architecture_checkpoint": 5,
+            "created": 1,
+            "implemented": 4,
+            "started": 5,
+            "verification": 4,
+            "revalidated": 1,
+            "reconciled": 1,
+            "reviewed": 1,
+            "completed": 1
+          },
+          "latency_seconds": 0.743,
+          "milestones_created": 4,
+          "tasks_completed": 4,
+          "replans": 0,
+          "verification_failures": 0,
+          "final_architecture_violations": 0,
+          "resume_observations": [
+            {
+              "resume_packet_bytes": 4529,
+              "current_milestone": "M2",
+              "verified_tasks_preserved": 1,
+              "state_stale_detected": true
+            }
+          ],
+          "unnecessary_exploration": null,
+          "tool_calls": null,
+          "model_tokens": null,
+          "unsupported_claims": null,
+          "semantic_design_quality": "NOT_MEASURED"
+        },
+        {
+          "run": 3,
+          "task_success": true,
+          "requirements": {
+            "total": 12,
+            "counts": {
+              "PENDING": 0,
+              "IN_PROGRESS": 0,
+              "IMPLEMENTED": 0,
+              "VERIFIED": 12,
+              "BLOCKED": 0,
+              "DEFERRED": 0,
+              "NOT_APPLICABLE": 0
+            },
+            "unverified_required": []
+          },
+          "architecture": {
+            "A1": "PASS",
+            "A2": "PASS",
+            "A3": "PASS",
+            "A4": "PASS"
+          },
+          "injected_boundary_violations_detected": {
+            "A1": true,
+            "A2": true,
+            "A3": true,
+            "A4": true
+          },
+          "interruption_and_compaction": "PASS",
+          "duplicate_resume_execution": false,
+          "counters": {
+            "architecture_checkpoint": 5,
+            "created": 1,
+            "implemented": 4,
+            "started": 5,
+            "verification": 4,
+            "revalidated": 1,
+            "reconciled": 1,
+            "reviewed": 1,
+            "completed": 1
+          },
+          "latency_seconds": 0.705,
+          "milestones_created": 4,
+          "tasks_completed": 4,
+          "replans": 0,
+          "verification_failures": 0,
+          "final_architecture_violations": 0,
+          "resume_observations": [
+            {
+              "resume_packet_bytes": 4529,
+              "current_milestone": "M2",
+              "verified_tasks_preserved": 1,
+              "state_stale_detected": true
+            }
+          ],
+          "unnecessary_exploration": null,
+          "tool_calls": null,
+          "model_tokens": null,
+          "unsupported_claims": null,
+          "semantic_design_quality": "NOT_MEASURED"
+        }
+      ]
+    },
+    {
+      "fixture": "scheduler",
+      "method": "deterministic protocol replay using explicit reference implementations; not an LLM coding run",
+      "runs": [
+        {
+          "run": 1,
+          "task_success": true,
+          "requirements": {
+            "total": 7,
+            "counts": {
+              "PENDING": 0,
+              "IN_PROGRESS": 0,
+              "IMPLEMENTED": 0,
+              "VERIFIED": 7,
+              "BLOCKED": 0,
+              "DEFERRED": 0,
+              "NOT_APPLICABLE": 0
+            },
+            "unverified_required": []
+          },
+          "architecture": {
+            "A1": "PASS",
+            "A2": "PASS"
+          },
+          "injected_boundary_violations_detected": {
+            "A1": true,
+            "A2": true
+          },
+          "interruption_and_compaction": "PASS",
+          "duplicate_resume_execution": false,
+          "counters": {
+            "architecture_checkpoint": 4,
+            "created": 1,
+            "implemented": 3,
+            "started": 4,
+            "verification": 3,
+            "revalidated": 1,
+            "reconciled": 1,
+            "reviewed": 1,
+            "completed": 1
+          },
+          "latency_seconds": 0.477,
+          "milestones_created": 3,
+          "tasks_completed": 3,
+          "replans": 0,
+          "verification_failures": 0,
+          "final_architecture_violations": 0,
+          "resume_observations": [
+            {
+              "resume_packet_bytes": 3692,
+              "current_milestone": "M2",
+              "verified_tasks_preserved": 1,
+              "state_stale_detected": true
+            }
+          ],
+          "unnecessary_exploration": null,
+          "tool_calls": null,
+          "model_tokens": null,
+          "unsupported_claims": null,
+          "semantic_design_quality": "NOT_MEASURED"
+        },
+        {
+          "run": 2,
+          "task_success": true,
+          "requirements": {
+            "total": 7,
+            "counts": {
+              "PENDING": 0,
+              "IN_PROGRESS": 0,
+              "IMPLEMENTED": 0,
+              "VERIFIED": 7,
+              "BLOCKED": 0,
+              "DEFERRED": 0,
+              "NOT_APPLICABLE": 0
+            },
+            "unverified_required": []
+          },
+          "architecture": {
+            "A1": "PASS",
+            "A2": "PASS"
+          },
+          "injected_boundary_violations_detected": {
+            "A1": true,
+            "A2": true
+          },
+          "interruption_and_compaction": "PASS",
+          "duplicate_resume_execution": false,
+          "counters": {
+            "architecture_checkpoint": 4,
+            "created": 1,
+            "implemented": 3,
+            "started": 4,
+            "verification": 3,
+            "revalidated": 1,
+            "reconciled": 1,
+            "reviewed": 1,
+            "completed": 1
+          },
+          "latency_seconds": 0.434,
+          "milestones_created": 3,
+          "tasks_completed": 3,
+          "replans": 0,
+          "verification_failures": 0,
+          "final_architecture_violations": 0,
+          "resume_observations": [
+            {
+              "resume_packet_bytes": 3692,
+              "current_milestone": "M2",
+              "verified_tasks_preserved": 1,
+              "state_stale_detected": true
+            }
+          ],
+          "unnecessary_exploration": null,
+          "tool_calls": null,
+          "model_tokens": null,
+          "unsupported_claims": null,
+          "semantic_design_quality": "NOT_MEASURED"
+        },
+        {
+          "run": 3,
+          "task_success": true,
+          "requirements": {
+            "total": 7,
+            "counts": {
+              "PENDING": 0,
+              "IN_PROGRESS": 0,
+              "IMPLEMENTED": 0,
+              "VERIFIED": 7,
+              "BLOCKED": 0,
+              "DEFERRED": 0,
+              "NOT_APPLICABLE": 0
+            },
+            "unverified_required": []
+          },
+          "architecture": {
+            "A1": "PASS",
+            "A2": "PASS"
+          },
+          "injected_boundary_violations_detected": {
+            "A1": true,
+            "A2": true
+          },
+          "interruption_and_compaction": "PASS",
+          "duplicate_resume_execution": false,
+          "counters": {
+            "architecture_checkpoint": 4,
+            "created": 1,
+            "implemented": 3,
+            "started": 4,
+            "verification": 3,
+            "revalidated": 1,
+            "reconciled": 1,
+            "reviewed": 1,
+            "completed": 1
+          },
+          "latency_seconds": 0.469,
+          "milestones_created": 3,
+          "tasks_completed": 3,
+          "replans": 0,
+          "verification_failures": 0,
+          "final_architecture_violations": 0,
+          "resume_observations": [
+            {
+              "resume_packet_bytes": 3692,
+              "current_milestone": "M2",
+              "verified_tasks_preserved": 1,
+              "state_stale_detected": true
+            }
+          ],
+          "unnecessary_exploration": null,
+          "tool_calls": null,
+          "model_tokens": null,
+          "unsupported_claims": null,
+          "semantic_design_quality": "NOT_MEASURED"
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Replay measures deterministic continuity/conformance, not model reasoning or coding quality.",
+    "Tool/model token fields are null when unmeasured; no hidden reasoning is retained.",
+    "Live profile ablations are requested protocols; inspect observed skill use before attributing causality."
+  ],
+  "candidate_version": "2.9.0",
+  "engineering_core_sha256": "1ba1692143125f59ac1dd07d021c49866da97b865f160be42afc786e230819b2"
+}

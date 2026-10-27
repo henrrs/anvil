@@ -5,16 +5,21 @@ description: Use when a Spark workload is slow, unstable, resource-heavy, or nee
 
 # Spark performance diagnosis
 
-Keep diagnosis scoped to the slow query and the stages that dominate wall time. Compare task quantiles and counts, not only averages: a few outliers can dominate completion. Check whether input is cached, repeated, or spilling before attributing cost to the source. For joins, confirm actual cardinality, build-side size, and whether a broadcast decision is safe for executor memory. For partition changes, estimate bytes per task and downstream file counts. Record runtime, data scale, and repeat conditions so a benchmark remains interpretable.
+Follow symptom → execution evidence → physical mechanism → competing hypotheses → discriminating evidence → intervention → benchmark. A slow job alone does not justify more workers, partitions or caching. Establish code/query, source/input shape, runtime/version, executor layout and repeat conditions. Distinguish measured facts (OBSERVED), corroborated mechanisms (SUPPORTED), hypotheses (INFERRED) and missing evidence (UNKNOWN).
 
-Start from the workload and evidence: query or code, input size and shape, runtime/version, cluster or executor layout, and observed latency or resource symptoms. Avoid recommending settings before identifying where time and data move.
+Locate time and bytes through logical plan → Catalyst → physical/adaptive plan → jobs/stages/tasks → JVM/Python/Photon → memory/network/disk → source/storage. Compare task counts and quantiles, not only averages. Confirm cache/warmup/repeated reads and retries before attributing latency. Keep scope on dominant work; architecture ownership remains a system-design decision.
 
-Use a focused sequence:
+Load only references selected by evidence:
 
-1. Read the physical and, when useful, logical execution plan. Identify scans, joins, exchanges, sorts, and repeated work.
-2. Compare stage durations and task distributions. Look for long tails, uneven input/output, retries, GC, executor loss, and oversized or tiny tasks.
-3. Inspect shuffle read/write, fetch wait, spill, partition counts, and skew. Distinguish a true data-skew problem from slow I/O or insufficient parallelism.
-4. Check Adaptive Query Execution (AQE): whether it is active, which decisions were made, and whether post-shuffle partitions or skew handling match the evidence.
-5. Relate findings to executor/runtime behavior and workload size. Change one relevant factor at a time and compare repeatable measurements.
+- Jobs/stages, driver/executor/startup or columnar/row boundaries: [execution-model](references/execution-model.md).
+- Plans, statistics, joins or adaptive decisions: [catalyst-aqe](references/catalyst-aqe.md).
+- Task sizing/source distribution: [partitioning](references/partitioning.md); exchange/fetch costs: [shuffle](references/shuffle.md); long tails: [skew](references/skew.md).
+- Memory pressure, GC, spill or serialization: [memory-spill](references/memory-spill.md).
+- Python/JVM, Arrow conversion or `mapInArrow`: [arrow](references/arrow.md).
+- Database/source bottleneck and read concurrency: [jdbc](references/jdbc.md).
+- Connector pushdowns/planning interfaces: [datasource-v2](references/datasource-v2.md).
+- Databricks native execution applicability: [photon](references/photon.md).
+- Delta reads/writes/files: [delta](references/delta.md); state/checkpoints: [streaming](references/streaming.md).
+- Evidence gaps and controlled experiments: [diagnostics](references/diagnostics.md).
 
-Prefer a query, join, partition, or data-layout correction when the plan supports it. Treat configuration knobs as hypotheses, not defaults to apply blindly. Verify version-sensitive behavior against the deployed Spark/Databricks runtime documentation. Report the measured bottleneck, evidence, change, and before/after result; label anything not measured as a hypothesis.
+For mssql-python plus `mapInArrow`, begin with execution-model, Arrow and JDBC; add memory-spill only if evidence warrants it. Do not load unrelated streaming/Delta guidance. Prefer the query, partition or data-path correction supported by the mechanism. Change one relevant factor, compare equivalent inputs/outputs and repeated measurements, and retain correctness/recovery checks. Verify version-sensitive APIs/settings against the deployed official documentation. Never infer proprietary internals or a measured speedup from a configuration recommendation.

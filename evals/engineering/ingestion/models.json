@@ -1,0 +1,516 @@
+{
+  "requirements": {
+    "objective": "Implement a portable ingestion slice with safe commit/replay and strict ownership",
+    "items": [
+      {
+        "id": "R1",
+        "statement": "Generic immutable intent excludes runtime implementation",
+        "type": "functional",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Intent and contracts"
+        }
+      },
+      {
+        "id": "R2",
+        "statement": "Validate identity/load mode",
+        "type": "functional",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Intent and contracts"
+        }
+      },
+      {
+        "id": "R3",
+        "statement": "Environment input remains a separate replaceable adapter",
+        "type": "functional",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Intent and contracts"
+        }
+      },
+      {
+        "id": "R4",
+        "statement": "Source profiles describe capacity, not runtime decisions",
+        "type": "functional",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Source pressure and planning"
+        }
+      },
+      {
+        "id": "R5",
+        "statement": "Planner owns immutable physical strategy",
+        "type": "functional",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Source pressure and planning"
+        }
+      },
+      {
+        "id": "R6",
+        "statement": "Two local sources and two runtime capability labels remain portable",
+        "type": "functional",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Source pressure and planning"
+        }
+      },
+      {
+        "id": "R7",
+        "statement": "Execute through injected source/sink with one retry owner",
+        "type": "functional",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Execution and progress"
+        }
+      },
+      {
+        "id": "R8",
+        "statement": "Checkpoint only after durable sink effect",
+        "type": "functional",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Execution and progress"
+        }
+      },
+      {
+        "id": "R9",
+        "statement": "Replay is idempotent and already committed units are skipped",
+        "type": "functional",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Execution and progress"
+        }
+      },
+      {
+        "id": "R10",
+        "statement": "Landing retains source values and Bronze is append-only",
+        "type": "verification",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Data behavior and verification"
+        }
+      },
+      {
+        "id": "R11",
+        "statement": "Silver retains latest stable-key values",
+        "type": "verification",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Data behavior and verification"
+        }
+      },
+      {
+        "id": "R12",
+        "statement": "Failure-before/after-commit and resume preserve correctness",
+        "type": "verification",
+        "priority": "required",
+        "source": {
+          "document": "specification.md",
+          "section": "Data behavior and verification"
+        }
+      }
+    ],
+    "constraints": [
+      "Offline; no service or compute mutation",
+      "Preserve generic ownership across current and future adapters"
+    ],
+    "risks": [
+      "A deterministic replay cannot establish LLM semantic extraction or coding quality"
+    ],
+    "deferred_scope": [
+      "Live providers and production scale"
+    ]
+  },
+  "architecture": {
+    "principles": [
+      "Intent, physical policy, execution and progress have separate owners"
+    ],
+    "boundaries": [
+      {
+        "id": "contract",
+        "owns": [
+          "intent",
+          "invariants"
+        ],
+        "must_not_know": [
+          "runtime implementation"
+        ]
+      },
+      {
+        "id": "planner",
+        "owns": [
+          "physical decisions"
+        ],
+        "must_not_know": [
+          "execution internals"
+        ],
+        "depends_on": [
+          "contract"
+        ]
+      },
+      {
+        "id": "runtime",
+        "owns": [
+          "effects",
+          "retry/replay"
+        ],
+        "must_not_know": [
+          "contract parsing"
+        ],
+        "depends_on": [
+          "planner",
+          "state"
+        ]
+      },
+      {
+        "id": "state",
+        "owns": [
+          "committed progress"
+        ],
+        "must_not_know": [
+          "planning policy"
+        ]
+      }
+    ],
+    "decisions": [
+      {
+        "id": "D1",
+        "context": "Initial Databricks and future alternate runtimes share source contracts",
+        "decision": "Separate intent, planning, execution and progress; source profiles cannot select runtime",
+        "consequences": [
+          "Runtime capabilities are explicit planning inputs",
+          "Progress is committed facts only"
+        ],
+        "paths": [
+          "contracts.py",
+          "planner.py",
+          "progress.py",
+          "sources.py"
+        ]
+      }
+    ],
+    "invariants": [
+      {
+        "id": "A1",
+        "statement": "Contract cannot depend on execution/runtime",
+        "kind": "forbidden_imports",
+        "paths": [
+          "contracts.py"
+        ],
+        "forbidden": [
+          "pyspark",
+          "databricks",
+          "execution",
+          "planner",
+          "progress"
+        ]
+      },
+      {
+        "id": "A2",
+        "statement": "Source profiling cannot choose runtime policy",
+        "kind": "forbidden_imports",
+        "paths": [
+          "sources.py"
+        ],
+        "forbidden": [
+          "execution",
+          "planner"
+        ]
+      },
+      {
+        "id": "A3",
+        "statement": "Progress cannot contain planning/execution logic",
+        "kind": "forbidden_imports",
+        "paths": [
+          "progress.py"
+        ],
+        "forbidden": [
+          "planner",
+          "execution"
+        ]
+      },
+      {
+        "id": "A4",
+        "statement": "Planner cannot depend on runtime implementation",
+        "kind": "forbidden_imports",
+        "paths": [
+          "planner.py"
+        ],
+        "forbidden": [
+          "execution",
+          "databricks",
+          "pyspark"
+        ]
+      }
+    ],
+    "unknowns": []
+  },
+  "work": {
+    "milestones": [
+      {
+        "id": "M1",
+        "title": "Intent and contracts",
+        "depends_on": [],
+        "invariant_ids": [
+          "A1"
+        ],
+        "done_when": [
+          {
+            "statement": "Behavior and scoped architecture established",
+            "check_ids": [
+              "C1"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "M2",
+        "title": "Source pressure and planning",
+        "depends_on": [
+          "M1"
+        ],
+        "invariant_ids": [
+          "A1",
+          "A2",
+          "A4"
+        ],
+        "done_when": [
+          {
+            "statement": "Behavior and scoped architecture established",
+            "check_ids": [
+              "C2"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "M3",
+        "title": "Execution and progress",
+        "depends_on": [
+          "M2"
+        ],
+        "invariant_ids": [
+          "A1",
+          "A2",
+          "A3",
+          "A4"
+        ],
+        "done_when": [
+          {
+            "statement": "Behavior and scoped architecture established",
+            "check_ids": [
+              "C3"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "M4",
+        "title": "Data behavior and verification",
+        "depends_on": [
+          "M3"
+        ],
+        "invariant_ids": [
+          "A1",
+          "A2",
+          "A3",
+          "A4"
+        ],
+        "done_when": [
+          {
+            "statement": "Behavior and scoped architecture established",
+            "check_ids": [
+              "C4"
+            ]
+          }
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "id": "T1",
+        "title": "Intent and contracts",
+        "milestone": "M1",
+        "requirement_ids": [
+          "R1",
+          "R2",
+          "R3"
+        ],
+        "decision_ids": [
+          "D1"
+        ],
+        "depends_on": [],
+        "paths": [
+          "contracts.py",
+          "inputs.py",
+          "acceptance.py"
+        ],
+        "checks": [
+          {
+            "id": "C1",
+            "kind": "command",
+            "argv": [
+              "python3",
+              "acceptance.py",
+              "contract"
+            ],
+            "timeout": 30
+          }
+        ],
+        "done_when": [
+          {
+            "statement": "Behavior verified at this boundary",
+            "check_ids": [
+              "C1"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "T2",
+        "title": "Source pressure and planning",
+        "milestone": "M2",
+        "requirement_ids": [
+          "R4",
+          "R5",
+          "R6"
+        ],
+        "decision_ids": [
+          "D1"
+        ],
+        "depends_on": [
+          "T1"
+        ],
+        "paths": [
+          "sources.py",
+          "planner.py",
+          "acceptance.py"
+        ],
+        "checks": [
+          {
+            "id": "C2",
+            "kind": "command",
+            "argv": [
+              "python3",
+              "acceptance.py",
+              "planning"
+            ],
+            "timeout": 30
+          }
+        ],
+        "done_when": [
+          {
+            "statement": "Behavior verified at this boundary",
+            "check_ids": [
+              "C2"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "T3",
+        "title": "Execution and progress",
+        "milestone": "M3",
+        "requirement_ids": [
+          "R7",
+          "R8",
+          "R9"
+        ],
+        "decision_ids": [
+          "D1"
+        ],
+        "depends_on": [
+          "T2"
+        ],
+        "paths": [
+          "execution.py",
+          "progress.py",
+          "acceptance.py"
+        ],
+        "checks": [
+          {
+            "id": "C3",
+            "kind": "command",
+            "argv": [
+              "python3",
+              "acceptance.py",
+              "recovery"
+            ],
+            "timeout": 30
+          }
+        ],
+        "done_when": [
+          {
+            "statement": "Behavior verified at this boundary",
+            "check_ids": [
+              "C3"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "T4",
+        "title": "Data behavior and verification",
+        "milestone": "M4",
+        "requirement_ids": [
+          "R10",
+          "R11",
+          "R12"
+        ],
+        "decision_ids": [
+          "D1"
+        ],
+        "depends_on": [
+          "T3"
+        ],
+        "paths": [
+          "acceptance.py"
+        ],
+        "checks": [
+          {
+            "id": "C4",
+            "kind": "command",
+            "argv": [
+              "python3",
+              "acceptance.py",
+              "all"
+            ],
+            "timeout": 30
+          }
+        ],
+        "done_when": [
+          {
+            "statement": "Behavior verified at this boundary",
+            "check_ids": [
+              "C4"
+            ]
+          }
+        ]
+      }
+    ],
+    "done_when": [
+      {
+        "statement": "All required behavior and recovery checks pass",
+        "check_ids": [
+          "C1",
+          "C2",
+          "C3",
+          "C4"
+        ]
+      }
+    ]
+  }
+}

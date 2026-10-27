@@ -1958,10 +1958,16 @@ def test_repository_harness_and_legacy_scan() -> None:
     check("--sensitive" not in adapter and "auth token" not in adapter.casefold() and "auth env" not in adapter.casefold(), "Databricks adapter requests sensitive credential output")
 
     prior_release = (ROOT / "docs" / "versions" / "v2.2.md").read_text(encoding="utf-8")
-    current_release = (ROOT / "docs" / "versions" / "v2.6.0.md").read_text(encoding="utf-8")
+    release_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    release_path = ROOT / "docs" / "versions" / f"v{release_version}.md"
+    if not release_path.is_file():
+        release_path = ROOT / "docs" / "versions" / f"v{release_version.rsplit('.', 1)[0]}.md"
+    current_release = release_path.read_text(encoding="utf-8")
     check("| Anvil 2.1 `AGENTS.md` | 4,790 | 1,198 | Baseline |" in prior_release, "old harness size is missing from the release report")
     check("| Anvil 2.2 `AGENTS.md` | 3,710 | 928 | 22.5% fewer bytes |" in prior_release, "historical 2.2 harness size is missing from its release report")
-    check(f"| Anvil 2.6 | {agents_size:,} | {round(agents_size / 4):,} |" in current_release,
+    historical_release = (ROOT / "docs/versions/v2.6.0.md").read_text(encoding="utf-8")
+    check("| Anvil 2.6 | 3,724 | 931 |" in historical_release, "historical kernel measurement changed")
+    check(f"| Anvil {release_version} | {agents_size:,} | {round(agents_size / 4):,} |" in current_release,
           "current harness size/token estimate does not match the release report")
 
 

@@ -52,6 +52,12 @@ def main() -> int:
         "docs/migrations/v2.7.1-to-v2.8.0.md": ["RECOVERY_REQUIRED", "DRY_RUN=1", "make update-runtime", "make migrate-runtime", "rollback"],
         "docs/decisions/ADR-0016-lifecycle-state-and-managed-file-migration.md": ["Status:** Accepted", "MIGRATION_REQUIRED", "managed-file", "durable transaction journal", "downgrade"],
         "docs/command-contracts.md": ["MIGRATION_REQUIRED", "UNSUPPORTED", "RECOVERY_REQUIRED", "source-to-target plan"],
+        "docs/versions/v2.9.0.md": ["Requirements Model", "Architecture Model", "Work Model", "exact validated", "Network required", "make update-runtime", "READY WITH KNOWN LIMITATIONS"],
+        "docs/migrations/v2.8.0-to-v2.9.0.md": ["make upgrade DRY_RUN=1", "WORK_STATE_STALE", "separate", "make update-runtime", "rollback"],
+        "docs/engineering.md": ["IMPLEMENTED", "VERIFIED", "XDG_STATE_HOME", "resume", "durable memory"],
+        "docs/engineering-internals.md": ["atomic", "revision", "semantic", "24 KiB", "Requirements", "Architecture", "Work"],
+        "docs/engineering-evaluation.md": ["baseline", "candidate", "ingestion", "scheduler", "not measured", "OpenCode 1.19.3"],
+        "docs/decisions/ADR-0017-progressive-engineering-state.md": ["Status:** Accepted", "three separate models", "one model-neutral", "atomic"],
     }
     errors = []
     inventory_path = ROOT / "config/managed-inventory.json"

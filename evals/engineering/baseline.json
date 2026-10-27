@@ -1,0 +1,22 @@
+{
+  "commit": "bd8b21eb3e4fda20da6213cd8ec103ec981ba548",
+  "version": "2.8.0",
+  "kernel_bytes": 3724,
+  "skills": [
+    "anvil-communication",
+    "anvil-data-ingestion",
+    "anvil-databricks",
+    "anvil-delta-lake",
+    "anvil-memory",
+    "anvil-spark-performance"
+  ],
+  "engineering_state_core_available": false,
+  "live_opencode_available": false,
+  "model_evaluation": "NOT_RUN: no configured runtime/provider in this environment",
+  "structured_resume_fields_available": 0,
+  "structured_resume_fields_expected": 10,
+  "mandatory_suite": {
+    "result": "PASS",
+    "elapsed_seconds": 336.71
+  }
+}

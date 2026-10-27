@@ -37,3 +37,7 @@ Before distillation, the command inspects the named local source and asks the re
 ## Lifecycle
 
 Memory remains outside OpenCode config, binary, data, and state rollback. Upgrade copies it into the isolated rehearsal but does not rewrite the live entries. `make rollback` first archives current Markdown memory under `$XDG_DATA_HOME/anvil/memory-backups/`, then leaves the memory directory intact so current and V2 memories remain portable. Source registry and knowledge files are also Anvil-owned and are kept in the separate Anvil data root.
+
+## Engineering state is separate
+
+Anvil 2.9 engineering progress is private task-scoped JSON under XDG_STATE_HOME/anvil/engineering. Requirements, architecture decisions, milestones and verification are operational continuity, not reusable memory. Starting/resuming/completing a task never promotes its state into memory or modifies existing Markdown entries. Durable retention still requires explicit user intent through the established memory workflows.

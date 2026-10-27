@@ -23,3 +23,7 @@ Anvil uses Semantic Versioning. Anvil 2.0 was the runtime/configuration migratio
 10. Verify that public command text and JSON output remain separate, setup authentication choices are topology-aware, and `make upgrade DRY_RUN=1` does not signal or write live state.
 
 The `make test` suite includes deterministic provider, install-double, PATH, SDK fallback, VS Code discovery, state-security, dry-run, version-documentation, harness, query-recipe, FinOps, runtime-independence, credential-boundary, and repository-hygiene checks. It denies external socket connections during local lifecycle tests while allowing loopback for isolated runtime fixtures. It rejects a `VERSION` without matching changelog, version, capability, compatibility, and migration documentation. It does not resolve external runtime releases or contact a Databricks workspace.
+
+## Anvil 2.9 engineering gate
+
+This MINOR release adds optional task state and progressive skills without runtime or memory migration. Run engineering unit/fault/concurrency/compaction tests and ingestion plus unrelated scheduler replays through `make test`. Keep model/semantic results explicitly unmeasured unless the optional live harness and rubric adjudication actually ran. Preserve the short-task state bypass and 4,200-byte permanent-kernel budget. Verify older source profiles, separate XDG task-store preservation, new manifest ownership and the three-prior-minor migration window.

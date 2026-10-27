@@ -76,3 +76,7 @@ If automatic rollback reports failure, preserve the verified backup and review i
 ## Project and organization overrides
 
 Anvil changes only the managed user/global config boundary. It does not edit repository-owned `AGENTS.md`, `.opencode/`, `opencode.json(c)`, `.claude/`, or `.agents/` files. System-managed and organization remote configuration may also affect effective behavior. Doctor reports visible project overrides but cannot enumerate inaccessible remote policy; use OpenCode's resolved config/debug commands where available. See [OpenCode compatibility](opencode-compatibility.md) and [runtime compatibility](runtime-compatibility.md).
+
+## Engineering task continuity
+
+Large-task progress belongs to the separate XDG state engineering store, not the installation lifecycle or durable memory. Ask Anvil to resume a named repository/task ID, or use the installed `engineering.py list`/`resume` helper. Status/resume are read-only and do not execute work. For WORK_STATE_STALE inspect changed evidence, revalidate unaffected assumptions and replan changed specifications. For interrupted ACTIVE work inspect partial effects before reconciliation. WORK_STATE_CORRUPTED leaves the task file intact; explicit recovery from an inspected prior generation invalidates verification. Do not run reforge merely because one task's state is invalid. See [the engineering guide](engineering.md).

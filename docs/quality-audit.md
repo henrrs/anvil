@@ -173,3 +173,9 @@ Recommended next engineering priorities:
 ## 11. Release recommendation
 
 **SAFE WITH CONDITIONS.** The tested offline/core lifecycle release has no open P0/P1 findings, the new P1 regressions are covered, and `make test` passes. Treat real release download, live OpenCode UI behavior, and live Databricks auth/workspace readiness as separate environment-specific smoke checks; do not infer those from the offline suite.
+
+## Anvil 2.9 engineering assurance
+
+The additive engineering package preserves one agent, model/runtime independence, memory semantics and existing lifecycle/provider/artifact boundaries. Three separate models share atomic publication; resume is read-only, checks are bounded and revision-serialized, stale evidence invalidates dependent completion, and required coverage/architecture/unknown gates prevent premature completion. The always-loaded kernel grows from 3,724 to 3,930 bytes, within the established 4,200-byte gate; domain/protocol references remain lazy.
+
+Evidence includes deterministic unit/fault/concurrency tests, three ingestion and three unrelated scheduler replays, installed-helper tests on both profile generations, and separate official digest-verified OpenCode 1.19.3/2.0.31 native configuration/skill checks. Full results and limits are in [engineering evaluation](engineering-evaluation.md). Semantic extraction, real-model autonomous success, Spark workload speedups and live Databricks behavior were not measured. Static architecture checks and attributed semantic reviews remain different assurance classes.

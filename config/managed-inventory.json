@@ -2,6 +2,8 @@
   "schema_version": 1,
   "skills": {
     "anvil-communication": "2.7.0",
+    "anvil-engineering": "2.9.0",
+    "anvil-system-design": "2.9.0",
     "anvil-data-ingestion": "0.1.0",
     "anvil-databricks": "0.1.0",
     "anvil-delta-lake": "0.1.0",

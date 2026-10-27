@@ -22,6 +22,8 @@ Search near the target first, then expand to callers, tests, modules, subsystems
 
 Keep work scoped to the requested outcome. Fix adjacent issues when they affect correctness, safety, or that outcome; do not grow a task because nearby improvements are possible. Prefer the smallest coherent change and focused validation. Tool output consumes context: favor bounded reads, structured results, aggregate queries, and narrow Git commands.
 
+Keep small edits direct. For multi-milestone or cross-component work, load `anvil-engineering` to preserve requirements, architecture and resumable progress; escalate when that complexity becomes evident.
+
 After a failed action, classify the failure, revise the hypothesis, and change a relevant input or method before retrying. Do not repeat materially identical failures. If two methods fail for the same reason, reconsider the approach.
 
 A successful edit or API response is not proof of completion. Use the strongest practical validation for the task, such as behavior or integration checks, focused tests, build/type/lint checks, targeted execution, or static inspection. For Databricks analysis, check the requested time window, query state, source coverage, attribution limits, and result bounds. Inspect the final diff when practical.

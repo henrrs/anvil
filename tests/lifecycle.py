@@ -157,14 +157,24 @@ def downgrade_to_legacy_profile(paths: dict[str, pathlib.Path], version: str) ->
     config_dir = paths["config"]
     config_path = config_dir / "opencode.jsonc"
     config = json.loads(config_path.read_text(encoding="utf-8"))
+    inventory = json.loads((ROOT / "config/managed-inventory.json").read_text(encoding="utf-8"))
+    later_skills = {name for name, introduced in inventory["skills"].items()
+                    if compare_versions(introduced, version) == 1}
     if isinstance(config.get("agent"), dict):
-        config["agent"]["anvil"]["permission"]["skill"].pop("anvil-communication", None)
+        for name in later_skills:
+            config["agent"]["anvil"]["permission"]["skill"].pop(name, None)
     elif isinstance(config.get("agents"), dict):
         config["agents"]["anvil"]["permissions"] = [
             rule for rule in config["agents"]["anvil"]["permissions"]
-            if not (rule.get("action") == "skill" and rule.get("resource") == "anvil-communication")
+            if not (rule.get("action") == "skill" and rule.get("resource") in later_skills)
         ]
     write_json(config_path, config)
+    for name in later_skills:
+        shutil.rmtree(config_dir / "skills" / name, ignore_errors=True)
+    if compare_versions(version, "2.9.0") == -1:
+        shutil.rmtree(config_dir / "scripts/engineering", ignore_errors=True)
+        for name in ("engineering.py", "public_errors.py"):
+            (config_dir / "scripts" / name).unlink(missing_ok=True)
     for path in (config_dir / "skills" / "anvil-communication", config_dir / "scripts" / "communication"):
         shutil.rmtree(path, ignore_errors=True)
     for path in (config_dir / "commands" / "review.md", config_dir / "scripts" / "artifacts.py",
@@ -378,8 +388,8 @@ def lifecycle_version_order_test() -> None:
     check(parse_version("2.10.0") == (2, 10, 0), "semantic version parser did not retain numeric minor ordering")
     check(compare_versions("2.10.0", "2.9.9") == 1, "semantic version ordering compared minor releases lexically")
     check(compare_versions("2.08.0", "2.8.0") is None, "semantic version parser accepted a non-canonical leading zero")
-    check(supported_migration("2.6.1", "2.8.0"), "two-minor source window was rejected")
-    check(not supported_migration("2.5.9", "2.8.0"), "source outside the two-minor window was accepted")
+    check(supported_migration("2.6.1", "2.9.0"), "backward-compatible three-minor source window was rejected")
+    check(not supported_migration("2.5.9", "2.9.0"), "source outside the three-minor window was accepted")
     check(not supported_migration("2.9.0", "2.8.0"), "a newer installed release was treated as migratable")
     print("PASS semantic release ordering, supported source window, and downgrade rejection")
 
@@ -495,6 +505,49 @@ def large_config_upgrade_plan_test(temp: pathlib.Path) -> None:
           "large Anvil-only upgrade changed the OpenCode runtime")
     assert_no_external_network(temp)
     print("PASS large external config plans preview safely and upgrade while preserving dependency files")
+
+
+def engineering_manifest_upgrade_test(temp: pathlib.Path) -> None:
+    """A real prior manifest must not require target-only engineering paths."""
+    import managed_config
+    paths = fixture(temp)
+    promote_fixture_to_current_anvil(paths, temp)
+    config_path = paths["config"] / "opencode.jsonc"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    for name in ("anvil-engineering", "anvil-system-design"):
+        config["agent"]["anvil"]["permission"]["skill"].pop(name)
+        shutil.rmtree(paths["config"] / "skills" / name)
+    write_json(config_path, config)
+    shutil.rmtree(paths["config"] / "scripts/engineering")
+    for name in ("engineering.py", "public_errors.py"):
+        (paths["config"] / "scripts" / name).unlink()
+    shutil.rmtree(paths["config"] / "skills/anvil-spark-performance/references")
+    manifest = managed_config._target_manifest(paths["config"], "2.8.0", excluded={"commands/user-command.md", "scripts/user-helper.py"})
+    managed_config._write_manifest(paths["config"], manifest)
+    record_path = paths["anvil_data"] / "installation.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record.update(anvil_version="2.8.0", managed_config_manifest_sha256=file_hash(paths["config"] / ".anvil-managed.json"))
+    write_json(record_path, record)
+    task_state = paths["state_home"] / "anvil/engineering/existing-task/state.json"
+    write_json(task_state, {"fixture": "user task data outside lifecycle snapshots"})
+    original_task = file_hash(task_state)
+    original_runtime = file_hash(paths["binary"])
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0", ANVIL_SKIP_RUNTIME_PROBE="1")
+    inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
+    check("MIGRATION_REQUIRED" in inspect.stdout and "CORRUPTED" not in inspect.stdout,
+          "prior manifest was rejected for absent target-only engineering files")
+    run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
+    check((paths["config"] / "scripts/engineering.py").is_file() and
+          (paths["config"] / "skills/anvil-system-design/SKILL.md").is_file(),
+          "upgrade did not publish engineering helpers and lazy skills")
+    check(file_hash(task_state) == original_task and file_hash(paths["binary"]) == original_runtime,
+          "Anvil-only upgrade changed task state or runtime")
+    run(["/usr/bin/make", "--no-print-directory", "rollback"], env)
+    check(json.loads(record_path.read_text(encoding="utf-8"))["anvil_version"] == "2.8.0" and
+          file_hash(task_state) == original_task and file_hash(paths["binary"]) == original_runtime,
+          "rollback failed to restore prior config while preserving independent task state/runtime")
+    assert_no_external_network(temp)
+    print("PASS prior 2.8 manifest upgrades without target-only corruption; rollback preserves engineering state/runtime")
 
 
 def brownfield_legacy_npm_symlink_test(temp: pathlib.Path) -> None:
@@ -969,9 +1022,11 @@ def future_install_downgrade_test(temp: pathlib.Path) -> None:
     installation = json.loads(installation_path.read_text(encoding="utf-8"))
     manifest_path = paths["config"] / ".anvil-managed.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["anvil_version"] = "2.9.0"
+    major, minor, _ = parse_version(ANVIL_VERSION)
+    future_version = f"{major}.{minor + 1}.0"
+    manifest["anvil_version"] = future_version
     write_json(manifest_path, manifest)
-    installation["anvil_version"] = "2.9.0"
+    installation["anvil_version"] = future_version
     installation["managed_config_manifest_sha256"] = file_hash(manifest_path)
     write_json(installation_path, installation)
     config_before = tree_hash(paths["config"])
@@ -1744,6 +1799,8 @@ def main() -> int:
     lifecycle_version_order_test()
     with tempfile.TemporaryDirectory(prefix="anvil-config-ownership-", dir=TEST_ROOT) as name:
         config_ownership_transition_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-engineering-upgrade-", dir=TEST_ROOT) as name:
+        engineering_manifest_upgrade_test(pathlib.Path(name))
     with tempfile.TemporaryDirectory(prefix="anvil-large-config-plan-", dir=TEST_ROOT) as name:
         large_config_upgrade_plan_test(pathlib.Path(name))
     with tempfile.TemporaryDirectory(prefix="anvil-brownfield-npm-link-", dir=TEST_ROOT) as name:

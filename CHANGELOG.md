@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.9.0] - 2026-10-27
+
+- Added progressively activated engineering continuity with separate requirements, architecture and work models, explicit provenance, dependency graphs and hierarchical completion gates.
+- Added private checksummed atomic task state, revision/concurrency protection, bounded compaction recovery, stale-evidence invalidation, safe partial-work reconciliation and selective replanning.
+- Added command-backed verification, explicit semantic judgments, scoped architecture invariants, required-scope authorization and failure-aware checks without automatic resume execution.
+- Added lazy system-design guidance and focused references to the existing Spark skill, preserving small-task cost, one-agent/model/runtime independence, memory and existing integrations.
+- Added offline ingestion/scheduler replays, crash/concurrency/compaction regressions, technical rubrics and optional model-evaluation profiles. Native OpenCode 1.19.3/2.0.31 candidate checks passed; real-model performance remains unmeasured.
+- Extended supported source migration to three prior minors to retain the existing 2.6 upgrade path. No runtime or existing memory/state migration is required.
+
 Release notes for user-visible Anvil changes. See [version history](docs/versions/README.md) and [release discipline](docs/RELEASING.md).
 
 ## [2.8.0] - 2026-10-25
