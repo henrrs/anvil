@@ -39,7 +39,9 @@ def implement_unit(state, project, name, task_id, *, start=True):
         result = engine.check(state, project, task_id, check["id"])
         if result["result"] != "PASS":
             raise AssertionError(f"{name}/{task_id} acceptance failed: {result}")
-    engine.checkpoint(state, project)
+    milestone_tasks = [item for item in engine.tasks(state).values() if item["milestone"] == task["milestone"]]
+    if milestone_tasks and all(item["status"] == "VERIFIED" for item in milestone_tasks):
+        engine.checkpoint(state, project, milestone_id=task["milestone"])
     return state
 
 
@@ -70,7 +72,6 @@ def replay(base: pathlib.Path, name="ingestion", interrupt=True, observations=No
             assert packet["status"] == "WORK_STATE_STALE" and not packet["completion"]["ready"]
             assert snapshot == {p.name: repository.digest(p) for p in project.glob("*.py")}
             engine.reconcile(state, project, task_id, "PENDING", "Inspected the partial source copy; no external effects occurred")
-            engine.checkpoint(state, project)
         state = implement_unit(state, project, name, task_id)
         state = store.save(path, state, state["revision"])
     for decision in state["models"]["architecture"]["decisions"]:

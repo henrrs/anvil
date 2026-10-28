@@ -13,7 +13,7 @@ def resume(state: dict, root: Path, task_id: str | None = None, max_bytes: int =
     drift = engine.current_drift(state, root)
     if drift["stale"]:
         affected = {t["id"] for t in engine.tasks(state).values()} if drift["specification_changed"] else set()
-        engine._invalidate(state, set(drift["changed_files"]), affected)
+        engine._invalidate(state, root, set(drift["changed_files"]), affected)
     engine.refresh(state)
     tasks = engine.tasks(state)
     work = state["models"]["work"]

@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.10.0] - 2026-10-27
+
+- Added task-local adaptive engineering depth: request/project size no longer forces long-horizon state, and requirements, architecture, work, and domain knowledge activate only when the current risk or uncertainty warrants them.
+- Reduced the always-loaded engineering kernel by 592 bytes and made escalation/de-escalation explicit without adding modes, agents, model routing, dependencies, or runtime requirements.
+- Made invariant evidence invalidation path/pattern scoped and added milestone-scoped architecture checkpoints that reuse valid PASS evidence while preserving the full audit path.
+- Preserved schema-1 task state, atomic recovery, stale detection, requirements coverage, architecture completion gates, interruption safety, OpenCode 1/2 support and lifecycle semantics.
+- Added 18 paired activation cases and measured deterministic replay deltas: ingestion architecture evaluations 20→4 and scheduler 8→2, with required coverage/invariants intact. Live-model tool/context/latency/token behavior remains unmeasured.
+- Extended the automatic source migration window to four prior minor releases to retain 2.6.x compatibility. No runtime or user-data migration is required.
+
 ## [2.9.0] - 2026-10-27
 
 - Added progressively activated engineering continuity with separate requirements, architecture and work models, explicit provenance, dependency graphs and hierarchical completion gates.

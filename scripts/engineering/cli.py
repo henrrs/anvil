@@ -44,6 +44,8 @@ def parser() -> argparse.ArgumentParser:
             cmd.add_argument("--spec", type=Path, required=True)
         if action == "replan":
             cmd.add_argument("--scope-authorization", default="", help="Reference to actual user authorization when reducing required scope")
+        if action == "checkpoint":
+            cmd.add_argument("--milestone", help="Check only this completed milestone's invalid or missing architecture evidence")
         if action in {"start", "implement", "check", "reconcile", "resume"}:
             cmd.add_argument("--task", required=action != "resume")
         if action == "implement":
@@ -68,7 +70,9 @@ def parser() -> argparse.ArgumentParser:
 def human(value: dict) -> str:
     if "objective" not in value:
         if "workflow" in value:
-            return f"Workflow              {value['workflow']}\nSignals               {', '.join(value['signals']) or 'small/direct scope'}\nState created         NO\n{value['note']}"
+            signals = ", ".join(value["signals"]) or "none identified"
+            context = ", ".join(value.get("project_context", [])) or "none"
+            return f"Recommendation       {value['workflow']}\nTask triggers         {signals}\nProject context       {context}\nState created         NO\n{value['note']}"
         if "source" in value:
             return f"Specification         {value['source']['path']}\nLines                 {value['lines']}\nStatus                {value['status']}\nNext                  {value['next']}"
         return json.dumps(value, ensure_ascii=False, indent=2)
@@ -141,7 +145,7 @@ def execute(args: argparse.Namespace) -> tuple[dict, int]:
             if action == "review":
                 return engine.review(current, repository, args.target, args.result, args.summary, args.observer)
             if action == "checkpoint":
-                return engine.checkpoint(current, repository)
+                return engine.checkpoint(current, repository, getattr(args, "milestone", None))
             if action == "revalidate":
                 return engine.revalidate(current, repository, args.reason)
             if action == "reconcile":

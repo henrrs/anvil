@@ -1,9 +1,11 @@
 ---
 name: anvil-system-design
-description: Use when engineering decisions change responsibility, dependency direction, durable state, public contracts, failure/retry ownership, provider boundaries or distributed/data-system behavior. Do not use for ordinary local edits without design pressure.
+description: Use when this task changes responsibility, dependency direction, public contracts, durable state, provider/runtime seams or failure ownership. Do not use for local edits without design pressure.
 ---
 
 # Responsibility before mechanism
+
+Load this skill for the current decision, not because the repository has complex architecture. A parser fix, private helper or configuration typo inside an established boundary normally needs no design review. After resolving a real boundary decision, return to the local implementation loop.
 
 Locate the project's current boundaries, contracts, tests and decisions before proposing structure. For a meaningful component identify its responsibility and owner, required information and forbidden knowledge, dependencies/dependents, owned state, failure behavior, retry owner and evolution pressure. Domain expertise explains a mechanism; it does not assign generic responsibilities to the current runtime.
 

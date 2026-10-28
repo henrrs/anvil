@@ -1,16 +1,32 @@
 ---
 name: anvil-engineering
-description: Use for large specifications, multiple milestones, cross-component implementations or interrupted engineering tasks that need requirements coverage, architecture constraints and resumable work state. Do not use for small isolated edits; escalate only when scope warrants it.
+description: Use when the requested work itself has dependent milestones, consequential boundaries/state changes, or needs durable interruption recovery. Do not use this skill just because the repository is large, complex, or already has an active Work Model; local tasks stay local unless new evidence requires escalation.
 ---
 
-# Sustained engineering execution
+# Adaptive sustained engineering
 
-Assess scope from the request and evidence already located. Multiple milestones, cross-component dependencies, durable schema/API changes, migrations, or a specification whose constraints cannot safely remain in context justify structured state. A rename, isolated validation, documentation edit or small bug fix normally does not. Do not scan a repository or create state merely to classify it. Escalate from direct work without restarting; de-escalate if the apparent scope disappears.
+## Activate only for this task
 
-Before coding a long task, inspect existing architecture and extension points. Normalize the explicitly named specification into objective, requirements with source sections, constraints, acceptance criteria, boundaries/invariants, decisions, dependencies, risks, unknowns and deferred scope. This is semantic analysis: the helper inventories sources but cannot extract reliable requirements for you. Preserve constraints and distinguish required scope from optional ideas.
+Judge the requested change, not the project around it. If the next safe action is clear, local, reversible and bounded, locate the relevant implementation/caller/test, act, run a focused check, and stop. Do not read or resume long-horizon state, rebuild requirements, run architecture conformance, or create a plan for an unrelated local fix just because the repository has a complex system or active project state.
 
-Maintain three separate models: requirements measure completeness; architecture constrains implementation; work records progress. Read [models.md](references/models.md) when creating or changing models. Use the local stdlib helper at `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/scripts/engineering.py`; run `--help` for commands. State belongs under `${XDG_STATE_HOME:-$HOME/.local/state}/anvil/engineering/`, never in durable memory or arbitrary source directories. Persist concise decisions, evidence references and results, not hidden reasoning, secrets, raw logs or copied conversations.
+Expand when uncertainty or meaningful risk changes the next safe action: dependent changes need coordination; a public contract, responsibility/dependency boundary, persistent state, runtime/provider seam, migration, retry/failure ownership or compatibility guarantee changes; required scope is unclear; the user explicitly asks for deep review; or interruption recovery matters. A long request/spec is a prompt to inspect scope, not an activation rule by itself. Let semantic judgment choose whether to expand; do not use a score or repository-size threshold.
 
-Read [execution.md](references/execution.md) for the execution loop, completion gates and retry discipline. Select one coherent ready unit, inspect relevant source/requirements/decisions, validate assumptions, implement, verify, checkpoint architecture at meaningful boundaries, then update coverage and work state. Load only the current unit and relevant domain references. Use `anvil-system-design` when responsibility or dependency decisions matter; Spark/Databricks expertise does not assign architectural ownership.
+Depth is local and reversible. Preserve evidence when escalating, load only the requirements/architecture/work slice that affects the current decision, and narrow again after a design decision is settled. A local task inside a long project normally bypasses its Work Model. Explicitly continuing that project activates enough state to identify the current milestone, blockers and safe next step, then return to the active unit.
 
-Read [resume.md](references/resume.md) when interrupted, compacted or facing changed repository/specification evidence. `resume` reconstructs a bounded packet and executes no work. Inspect partial actions before reconciliation; do not replay a destructive action because its result is uncertain. An IMPLEMENTED unit is not VERIFIED. Never claim the task complete while required coverage, definitions of done, architecture checks or blocking unknowns remain unresolved.
+## When long-horizon structure is justified
+
+Before implementation, inspect relevant extension points and semantically normalize the named specification. Preserve provenance, constraints, acceptance criteria, boundaries, risks, unknowns and deferred scope. Read [models.md](references/models.md) when creating/changing models. Keep Requirements, Architecture and Work separate; full explicit scope may remain in durable state, while active context should contain only the current unit and relevant slices. The helper inventories a source but does not extract its meaning.
+
+Use a short plan only to coordinate dependent work or meaningful uncertainty. Use persistent models when multiple milestones, compatibility/state transitions or interruption continuity justify them. Keep implementation choices inside established boundaries free: private helpers, local decomposition and reversible details do not need architecture reconciliation.
+
+During work, choose one coherent ready unit and inspect only its named evidence. Record meaningful implementation, verification and blockers. Checkpoint architecture when a boundary/contract/state/failure decision changes, a risky operation completes, or a milestone closes—not for each helper, local conditional, fixture or formatter. Update requirements/work state when the tracked scope or progress materially changes. Persist only transitions needed for safe recovery; the helper provides atomic generations, checksums, locks and revision checks.
+
+Prefer the smallest checks that can falsify the implementation. Low-risk local changes use focused verification; broader integration, architecture and resume checks are for shared interfaces, material blast radius, state/migration semantics, milestone gates or unexpected evidence. A passing test proves only its declared scope. Never report a check that was not run.
+
+Read [execution.md](references/execution.md) for stateful transitions and completion gates. Use `anvil-system-design` only when responsibility, dependency, durable-state, contract or failure ownership is at issue. Load only relevant Spark/Databricks references when the task needs their domain evidence. These skills add domain knowledge; they do not by themselves require long-horizon process.
+
+## Interruption and completion
+
+Read [resume.md](references/resume.md) only when continuing interrupted/compacted structured work or investigating stale evidence. Resume is read-only: inspect partial effects before reconciliation and never replay uncertain external actions. Revalidate affected evidence selectively; changed specifications require semantic re-normalization. An IMPLEMENTED unit is not VERIFIED. Completion still requires every required gate, architecture invariant and blocking unknown to be resolved.
+
+The helper lives at `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/scripts/engineering.py`; use `--help` only when structured state is justified. State belongs under `${XDG_STATE_HOME:-$HOME/.local/state}/anvil/engineering/`, never in durable memory or project sources. No state is created by direct work, assessment or capability inspection. Do not promote task state into memory.

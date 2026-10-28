@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "method": "Paired task-local activation rubric. The offline runner validates deterministic task signals only; semantic depth and model behavior remain unmeasured without a live OpenCode run.",
+  "cases": [
+    {
+      "id": "ingestion-local-null",
+      "project": "complex-ingestion-engine",
+      "request": "Fix null handling in PartitionPlanner.",
+      "signals": {"requirements": 120, "subsystems": 12, "files": 500, "milestones": 8, "acceptance_criteria": 60, "cross_component": true},
+      "expected_workflow": "DIRECT",
+      "expected_depth": "FOCUSED",
+      "branches": {"requirements": "DORMANT", "architecture": "DORMANT", "work_state": "DORMANT", "system_design": false, "spark_references": [], "verification": "focused test"}
+    },
+    {
+      "id": "ingestion-add-source-profile-field",
+      "project": "complex-ingestion-engine",
+      "request": "Add the optional query_tag field to SourceProfile and validate its default.",
+      "signals": {"requirements": 120, "files": 500, "milestones": 8},
+      "expected_workflow": "DIRECT",
+      "expected_depth": "FOCUSED",
+      "branches": {"requirements": "DORMANT", "architecture": "DORMANT", "work_state": "DORMANT", "system_design": false, "spark_references": [], "verification": "focused contract tests"}
+    },
+    {
+      "id": "ingestion-source-predicate",
+      "project": "complex-ingestion-engine",
+      "request": "Fix the SQL Server incremental predicate for an empty watermark.",
+      "signals": {"requirements": 120, "subsystems": 12, "files": 500, "milestones": 8},
+      "expected_workflow": "DIRECT",
+      "expected_depth": "FOCUSED",
+      "branches": {"requirements": "DORMANT", "architecture": "DORMANT", "work_state": "DORMANT", "system_design": false, "spark_references": [], "verification": "reader regression test"}
+    },
+    {
+      "id": "ingestion-planner-boundary",
+      "project": "complex-ingestion-engine",
+      "request": "Move partition strategy ownership from SourceReader to Planner, selecting based on source capabilities.",
+      "signals": {"architecture_change": true, "dependency_direction_change": true},
+      "expected_workflow": "EXPAND",
+      "expected_depth": "STRUCTURED",
+      "branches": {"requirements": "relevant slice", "architecture": "Planner/SourceReader boundary", "work_state": "only if coordination is needed", "system_design": true, "spark_references": [], "verification": "contract and dependency regression"}
+    },
+    {
+      "id": "ingestion-execution-plan-contract",
+      "project": "complex-ingestion-engine",
+      "request": "Change the public ExecutionPlan contract to carry source capability evidence.",
+      "signals": {"public_contract_change": true},
+      "expected_workflow": "EXPAND",
+      "expected_depth": "STRUCTURED",
+      "branches": {"requirements": "affected acceptance", "architecture": "contract boundary", "work_state": "only if cross-unit coordination is needed", "system_design": true, "spark_references": [], "verification": "contract callers and focused regression"}
+    },
+    {
+      "id": "ingestion-state-store-recovery",
+      "project": "complex-ingestion-engine",
+      "request": "Change StateStore commit ordering and recovery after a sink commit but before progress persistence.",
+      "signals": {"persistence_change": true, "failure_semantics_change": true},
+      "expected_workflow": "EXPAND",
+      "expected_depth": "LONG_HORIZON",
+      "branches": {"requirements": "recovery acceptance", "architecture": "state and retry ownership", "work_state": "when interruption continuity is needed", "system_design": true, "spark_references": [], "verification": "state/replay and interruption checks"}
+    },
+    {
+      "id": "ingestion-new-runtime",
+      "project": "complex-ingestion-engine",
+      "request": "Introduce a second execution runtime while preserving the source-neutral plan contract.",
+      "signals": {"runtime_boundary_change": true, "multiple_dependent_changes": true},
+      "expected_workflow": "EXPAND",
+      "expected_depth": "LONG_HORIZON",
+      "branches": {"requirements": "runtime compatibility", "architecture": "runtime adapter boundary", "work_state": "when milestones are dependent", "system_design": true, "spark_references": [], "verification": "adapter contract and lifecycle regressions"}
+    },
+    {
+      "id": "ingestion-resume-milestone",
+      "project": "complex-ingestion-engine",
+      "request": "Resume the interrupted ingestion implementation at its current milestone.",
+      "signals": {"resume_long_horizon": true},
+      "expected_workflow": "EXPAND",
+      "expected_depth": "LONG_HORIZON_THEN_FOCUSED",
+      "branches": {"requirements": "current unit slice", "architecture": "relevant decisions only", "work_state": "resume current milestone", "system_design": "only if a boundary decision remains", "spark_references": [], "verification": "inspect partial effects; do not replay"}
+    },
+    {
+      "id": "utility-large-project-local-bug",
+      "project": "unrelated-large-utility-service",
+      "request": "Fix the null default in one local formatter function.",
+      "signals": {"requirements": 90, "subsystems": 10, "files": 400, "milestones": 6, "acceptance_criteria": 20},
+      "expected_workflow": "DIRECT",
+      "expected_depth": "DIRECT",
+      "branches": {"requirements": "DORMANT", "architecture": "DORMANT", "work_state": "DORMANT", "system_design": false, "spark_references": [], "verification": "focused unit test"}
+    },
+    {
+      "id": "utility-private-helper",
+      "project": "unrelated-large-utility-service",
+      "request": "Rename a private helper and update its local caller.",
+      "signals": {"files": 400, "subsystems": 10, "cross_component": true},
+      "expected_workflow": "DIRECT",
+      "expected_depth": "DIRECT",
+      "branches": {"requirements": "DORMANT", "architecture": "DORMANT", "work_state": "DORMANT", "system_design": false, "spark_references": [], "verification": "focused regression"}
+    },
+    {
+      "id": "utility-public-api",
+      "project": "unrelated-large-utility-service",
+      "request": "Change the public API response shape and preserve compatibility for current clients.",
+      "signals": {"public_contract_change": true},
+      "expected_workflow": "EXPAND",
+      "expected_depth": "STRUCTURED",
+      "branches": {"requirements": "compatibility acceptance", "architecture": "public contract", "work_state": "only if rollout needs continuity", "system_design": true, "spark_references": [], "verification": "caller compatibility matrix"}
+    },
+    {
+      "id": "utility-persistence-migration",
+      "project": "unrelated-large-utility-service",
+      "request": "Migrate the persistent cache schema while preserving existing user data and rollback safety.",
+      "signals": {"migration": true, "schema_change": true, "persistence_change": true},
+      "expected_workflow": "EXPAND",
+      "expected_depth": "LONG_HORIZON",
+      "branches": {"requirements": "data preservation and compatibility", "architecture": "state ownership", "work_state": "migration and rollback steps", "system_design": true, "spark_references": [], "verification": "migration, recovery and rollback tests"}
+    },
+    {
+      "id": "utility-local-validation",
+      "project": "unrelated-large-utility-service",
+      "request": "Add one focused parser validation for an empty identifier.",
+      "signals": {"files": 200, "requirements": 35, "acceptance_criteria": 12},
+      "expected_workflow": "DIRECT",
+      "expected_depth": "FOCUSED",
+      "branches": {"requirements": "DORMANT", "architecture": "DORMANT", "work_state": "DORMANT", "system_design": false, "spark_references": [], "verification": "focused parser tests"}
+    },
+    {
+      "id": "utility-retry-ownership",
+      "project": "unrelated-large-utility-service",
+      "request": "Move retry ownership from the provider adapter into the shared request coordinator.",
+      "signals": {"dependency_direction_change": true, "failure_semantics_change": true},
+      "expected_workflow": "EXPAND",
+      "expected_depth": "STRUCTURED",
+      "branches": {"requirements": "retry behavior", "architecture": "ownership and dependency boundary", "work_state": "only if dependent work units need tracking", "system_design": true, "spark_references": [], "verification": "retry ownership and failure matrix"}
+    },
+    {
+      "id": "spark-config-rename",
+      "project": "spark-data-platform",
+      "request": "Rename this Spark configuration key in the local settings file.",
+      "signals": {"files": 250, "subsystems": 5},
+      "expected_workflow": "DIRECT",
+      "expected_depth": "DIRECT",
+      "branches": {"requirements": "DORMANT", "architecture": "DORMANT", "work_state": "DORMANT", "system_design": false, "spark_references": [], "verification": "focused config check"}
+    },
+    {
+      "id": "spark-arrow-spill-diagnosis",
+      "project": "spark-data-platform",
+      "request": "Diagnose why mapInArrow ingestion spills 90 GB and stalls on a long tail.",
+      "signals": {"next_action_unclear": true},
+      "expected_workflow": "EXPAND",
+      "expected_depth": "FOCUSED_DOMAIN",
+      "branches": {"requirements": "DORMANT", "architecture": "DORMANT unless ownership changes", "work_state": "DORMANT", "system_design": false, "spark_references": ["execution-model", "arrow", "memory-spill", "skew", "diagnostics"], "verification": "targeted Spark evidence and controlled comparison"}
+    },
+    {
+      "id": "system-design-parser-fix",
+      "project": "service-with-multiple-subsystems",
+      "request": "Fix parser validation for a missing option value.",
+      "signals": {"subsystems": 8, "files": 300},
+      "expected_workflow": "DIRECT",
+      "expected_depth": "DIRECT",
+      "branches": {"requirements": "DORMANT", "architecture": "DORMANT", "work_state": "DORMANT", "system_design": false, "spark_references": [], "verification": "focused parser test"}
+    },
+    {
+      "id": "system-design-explicit-review",
+      "project": "service-with-multiple-subsystems",
+      "request": "Review component responsibility, durable state ownership and recovery before changing this subsystem.",
+      "signals": {"user_requests_deep_review": true, "state_ownership_change": true},
+      "expected_workflow": "EXPAND",
+      "expected_depth": "STRUCTURED",
+      "branches": {"requirements": "named acceptance only", "architecture": "affected owners and failure paths", "work_state": "DORMANT unless this is resumed project work", "system_design": true, "spark_references": [], "verification": "state and recovery regressions"}
+    }
+  ]
+}

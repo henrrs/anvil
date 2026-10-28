@@ -18,7 +18,7 @@ from unittest import mock
 
 from harness import ROOT, models, prepare, replay
 sys.path.insert(0, str(ROOT / "scripts"))
-from engineering import engine, invariants
+from engineering import engine, invariants, store
 
 PROFILES = {
     "base": "Use the direct engineering workflow; do not create structured task models.",
@@ -39,7 +39,22 @@ def replay_run(name: str, repeats: int) -> dict:
             with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(base / "state"), "XDG_DATA_HOME": str(base / "data"),
                     "ANVIL_ENGINEERING": "auto", "PYTHONPATH": str(ROOT / "tests/fixtures/network-denied")}):
                 observations = []
-                state, project, _ = replay(base, name, observations=observations)
+                persistence = {"writes": 0}
+                architecture = {"checks": 0}
+                save, update, evaluate = store.save, store.update, invariants.evaluate
+                def counted_save(*args, **kwargs):
+                    persistence["writes"] += 1
+                    return save(*args, **kwargs)
+                def counted_update(*args, **kwargs):
+                    persistence["writes"] += 1
+                    return update(*args, **kwargs)
+                def counted_evaluate(*args, **kwargs):
+                    architecture["checks"] += 1
+                    return evaluate(*args, **kwargs)
+                with mock.patch.object(store, "save", side_effect=counted_save), \
+                     mock.patch.object(store, "update", side_effect=counted_update), \
+                     mock.patch.object(invariants, "evaluate", side_effect=counted_evaluate):
+                    state, project, _ = replay(base, name, observations=observations)
                 regressions = {}
                 for invariant in models(name)["architecture"]["invariants"]:
                     if invariant["kind"] == "forbidden_imports":
@@ -53,6 +68,8 @@ def replay_run(name: str, repeats: int) -> dict:
                              "injected_boundary_violations_detected": regressions,
                              "interruption_and_compaction": "PASS", "duplicate_resume_execution": False,
                              "counters": state["counters"], "latency_seconds": round(time.monotonic() - started, 3),
+                             "state_writes": persistence["writes"], "architecture_check_evaluations": architecture["checks"],
+                             "verification_commands": state["counters"].get("verification", 0),
                              "milestones_created": len(state["models"]["work"]["milestones"]),
                              "tasks_completed": sum(t["status"] == "VERIFIED" for t in state["models"]["work"]["tasks"]),
                              "replans": state["counters"].get("replanned", 0),

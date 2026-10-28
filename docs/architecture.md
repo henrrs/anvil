@@ -12,7 +12,7 @@ Anvil's product release is independent of the OpenCode major. `config/runtime-po
 
 ## Lifecycle and managed configuration
 
-Anvil versions, installed config, and transitions are separate facts. The source config is audited for its runtime generation and source-release invariants; a staged target is audited strictly against the current release. The supported automatic source window is the same Anvil major and current plus three prior minor releases (2.9 retains the previously supported 2.6 source line). A checkout older than the installed Anvil release is unsupported; both upgrade and reforge reject it before taking a snapshot or changing managed files.
+Anvil versions, installed config, and transitions are separate facts. The source config is audited for its runtime generation and source-release invariants; a staged target is audited strictly against the current release. The supported automatic source window is the same Anvil major and current plus four prior minor releases; 2.10 retains the 2.6 source line supported by 2.9. A checkout older than the installed Anvil release is unsupported; both upgrade and reforge reject it before taking a snapshot or changing managed files.
 
 New installations include `.anvil-managed.json`, a manifest of Anvil-owned paths and file hashes. The installation record pins the manifest hash. Integrity checks follow the manifest or the deterministic inventory for a supported legacy source; filesystem location alone does not imply Anvil ownership. Unowned files, package-manager trees, and symlinks are not followed or hashed as managed state. Rebuilds preserve regular extras and symlink objects, including broken links, without resolving their targets. If a new target path collides with a user-owned path, planning stops before any live change. Reforge can repair missing, changed, or symlink-replaced managed files when ownership remains trustworthy; it refuses an unreadable or altered manifest and an untrusted profile source.
 
@@ -36,30 +36,35 @@ OpenCode 2 uses plural `agents` and `plugins` fields and ordered permissions. It
 
 Callers use the central capability record rather than treating every Anvil release as one OpenCode generation. OpenCode 2 adds the local `anvil-core` plugin, native `anvil-knowledge` Reference, ordered permissions, bounded tool output, and structured stats JSON. OpenCode 1 uses its native config, commands/skills, and text stats; shared Python memory search and direct reads of explicitly named knowledge files provide the fallbacks. `scripts/capabilities.py` combines runtime, local/cached Databricks, and Anvil communication/artifact capabilities in one text or JSON result. Inventory commands do not contact Databricks; they show cached capability evidence and mark it stale after 15 minutes.
 
-## Progressive engineering continuity
+## Adaptive engineering depth and long-horizon continuity
 
-Complex engineering work uses the shared `engineering.py` CLI and `scripts/engineering/` package through a lazy skill. Requirements measure completeness, Architecture constrains implementation, and Work records progress. These are separate contracts published together in one private atomic generation under XDG_STATE_HOME/anvil/engineering. They are independent of durable memory, lifecycle transactions and OpenCode compaction internals. [Core contracts](engineering-internals.md) define evidence, revision, dependency and recovery behavior; [user guidance](engineering.md) describes activation/resume.
+The requested change governs activation; project size and existing task state do not. The always-loaded kernel keeps the understand/locate/act/proportionally-verify/stop loop. A task-local request normally leaves requirements, architecture and work state dormant even in a complex repository. Material uncertainty, public/component boundaries, persistent state, migrations, failure ownership or explicit continuation load only the relevant branch. Engineering depth rises or falls with the current decision.
+
+For genuine long-horizon work, the lazy `anvil-engineering` skill still provides separate Requirements, Architecture and Work models in atomic task state under XDG_STATE_HOME/anvil/engineering. Resume and completion gates remain strict. Architecture evidence is invalidated by changes inside its declared scope and milestone checkpoints evaluate only missing or stale relevant invariants; explicit unscoped `checkpoint` remains a full audit. These models remain independent of durable memory, lifecycle transactions and OpenCode compaction. [Core contracts](engineering-internals.md), [adaptive policy](adaptive-engineering.md), and [user guidance](engineering.md) describe operation and activation.
 
 ```mermaid
 flowchart TD
-    Request --> Scope[Assess scope from available evidence]
-    Scope --> Direct[Small task: existing direct loop]
-    Scope --> Normalize[Complex task: semantic specification analysis]
-    Normalize --> Requirements[Requirements: completeness]
-    Normalize --> Architecture[Architecture: constraints and decisions]
-    Normalize --> Work[Work: milestones and progress]
-    Requirements --> Unit[Select one coherent work unit]
-    Architecture --> Unit
-    Work --> Unit
-    Design[Lazy system design] --> Unit
-    Domain[Relevant Spark / Delta / Databricks skill] --> Unit
-    Unit --> Verify[Verify and checkpoint architecture]
-    Verify --> Update[Update evidence, coverage and progress]
-    Update --> Replan[Continue or replan from new evidence]
-    Replan --> Unit
+    Request --> Understand[Understand enough for the next decision]
+    Understand --> Clear{Is the next safe action clear?}
+    Clear -->|Yes| Locate[Locate minimum relevant evidence]
+    Locate --> Act[Act inside the known boundary]
+    Act --> Focused[Verify proportionally]
+    Focused --> Stop[Stop when sufficient evidence passes]
+    Clear -->|No / material risk| Expand[Identify the task-specific uncertainty or risk]
+    Expand --> Req[Relevant Requirements slice, if completeness is affected]
+    Expand --> Arch[Relevant Architecture boundary, if ownership/contract changes]
+    Expand --> Work[Relevant Work state, if coordination/resume is needed]
+    Expand --> Domain[Only relevant domain skill/evidence]
+    Req --> Decide[Resolve only the current decision]
+    Arch --> Decide
+    Work --> Decide
+    Domain --> Decide
+    Decide -->|Risk resolved| Locate
+    Decide -->|More evidence needed| Expand
+    Focused -->|Unexpected result| Expand
 ```
 
-The agent owns semantic extraction, decomposition, design and diagnosis. Deterministic modules own state, dependencies, coverage, mechanically testable invariants, command evidence, stale detection and completion. Semantic reviews are attributed judgments, never mislabeled as observed tests. Resume reconstructs a bounded packet and executes nothing; partial effects require inspection/reconciliation. Only a compact routing instruction is always loaded. Direct tasks do not create state or require the helper. Native runtime ownership, permissions, plugins and memory remain unchanged.
+The agent owns semantic scope/risk judgment, specification extraction, design and diagnosis. Deterministic modules own state integrity, dependencies, coverage, mechanically testable invariants, command evidence, path-scoped stale detection and completion. Architecture protects declared boundaries; it does not supervise private helpers. Semantic reviews are attributed judgments, never mislabeled as observed tests. Resume reconstructs a bounded packet and executes nothing; partial effects require inspection/reconciliation. The compact task-local loop is always loaded; direct work leaves unrelated long-horizon state dormant. Native runtime ownership, permissions, plugins and memory remain unchanged.
 
 ## Public command presentation
 

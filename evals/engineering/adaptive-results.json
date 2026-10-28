@@ -1,0 +1,365 @@
+{
+  "schema_version": 1,
+  "method": "Offline deterministic route evaluation against paired task rubrics; not model execution.",
+  "structured_baseline": {
+    "release": "Anvil 2.9.0",
+    "commit_prefix": "6b6401d",
+    "kernel_bytes": 3930,
+    "activation": "repository/request thresholds"
+  },
+  "adaptive_candidate": {
+    "release": "2.10.0",
+    "kernel_bytes": 3338,
+    "workflow_recommendation": "task triggers only; model judgment selects relevant branch"
+  },
+  "metrics": {
+    "cases": 18,
+    "adaptive_route_matches": 18,
+    "direct_cases_false_expanded_before": 8,
+    "direct_cases_false_expanded_after": 0,
+    "required_expansions_missed_before": 8,
+    "required_expansions_missed_after": 0,
+    "kernel_bytes_delta": -592,
+    "tool_calls": null,
+    "files_read": null,
+    "tests_run_by_model": null,
+    "state_writes_by_model": null,
+    "elapsed_model_seconds": null,
+    "model_tokens": null
+  },
+  "long_horizon_replay_comparison": {
+    "ingestion": {
+      "baseline": {
+        "successes": 3,
+        "runs": 3,
+        "verified_requirements_per_run": 12,
+        "all_architecture_invariants_pass": true,
+        "mean_architecture_check_evaluations": 20,
+        "mean_state_writes": 7,
+        "mean_verification_commands": 4,
+        "mean_elapsed_seconds": 0.7143333333333333
+      },
+      "adaptive": {
+        "successes": 3,
+        "runs": 3,
+        "verified_requirements_per_run": 12,
+        "all_architecture_invariants_pass": true,
+        "mean_architecture_check_evaluations": 4,
+        "mean_state_writes": 7,
+        "mean_verification_commands": 4,
+        "mean_elapsed_seconds": 0.7513333333333333
+      },
+      "architecture_check_delta": -16,
+      "architecture_check_reduction_percent": 80.0,
+      "state_write_delta": 0
+    },
+    "scheduler": {
+      "baseline": {
+        "successes": 3,
+        "runs": 3,
+        "verified_requirements_per_run": 7,
+        "all_architecture_invariants_pass": true,
+        "mean_architecture_check_evaluations": 8,
+        "mean_state_writes": 6,
+        "mean_verification_commands": 3,
+        "mean_elapsed_seconds": 0.456
+      },
+      "adaptive": {
+        "successes": 3,
+        "runs": 3,
+        "verified_requirements_per_run": 7,
+        "all_architecture_invariants_pass": true,
+        "mean_architecture_check_evaluations": 2,
+        "mean_state_writes": 6,
+        "mean_verification_commands": 3,
+        "mean_elapsed_seconds": 0.489
+      },
+      "architecture_check_delta": -6,
+      "architecture_check_reduction_percent": 75.0,
+      "state_write_delta": 0
+    }
+  },
+  "results": [
+    {
+      "id": "ingestion-local-null",
+      "expected": "DIRECT",
+      "structured_baseline": "LONG_HORIZON",
+      "adaptive": "DIRECT",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "DORMANT",
+        "architecture": "DORMANT",
+        "work_state": "DORMANT",
+        "system_design": false,
+        "spark_references": [],
+        "verification": "focused test"
+      }
+    },
+    {
+      "id": "ingestion-add-source-profile-field",
+      "expected": "DIRECT",
+      "structured_baseline": "LONG_HORIZON",
+      "adaptive": "DIRECT",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "DORMANT",
+        "architecture": "DORMANT",
+        "work_state": "DORMANT",
+        "system_design": false,
+        "spark_references": [],
+        "verification": "focused contract tests"
+      }
+    },
+    {
+      "id": "ingestion-source-predicate",
+      "expected": "DIRECT",
+      "structured_baseline": "LONG_HORIZON",
+      "adaptive": "DIRECT",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "DORMANT",
+        "architecture": "DORMANT",
+        "work_state": "DORMANT",
+        "system_design": false,
+        "spark_references": [],
+        "verification": "reader regression test"
+      }
+    },
+    {
+      "id": "ingestion-planner-boundary",
+      "expected": "EXPAND",
+      "structured_baseline": "LONG_HORIZON",
+      "adaptive": "EXPAND",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "relevant slice",
+        "architecture": "Planner/SourceReader boundary",
+        "work_state": "only if coordination is needed",
+        "system_design": true,
+        "spark_references": [],
+        "verification": "contract and dependency regression"
+      }
+    },
+    {
+      "id": "ingestion-execution-plan-contract",
+      "expected": "EXPAND",
+      "structured_baseline": "DIRECT",
+      "adaptive": "EXPAND",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "affected acceptance",
+        "architecture": "contract boundary",
+        "work_state": "only if cross-unit coordination is needed",
+        "system_design": true,
+        "spark_references": [],
+        "verification": "contract callers and focused regression"
+      }
+    },
+    {
+      "id": "ingestion-state-store-recovery",
+      "expected": "EXPAND",
+      "structured_baseline": "DIRECT",
+      "adaptive": "EXPAND",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "recovery acceptance",
+        "architecture": "state and retry ownership",
+        "work_state": "when interruption continuity is needed",
+        "system_design": true,
+        "spark_references": [],
+        "verification": "state/replay and interruption checks"
+      }
+    },
+    {
+      "id": "ingestion-new-runtime",
+      "expected": "EXPAND",
+      "structured_baseline": "DIRECT",
+      "adaptive": "EXPAND",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "runtime compatibility",
+        "architecture": "runtime adapter boundary",
+        "work_state": "when milestones are dependent",
+        "system_design": true,
+        "spark_references": [],
+        "verification": "adapter contract and lifecycle regressions"
+      }
+    },
+    {
+      "id": "ingestion-resume-milestone",
+      "expected": "EXPAND",
+      "structured_baseline": "DIRECT",
+      "adaptive": "EXPAND",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "current unit slice",
+        "architecture": "relevant decisions only",
+        "work_state": "resume current milestone",
+        "system_design": "only if a boundary decision remains",
+        "spark_references": [],
+        "verification": "inspect partial effects; do not replay"
+      }
+    },
+    {
+      "id": "utility-large-project-local-bug",
+      "expected": "DIRECT",
+      "structured_baseline": "LONG_HORIZON",
+      "adaptive": "DIRECT",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "DORMANT",
+        "architecture": "DORMANT",
+        "work_state": "DORMANT",
+        "system_design": false,
+        "spark_references": [],
+        "verification": "focused unit test"
+      }
+    },
+    {
+      "id": "utility-private-helper",
+      "expected": "DIRECT",
+      "structured_baseline": "LONG_HORIZON",
+      "adaptive": "DIRECT",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "DORMANT",
+        "architecture": "DORMANT",
+        "work_state": "DORMANT",
+        "system_design": false,
+        "spark_references": [],
+        "verification": "focused regression"
+      }
+    },
+    {
+      "id": "utility-public-api",
+      "expected": "EXPAND",
+      "structured_baseline": "DIRECT",
+      "adaptive": "EXPAND",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "compatibility acceptance",
+        "architecture": "public contract",
+        "work_state": "only if rollout needs continuity",
+        "system_design": true,
+        "spark_references": [],
+        "verification": "caller compatibility matrix"
+      }
+    },
+    {
+      "id": "utility-persistence-migration",
+      "expected": "EXPAND",
+      "structured_baseline": "LONG_HORIZON",
+      "adaptive": "EXPAND",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "data preservation and compatibility",
+        "architecture": "state ownership",
+        "work_state": "migration and rollback steps",
+        "system_design": true,
+        "spark_references": [],
+        "verification": "migration, recovery and rollback tests"
+      }
+    },
+    {
+      "id": "utility-local-validation",
+      "expected": "DIRECT",
+      "structured_baseline": "LONG_HORIZON",
+      "adaptive": "DIRECT",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "DORMANT",
+        "architecture": "DORMANT",
+        "work_state": "DORMANT",
+        "system_design": false,
+        "spark_references": [],
+        "verification": "focused parser tests"
+      }
+    },
+    {
+      "id": "utility-retry-ownership",
+      "expected": "EXPAND",
+      "structured_baseline": "DIRECT",
+      "adaptive": "EXPAND",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "retry behavior",
+        "architecture": "ownership and dependency boundary",
+        "work_state": "only if dependent work units need tracking",
+        "system_design": true,
+        "spark_references": [],
+        "verification": "retry ownership and failure matrix"
+      }
+    },
+    {
+      "id": "spark-config-rename",
+      "expected": "DIRECT",
+      "structured_baseline": "LONG_HORIZON",
+      "adaptive": "DIRECT",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "DORMANT",
+        "architecture": "DORMANT",
+        "work_state": "DORMANT",
+        "system_design": false,
+        "spark_references": [],
+        "verification": "focused config check"
+      }
+    },
+    {
+      "id": "spark-arrow-spill-diagnosis",
+      "expected": "EXPAND",
+      "structured_baseline": "DIRECT",
+      "adaptive": "EXPAND",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "DORMANT",
+        "architecture": "DORMANT unless ownership changes",
+        "work_state": "DORMANT",
+        "system_design": false,
+        "spark_references": [
+          "execution-model",
+          "arrow",
+          "memory-spill",
+          "skew",
+          "diagnostics"
+        ],
+        "verification": "targeted Spark evidence and controlled comparison"
+      }
+    },
+    {
+      "id": "system-design-parser-fix",
+      "expected": "DIRECT",
+      "structured_baseline": "LONG_HORIZON",
+      "adaptive": "DIRECT",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "DORMANT",
+        "architecture": "DORMANT",
+        "work_state": "DORMANT",
+        "system_design": false,
+        "spark_references": [],
+        "verification": "focused parser test"
+      }
+    },
+    {
+      "id": "system-design-explicit-review",
+      "expected": "EXPAND",
+      "structured_baseline": "DIRECT",
+      "adaptive": "EXPAND",
+      "matches": true,
+      "branch_rubric": {
+        "requirements": "named acceptance only",
+        "architecture": "affected owners and failure paths",
+        "work_state": "DORMANT unless this is resumed project work",
+        "system_design": true,
+        "spark_references": [],
+        "verification": "state and recovery regressions"
+      }
+    }
+  ],
+  "limitations": [
+    "Branch rubrics are evaluation expectations; the offline runner validates only deterministic task signals.",
+    "No OpenCode executable is installed in this environment, so real-model behavior, tool usage, file reads, tests and tokens were not measured.",
+    "Kernel bytes are a source-size proxy, not a token or latency measurement."
+  ]
+}

@@ -47,9 +47,20 @@ class EngineeringTests(unittest.TestCase):
     def test_fast_path_escalation_and_disable_without_state(self):
         for request in ("Rename one field", "Fix one validation", "Update the README", "Change a test assertion"):
             self.assertEqual(specification.assess(request, {"files": 1})["workflow"], "DIRECT")
-        self.assertEqual(specification.assess("Evolved scope", {"cross_component": True})["workflow"], "LONG_HORIZON")
+        local_in_complex_repo = specification.assess("Fix null handling in PartitionPlanner", {
+            "requirements": 120, "subsystems": 12, "files": 500, "milestones": 8,
+            "acceptance_criteria": 60, "cross_component": True,
+        })
+        self.assertEqual(local_in_complex_repo["workflow"], "DIRECT")
+        self.assertEqual(len(local_in_complex_repo["project_context"]), 6)
+        self.assertEqual(local_in_complex_repo["state_created"], False)
+        long_local_request = specification.assess("Fix one local condition. " + "context " * 1000, {"files": 500})
+        self.assertEqual(long_local_request["workflow"], "DIRECT")
+        self.assertIn("long_request_text", long_local_request["project_context"])
+        self.assertEqual(specification.assess("Change the state ownership boundary", {"state_ownership_change": True})["workflow"], "EXPAND")
+        self.assertEqual(specification.assess("Implement a migration", {"migration": True})["workflow"], "EXPAND")
         with mock.patch.dict(os.environ, {"ANVIL_ENGINEERING": "off"}):
-            self.assertEqual(specification.assess("Large task", {"milestones": 8})["workflow"], "DIRECT")
+            self.assertEqual(specification.assess("Large task", {"migration": True})["workflow"], "DIRECT")
         self.assertFalse(store.state_root().exists())
         self.assertFalse((self.base / "data").exists())
 
@@ -93,6 +104,20 @@ class EngineeringTests(unittest.TestCase):
         engine.checkpoint(state, project)
         self.assertEqual(state["models"]["work"]["milestones"][0]["status"], "COMPLETE")
 
+    def test_milestone_checkpoint_checks_only_missing_scoped_invariants(self):
+        project = prepare(self.base)
+        state = engine.create("milestone-scope", project, project / "specification.md", models())
+        engine.start(state, project, "T1")
+        for name in ("contracts.py", "inputs.py"):
+            shutil.copy2(ROOT / "evals/engineering/ingestion/solution" / name, project / name)
+        engine.implement(state, project, "T1", ["contracts.py", "inputs.py"])
+        engine.check(state, project, "T1", "C1")
+        result = engine.checkpoint(state, project, milestone_id="M1")
+        self.assertEqual(result, {"A1": "PASS"})
+        self.assertEqual(engine.conformance(state), {"A1": "PASS", "A2": "UNKNOWN", "A3": "UNKNOWN", "A4": "UNKNOWN"})
+        self.assertEqual(state["models"]["work"]["milestones"][0]["status"], "COMPLETE")
+        self.assert_code("VERIFICATION_FAILED", engine.checkpoint, state, project, "M2")
+
     def test_ingestion_interruption_compaction_and_coverage(self):
         state, project, path = replay(self.base)
         self.assertEqual(state["status"], "COMPLETE")
@@ -121,6 +146,7 @@ class EngineeringTests(unittest.TestCase):
         result = engine.revalidate(state, project, "Observed external execution edit")
         self.assertEqual(result["affected_tasks"], ["T3", "T4"])
         self.assertEqual(engine.tasks(state)["T1"]["status"], "VERIFIED")
+        self.assertEqual(engine.conformance(state), {"A1": "PASS", "A2": "PASS", "A3": "PASS", "A4": "PASS"})
         self.assert_code("VERIFICATION_FAILED", engine.finish, state, project)
 
     def test_spec_change_replans_affected_requirements(self):

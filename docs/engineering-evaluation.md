@@ -1,41 +1,66 @@
-# Engineering evaluation and evidence
+# Adaptive engineering evaluation and evidence
 
-Baseline: `bd8b21e`, Anvil 2.8.0. Its mandatory offline suite passed in 336.71 seconds before activation changes. The baseline has no structured engineering-state helper. `evals/engineering/baseline.json` records that observation; it does not claim that a model failed a coding task.
+## Method
 
-The candidate has two independent offline fixtures. The ingestion slice exercises generic contracts, environment input, source profiles, two local source types, two runtime capability labels, physical planning, sink/progress ordering, append-only history, stable-key output, duplicate recovery and architecture boundaries. The local scheduler exercises job intent, deterministic bounded selection, two injected handlers, retry ownership and acknowledgement/replay without data-system assumptions. Each fixture has a specification, explicit normalized models, a clean starter, behavior acceptance and reference implementation used only for protocol replay.
+The structured baseline is Anvil 2.9.0 at commit `6b6401d`. The adaptive candidate is the current 2.10.0 source. The baseline protocol was replayed from a clean source archive; the candidate uses the same ingestion and unrelated scheduler fixtures, explicit models, injected boundary violations, interrupted milestone and recovery sequence. Each side ran three times. Raw protocol evidence is in [`adaptive-baseline.json`](../evals/engineering/adaptive-baseline.json) and [`results.json`](../evals/engineering/results.json).
 
-Three candidate replays per fixture completed successfully. Ingestion verified 12/12 required requirements and four individually reported invariants; scheduler verified 7/7 and two invariants. Each discards in-memory history during partial milestone 2, reconstructs state, inspects/reconciles partial effects and continues. Injected dependency leaks are detected. These are deterministic harness continuity/conformance results, not evidence that an LLM autonomously extracted or implemented those requirements.
+The paired activation rubric has 18 task cases across the complex ingestion project, an unrelated utility service, Spark, and System Design. It covers local bug/validation/field changes, contracts, architecture ownership, state/migration, a new runtime, resume, Spark diagnosis and explicit deep review. Each case includes the expected evidence branches, including when those branches should stay dormant. [`adaptive.py`](../evals/engineering/adaptive.py) compares its deterministic route helper with the prior 2.9 activation rule and confirms the rubric. It does not run an LLM or establish that a model follows the branch rubric.
 
-| Observation | Baseline | Candidate |
-| --- | --- | --- |
-| Structured operational continuity after conversation loss | No native store | Objective, architecture, requirements, progress, blockers, evidence and next action reconstructed |
-| Required-coverage completion gate | Agent judgment | Deterministic linked-evidence gate |
-| Mechanical boundary checks | Project-dependent | Explicit scoped AST/text/file checks |
-| Ingestion protocol replay | Unavailable | 3/3 successful; 12 required verified |
-| Unrelated scheduler protocol replay | Unavailable | 3/3 successful; 7 required verified |
-| Always-loaded AGENTS.md | 3,724 bytes | 3,930 bytes (+206, within the existing 4,200-byte gate) |
-| Tiny-task state writes | None expected | None in direct-path regressions |
-| Real-model success, tokens, exploration, latency, design quality | Not measured | Not measured |
+## Paired results
 
-The added permanent instruction addresses the demonstrated long-spec/compaction continuity failure and routes to lazy capability details. New skill discovery metadata also consumes context; exact provider token counts and real-model selection overhead were not measured. Reference bodies and state operations are not loaded/executed on startup. Deterministic task assessment uses already supplied scope signals and never scans a repository. No claim of reduced model tokens or improved autonomous completion follows from byte counts or replay timings.
+| Fixture | Baseline quality | Adaptive quality | Architecture checks per replay | State writes per replay | Verification commands per replay | Mean replay time |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| Ingestion | 3/3 complete; 12/12 required; 4/4 invariants PASS | 3/3 complete; 12/12 required; 4/4 invariants PASS | 20 → 4 (**−80%**) | 7 → 7 | 4 → 4 | 0.714 s → 0.751 s |
+| Scheduler | 3/3 complete; 7/7 required; 2/2 invariants PASS | 3/3 complete; 7/7 required; 2/2 invariants PASS | 8 → 2 (**−75%**) | 6 → 6 | 3 → 3 | 0.456 s → 0.489 s |
 
-Run mandatory regressions with `make test`. Run repeatable reports separately:
+The architecture-check reduction comes from evidence scope and milestone gating: an unrelated or unchanged invariant retains its valid PASS, while a changed invariant is reevaluated at the relevant completed milestone. All final required coverage and invariants still pass. State-write counts are actual `store.save/update` calls made by this deterministic replay protocol; they are not an estimate of how many helper commands or writes a live agent session would issue. The helper's atomic generation, locking, revision, and recovery semantics are unchanged.
+
+The replay times are subsecond harness timings and show no reliable latency improvement. They should not be interpreted as model/user task speedups.
+
+The 2.9 release had separate official OpenCode 1.19.3 and 2.0.31 profile checks. Anvil 2.10 makes no runtime/config adapter change; this release's mandatory suite validates generated V1/V2 profiles with local runtime fixtures. No new official binary smoke check was run for 2.10.
+
+## Task-local activation results
+
+| Metric | Structured 2.9 rule | Adaptive 2.10 helper/rubric | Result |
+| --- | ---: | ---: | --- |
+| Paired task cases | — | 18 | All 18 routes matched authored expectations |
+| Low-risk cases falsely routed to long-horizon | 8 | 0 | Project counts and long context no longer force expansion |
+| Cases needing expansion but missed | 8 | 0 | Explicit contract/state/boundary/resume/domain-risk signals are recognized |
+| Always-loaded kernel | 3,930 bytes | 3,338 bytes | −592 bytes (−15.1% by source size) |
+
+The 18/18 result validates only the deterministic helper route against the case rubric. Deeper branch selection remains semantic model judgment. The byte delta is a source-size comparison, not a provider token or latency measurement.
+
+## Metrics not measured
+
+No OpenCode executable or configured live model runner is available in this environment. Therefore the following remain **NOT MEASURED**:
+
+- Autonomous success and semantic quality on the adaptive task prompts.
+- Tool calls, files read, test commands selected by a model, persistent writes in a live session, and user-task elapsed time.
+- Provider-reported context/tokens and real-world task completion latency.
+- Live Spark/Databricks workload performance or production ingestion-engine behavior.
+
+The deterministic long-horizon protocol tests preserve coverage, architecture evidence, interruption/resume behavior and state-write counts; they cannot substitute for those model measurements. The case rubrics are ready for future paired live evaluation under the same OpenCode binary, model, provider budget and isolated fixture. No performance claim is made from hidden reasoning, printed steps, or protocol timings.
+
+## Reproduction
 
 ```bash
 python3 tests/engineering.py
-python3 evals/engineering/run.py --mode replay --repeats 3 --output /tmp/anvil-engineering-eval.json
+python3 evals/engineering/run.py --mode replay --repeats 3 --output /tmp/anvil-adaptive-replay.json
+python3 evals/engineering/adaptive.py --output /tmp/anvil-adaptive-routes.json
 ```
 
-The optional live harness starts clean fixture projects with a specified OpenCode binary/model and generated isolated config; it never changes the installed runtime or copies auth state. Supported provider environment authentication must be supplied by the caller. It checks implementation acceptance and boundary invariants, collects bounded numeric usage/tool telemetry where the event schema provides it, and discards transcript content. No private reasoning is logged. Unmeasured metrics remain null.
+The optional OpenCode harness remains available for the explicit long-horizon ingestion/scheduler fixture:
 
 ```bash
 python3 evals/engineering/run.py --mode live --fixture ingestion --repeats 3 \
   --opencode /absolute/path/to/opencode --model PROVIDER/MODEL --major 1 \
-  --profile full --output /tmp/candidate-model-eval.json
+  --profile full --output /tmp/anvil-live-eval.json
 ```
 
-For a baseline use `--profile-root /path/to/baseline-checkout --profile base`. Other protocol profiles are `work`, `work-architecture`, `full-no-system-design`, and `full-no-deep-spark`. These are requested ablations, not proof that a model obeyed them; inspect observed behavior before causal attribution. The separate schemas/modules and domain references permit component comparisons without a production multi-agent/model-routing system. Repeat across models under comparable budgets where available.
+It uses temporary HOME/XDG roots and does not copy auth state. Provider authentication must be supplied through supported environment configuration. It records only bounded tool-call counts, numeric token usage when the event schema exposes it, output digest and acceptance results; private reasoning and transcripts are not retained. Current live task behavior was not run here.
 
-`system-design-cases.json` supplies eight responsibility/pattern/failure/evolution cases, including justified and speculative abstraction. `spark-cases.json` supplies 13 evidence/mechanism cases covering JDBC, mapInArrow, Python/JVM, Arrow types, spill, shuffle, skew, source ranges, AQE, DataSource V2, Photon, Delta and missing evidence. Their rubrics require explicit semantic review; static wording tests do not prove depth. `review_cases.py` validates bounded response/adjudication contracts separately from substantive judgment.
+## Ablation and assurance
 
-Official OpenCode 1.19.3 and 2.0.31 artifacts were digest-verified and validated using generated candidate profiles in temporary HOME/XDG roots. Native config/agent/command/skill discovery passed; the V2 plugin and knowledge Reference passed. No external model, real Spark workload or Databricks workspace was exercised. Remaining external evaluation is explicit, optional, and not part of mandatory offline correctness. Release recommendation: READY WITH KNOWN LIMITATIONS. The final complete offline/lifecycle suite passed in 367.06 seconds; evidence is recorded in `evals/engineering/release-evidence.json`.
+The offline comparison ablates the previous repository-count activation rule and the previous all-invariants-at-each-checkpoint behavior against task-local signals and scoped milestone checks. Progressive requirements/Work loading and semantic domain-skill selection need model execution for a causal ablation, so they were not scored. Existing requirement models, architecture invariants, Work state, stale detection, crash-safe writes, completion gates, System Design and Spark references remain available; new negative cases require them to stay dormant for local work.
+
+Mandatory release validation is the offline `make test` suite, including existing lifecycle/runtime fixtures and long-horizon quality/resume regressions. The 2.9 suite record remains in [`release-evidence.json`](../evals/engineering/release-evidence.json); this release's result is recorded in [`adaptive-release-evidence.json`](../evals/engineering/adaptive-release-evidence.json). OpenCode 1/2 runtime policy and generated profile structure are unchanged; this release requires no runtime migration.

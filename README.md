@@ -4,7 +4,7 @@
 >
 > **Better harness. Better execution.**
 
-Anvil 2.9.0 adds progressive engineering continuity for long specifications, separate requirements/architecture/work models, safe resume, system design and evidence-driven Spark depth. Small tasks retain the direct workflow; OpenCode 1/2, memory, Databricks and artifact capabilities remain supported.
+Anvil 2.10.0 adds adaptive engineering depth: direct local work stays direct, while requirements, architecture, work-state and domain reasoning expand only when task risk or uncertainty calls for them. Long-horizon quality, resumable state, OpenCode 1/2, memory, Databricks and artifact capabilities remain supported.
 
 ```bash
 # First installation
@@ -105,11 +105,11 @@ On OpenCode 2, Anvil's local `anvil-core` plugin exposes one bounded, read-only 
 
 Anvil configures one model-neutral `anvil` primary agent. No model is pinned; select models through OpenCode as usual. The four built-in user-facing agents are disabled, subagents are denied, and no MCP servers are enabled by default. Allowlisted skills cover memory, Spark performance, Delta Lake, Databricks, data ingestion, communication artifacts, engineering continuity and system design.
 
-## Long engineering tasks
+## Adaptive engineering depth
 
-For a large specification or architecture-heavy implementation, ask Anvil to track requirements, architectural invariants and milestones. The lazy `anvil-engineering` skill uses a local deterministic helper to preserve progress, verification evidence and next action across interruption/compaction. Requirements, Architecture and Work are distinct models; execution state is separate from durable memory. Resume detects changed repository/specification evidence and executes no work automatically. Small isolated edits create no store or mandatory plan.
+Anvil judges the requested change, not the size or complexity of its repository. A local fix stays in the direct loop even when a long project is active; unrelated Work Model state remains dormant. Anvil expands into the relevant requirement, architecture, state, or domain evidence when uncertainty or meaningful risk changes the next safe action, then narrows again when that decision is resolved. No `/fast`, `/deep`, or other user mode is required.
 
-`anvil-system-design` provides a compact responsibility/dependency/failure framework. The existing Spark skill progressively loads focused references for execution, JDBC, Arrow, AQE, shuffle/skew, memory, Photon, Delta and streaming. No additional agent, model route, runtime upgrade or Python dependency is required. See [the engineering guide](docs/engineering.md), [core contracts](docs/engineering-internals.md), and [evaluation evidence and limitations](docs/engineering-evaluation.md).
+For genuine multi-milestone work, `anvil-engineering` retains separate Requirements, Architecture, and Work models, crash-safe resume, and completion gates. Architecture checks reuse valid evidence and run only for the affected boundary at a completed milestone. `anvil-system-design` and Spark internals remain lazy. See [adaptive engineering](docs/adaptive-engineering.md), [the engineering guide](docs/engineering.md), and [evaluation evidence and limitations](docs/engineering-evaluation.md).
 
 ## Communication and artifacts
 
@@ -129,4 +129,4 @@ Numerical values remain tied to evidence IDs. The deterministic core separates a
 
 ## Version history
 
-See the [Anvil 2.9.0 release notes](docs/versions/v2.9.0.md), [lifecycle migration guide](docs/migrations/v2.7.1-to-v2.8.0.md), [system map](docs/system-map.md), [full-system quality audit](docs/quality-audit.md), [communication and artifact architecture](docs/communication-artifact-intelligence.md), [public command contracts](docs/command-contracts.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).
+See the [Anvil 2.10.0 release notes](docs/versions/v2.10.0.md), [2.9-to-2.10 migration guide](docs/migrations/v2.9.0-to-v2.10.0.md), [system map](docs/system-map.md), [full-system quality audit](docs/quality-audit.md), [communication and artifact architecture](docs/communication-artifact-intelligence.md), [public command contracts](docs/command-contracts.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).

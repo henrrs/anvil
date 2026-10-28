@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "release": "2.10.0",
+  "checked_at": "2026-10-27",
+  "recommendation": "READY WITH KNOWN LIMITATIONS",
+  "mandatory_suite": {
+    "command": "make test",
+    "result": "PASS",
+    "exit_code": 0,
+    "elapsed_seconds": 409.24,
+    "log_sha256": "d3014baa7a9a3ba2a27208b3979b60824088ee16b8b4186a81c66b2e864b9d7c",
+    "external_network_required": false,
+    "engineering_unit_tests": 25,
+    "runtime_profiles": [
+      "OpenCode 1.18.18 fixture",
+      "OpenCode 2.0.0 fixture"
+    ]
+  },
+  "adaptive_route_evaluation": {
+    "command": "python3 evals/engineering/adaptive.py --output evals/engineering/adaptive-results.json",
+    "result": "PASS",
+    "method": "Offline deterministic route evaluation against paired task rubrics; not model execution.",
+    "metrics": {
+      "cases": 18,
+      "adaptive_route_matches": 18,
+      "direct_cases_false_expanded_before": 8,
+      "direct_cases_false_expanded_after": 0,
+      "required_expansions_missed_before": 8,
+      "required_expansions_missed_after": 0,
+      "kernel_bytes_delta": -592,
+      "tool_calls": null,
+      "files_read": null,
+      "tests_run_by_model": null,
+      "state_writes_by_model": null,
+      "elapsed_model_seconds": null,
+      "model_tokens": null
+    },
+    "artifact_sha256": "2ba668774a08af9a06c345f0316ddb3f8b9fc55aeee39bc36cd4a37d9e5eb884"
+  },
+  "long_horizon_protocol_evaluations": {
+    "command": "python3 evals/engineering/run.py --mode replay --repeats 3",
+    "result": "PASS",
+    "fixtures": {
+      "ingestion": {
+        "baseline": {
+          "successes": 3,
+          "runs": 3,
+          "verified_requirements_per_run": 12,
+          "all_architecture_invariants_pass": true,
+          "mean_architecture_check_evaluations": 20,
+          "mean_state_writes": 7,
+          "mean_verification_commands": 4,
+          "mean_elapsed_seconds": 0.7143333333333333
+        },
+        "adaptive": {
+          "successes": 3,
+          "runs": 3,
+          "verified_requirements_per_run": 12,
+          "all_architecture_invariants_pass": true,
+          "mean_architecture_check_evaluations": 4,
+          "mean_state_writes": 7,
+          "mean_verification_commands": 4,
+          "mean_elapsed_seconds": 0.7513333333333333
+        },
+        "architecture_check_delta": -16,
+        "architecture_check_reduction_percent": 80.0,
+        "state_write_delta": 0
+      },
+      "scheduler": {
+        "baseline": {
+          "successes": 3,
+          "runs": 3,
+          "verified_requirements_per_run": 7,
+          "all_architecture_invariants_pass": true,
+          "mean_architecture_check_evaluations": 8,
+          "mean_state_writes": 6,
+          "mean_verification_commands": 3,
+          "mean_elapsed_seconds": 0.456
+        },
+        "adaptive": {
+          "successes": 3,
+          "runs": 3,
+          "verified_requirements_per_run": 7,
+          "all_architecture_invariants_pass": true,
+          "mean_architecture_check_evaluations": 2,
+          "mean_state_writes": 6,
+          "mean_verification_commands": 3,
+          "mean_elapsed_seconds": 0.489
+        },
+        "architecture_check_delta": -6,
+        "architecture_check_reduction_percent": 75.0,
+        "state_write_delta": 0
+      }
+    },
+    "method": "deterministic reference-implementation replay; not autonomous model coding",
+    "artifact_sha256": "efd1af2025dca8b532a87539f90de3ba3a9f08db1c3dc2efa99d13bc054b9d66"
+  },
+  "other_checks": {
+    "version_docs": "PASS",
+    "three_skill_validations": "PASS",
+    "offline_databricks_contracts": "PASS",
+    "local_documentation_and_release_consistency": "PASS",
+    "diff_whitespace": "PASS"
+  },
+  "compatibility": {
+    "OpenCode_1_and_2_offline_profiles": "PASS",
+    "runtime_migration_required": false,
+    "long_horizon_requirements_architecture_work_resume": "PASS",
+    "lifecycle_upgrade_reforge_rollback": "PASS"
+  },
+  "context": {
+    "baseline_kernel_bytes": 3930,
+    "candidate_kernel_bytes": 3338,
+    "kernel_bytes_delta": -592,
+    "measured_model_tokens": null,
+    "live_model_tool_calls_files_tests_latency": null
+  },
+  "limitations": [
+    "No OpenCode executable or configured live model runner was available; autonomous behavior, model-selected tools/tests, files read, tokens and user-task latency were not measured.",
+    "Adaptive route results validate deterministic task signals against authored rubrics; they do not prove model branch-selection behavior.",
+    "Replay timing is subsecond protocol execution and is not a real task speed or latency measurement.",
+    "No live Spark workload, Databricks workspace, or production ingestion job was used."
+  ]
+}

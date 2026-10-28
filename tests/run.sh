@@ -246,6 +246,20 @@ pass 'Communication and artifact intelligence runs deterministic offline regress
 python3 "$ROOT/tests/engineering.py" || fail 'engineering state, interruption, stale evidence and direct-path regressions'
 python3 "$ROOT/evals/engineering/run.py" --mode replay --repeats 2 --output "$tmp_root/engineering-eval.json" || fail 'ingestion and unrelated scheduler engineering replays'
 pass 'Engineering models, atomic recovery, conformance, compaction and unrelated-domain replays'
+python3 "$ROOT/evals/engineering/adaptive.py" --output "$tmp_root/adaptive-eval.json" || fail 'task-local adaptive activation cases'
+python3 - "$tmp_root/adaptive-eval.json" <<'PY' || fail 'adaptive execution route and selective architecture evidence comparison'
+import json,sys
+data=json.load(open(sys.argv[1],encoding="utf-8"))
+metrics=data["metrics"]
+assert metrics["adaptive_route_matches"] == metrics["cases"] == 18
+assert metrics["direct_cases_false_expanded_after"] == 0
+assert metrics["required_expansions_missed_after"] == 0
+for result in data["long_horizon_replay_comparison"].values():
+    assert result["adaptive"]["all_architecture_invariants_pass"]
+    assert result["architecture_check_reduction_percent"] > 0
+    assert result["state_write_delta"] == 0
+PY
+pass 'Adaptive activation separates task risk from project size and reuses valid scoped architecture evidence'
 python3 "$ROOT/tests/lifecycle.py" "$ROOT" "$candidate_v2" "$version_v2" "$candidate_v1" "$version_v1" "$tmp_root" || fail 'upgrade/reforge/migrate-runtime/rollback lifecycle integration'
 
 python3 - "$ROOT" "$tmp_root/stats-sample.json" <<'PY' || fail 'native stats formatter'

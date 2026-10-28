@@ -1,9 +1,11 @@
 ---
 name: anvil-spark-performance
-description: Use when a Spark workload is slow, unstable, resource-heavy, or needs performance review using plans, stages, task distributions, shuffle, skew, spill, AQE, and executor/runtime evidence. Do not use for Delta transaction correctness or source-ingestion design unless Spark execution performance is the question.
+description: Use when this task diagnoses Spark execution performance from plans, stages, task distributions, shuffle, skew, spill, AQE or runtime evidence. Do not use for simple config/name edits, Delta correctness, or ingestion design unless execution performance is at issue.
 ---
 
 # Spark performance diagnosis
+
+A config-key rename or local typo stays on the direct engineering path; a Spark repository or dependency alone does not call for deep performance analysis. Load only the references needed by the current evidence, and return to the local loop once the bottleneck decision is made.
 
 Follow symptom → execution evidence → physical mechanism → competing hypotheses → discriminating evidence → intervention → benchmark. A slow job alone does not justify more workers, partitions or caching. Establish code/query, source/input shape, runtime/version, executor layout and repeat conditions. Distinguish measured facts (OBSERVED), corroborated mechanisms (SUPPORTED), hypotheses (INFERRED) and missing evidence (UNKNOWN).
 

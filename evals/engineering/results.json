@@ -37,7 +37,7 @@
           "interruption_and_compaction": "PASS",
           "duplicate_resume_execution": false,
           "counters": {
-            "architecture_checkpoint": 5,
+            "architecture_checkpoint": 4,
             "created": 1,
             "implemented": 4,
             "started": 5,
@@ -47,7 +47,10 @@
             "reviewed": 1,
             "completed": 1
           },
-          "latency_seconds": 0.773,
+          "latency_seconds": 0.74,
+          "state_writes": 7,
+          "architecture_check_evaluations": 4,
+          "verification_commands": 4,
           "milestones_created": 4,
           "tasks_completed": 4,
           "replans": 0,
@@ -55,7 +58,7 @@
           "final_architecture_violations": 0,
           "resume_observations": [
             {
-              "resume_packet_bytes": 4529,
+              "resume_packet_bytes": 4526,
               "current_milestone": "M2",
               "verified_tasks_preserved": 1,
               "state_stale_detected": true
@@ -98,7 +101,7 @@
           "interruption_and_compaction": "PASS",
           "duplicate_resume_execution": false,
           "counters": {
-            "architecture_checkpoint": 5,
+            "architecture_checkpoint": 4,
             "created": 1,
             "implemented": 4,
             "started": 5,
@@ -108,7 +111,10 @@
             "reviewed": 1,
             "completed": 1
           },
-          "latency_seconds": 0.743,
+          "latency_seconds": 0.716,
+          "state_writes": 7,
+          "architecture_check_evaluations": 4,
+          "verification_commands": 4,
           "milestones_created": 4,
           "tasks_completed": 4,
           "replans": 0,
@@ -116,7 +122,7 @@
           "final_architecture_violations": 0,
           "resume_observations": [
             {
-              "resume_packet_bytes": 4529,
+              "resume_packet_bytes": 4526,
               "current_milestone": "M2",
               "verified_tasks_preserved": 1,
               "state_stale_detected": true
@@ -159,7 +165,7 @@
           "interruption_and_compaction": "PASS",
           "duplicate_resume_execution": false,
           "counters": {
-            "architecture_checkpoint": 5,
+            "architecture_checkpoint": 4,
             "created": 1,
             "implemented": 4,
             "started": 5,
@@ -169,7 +175,10 @@
             "reviewed": 1,
             "completed": 1
           },
-          "latency_seconds": 0.705,
+          "latency_seconds": 0.798,
+          "state_writes": 7,
+          "architecture_check_evaluations": 4,
+          "verification_commands": 4,
           "milestones_created": 4,
           "tasks_completed": 4,
           "replans": 0,
@@ -177,7 +186,7 @@
           "final_architecture_violations": 0,
           "resume_observations": [
             {
-              "resume_packet_bytes": 4529,
+              "resume_packet_bytes": 4526,
               "current_milestone": "M2",
               "verified_tasks_preserved": 1,
               "state_stale_detected": true
@@ -222,7 +231,7 @@
           "interruption_and_compaction": "PASS",
           "duplicate_resume_execution": false,
           "counters": {
-            "architecture_checkpoint": 4,
+            "architecture_checkpoint": 3,
             "created": 1,
             "implemented": 3,
             "started": 4,
@@ -232,7 +241,10 @@
             "reviewed": 1,
             "completed": 1
           },
-          "latency_seconds": 0.477,
+          "latency_seconds": 0.482,
+          "state_writes": 6,
+          "architecture_check_evaluations": 2,
+          "verification_commands": 3,
           "milestones_created": 3,
           "tasks_completed": 3,
           "replans": 0,
@@ -240,7 +252,7 @@
           "final_architecture_violations": 0,
           "resume_observations": [
             {
-              "resume_packet_bytes": 3692,
+              "resume_packet_bytes": 3689,
               "current_milestone": "M2",
               "verified_tasks_preserved": 1,
               "state_stale_detected": true
@@ -279,7 +291,7 @@
           "interruption_and_compaction": "PASS",
           "duplicate_resume_execution": false,
           "counters": {
-            "architecture_checkpoint": 4,
+            "architecture_checkpoint": 3,
             "created": 1,
             "implemented": 3,
             "started": 4,
@@ -289,7 +301,10 @@
             "reviewed": 1,
             "completed": 1
           },
-          "latency_seconds": 0.434,
+          "latency_seconds": 0.51,
+          "state_writes": 6,
+          "architecture_check_evaluations": 2,
+          "verification_commands": 3,
           "milestones_created": 3,
           "tasks_completed": 3,
           "replans": 0,
@@ -297,7 +312,7 @@
           "final_architecture_violations": 0,
           "resume_observations": [
             {
-              "resume_packet_bytes": 3692,
+              "resume_packet_bytes": 3689,
               "current_milestone": "M2",
               "verified_tasks_preserved": 1,
               "state_stale_detected": true
@@ -336,7 +351,7 @@
           "interruption_and_compaction": "PASS",
           "duplicate_resume_execution": false,
           "counters": {
-            "architecture_checkpoint": 4,
+            "architecture_checkpoint": 3,
             "created": 1,
             "implemented": 3,
             "started": 4,
@@ -346,7 +361,10 @@
             "reviewed": 1,
             "completed": 1
           },
-          "latency_seconds": 0.469,
+          "latency_seconds": 0.475,
+          "state_writes": 6,
+          "architecture_check_evaluations": 2,
+          "verification_commands": 3,
           "milestones_created": 3,
           "tasks_completed": 3,
           "replans": 0,
@@ -354,7 +372,7 @@
           "final_architecture_violations": 0,
           "resume_observations": [
             {
-              "resume_packet_bytes": 3692,
+              "resume_packet_bytes": 3689,
               "current_milestone": "M2",
               "verified_tasks_preserved": 1,
               "state_stale_detected": true
@@ -373,7 +391,5 @@
     "Replay measures deterministic continuity/conformance, not model reasoning or coding quality.",
     "Tool/model token fields are null when unmeasured; no hidden reasoning is retained.",
     "Live profile ablations are requested protocols; inspect observed skill use before attributing causality."
-  ],
-  "candidate_version": "2.9.0",
-  "engineering_core_sha256": "1ba1692143125f59ac1dd07d021c49866da97b865f160be42afc786e230819b2"
+  ]
 }

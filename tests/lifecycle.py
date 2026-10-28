@@ -388,9 +388,9 @@ def lifecycle_version_order_test() -> None:
     check(parse_version("2.10.0") == (2, 10, 0), "semantic version parser did not retain numeric minor ordering")
     check(compare_versions("2.10.0", "2.9.9") == 1, "semantic version ordering compared minor releases lexically")
     check(compare_versions("2.08.0", "2.8.0") is None, "semantic version parser accepted a non-canonical leading zero")
-    check(supported_migration("2.6.1", "2.9.0"), "backward-compatible three-minor source window was rejected")
-    check(not supported_migration("2.5.9", "2.9.0"), "source outside the three-minor window was accepted")
-    check(not supported_migration("2.9.0", "2.8.0"), "a newer installed release was treated as migratable")
+    check(supported_migration("2.6.1", "2.10.0"), "2.10 rejected a source release still supported by 2.9")
+    check(not supported_migration("2.5.9", "2.10.0"), "source outside the four-minor compatibility window was accepted")
+    check(not supported_migration("2.10.0", "2.9.0"), "a newer installed release was treated as migratable")
     print("PASS semantic release ordering, supported source window, and downgrade rejection")
 
 

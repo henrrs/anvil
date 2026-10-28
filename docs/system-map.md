@@ -1,6 +1,6 @@
 # Anvil System Map
 
-This map describes the repository at Anvil 2.9.0. It follows the public Make targets through configuration, lifecycle, runtime, providers, persistent state, and local verification. The companion [quality audit](quality-audit.md) records evidence, findings, and confidence.
+This map describes the repository at Anvil 2.10.0. It follows the public Make targets through configuration, lifecycle, runtime, providers, persistent state, and local verification. The companion [quality audit](quality-audit.md) records evidence, findings, and confidence.
 
 ## Shape and data flow
 
@@ -34,7 +34,7 @@ Anvil owns the global OpenCode harness, its lifecycle, explicit Markdown memory,
 
 ## Executable inventory
 
-The repository contains 56 Python files and 15 shell files under `scripts/` (71 executable source files), 5 top-level test drivers, and 35 files under `config/`. The six shipped skills and four slash commands are versioned in [`config/managed-inventory.json`](../config/managed-inventory.json). OpenCode profiles and runtime policy are under `config/`; release behavior is described in the changelog, version notes, migration notes, and command contracts.
+The repository contains 56 Python files and 15 shell files under `scripts/` (71 executable source files), 5 top-level test drivers, and 35 files under `config/`. The eight shipped skills and four slash commands are versioned in [`config/managed-inventory.json`](../config/managed-inventory.json). OpenCode profiles and runtime policy are under `config/`; release behavior is described in the changelog, version notes, migration notes, and command contracts.
 
 | Subsystem | Main modules and entrypoints | Inputs → outputs | Persistent state / external dependency | Failure boundary and test evidence |
 |---|---|---|---|---|
@@ -52,7 +52,7 @@ The repository contains 56 Python files and 15 shell files under `scripts/` (71 
 | Databricks discovery/execution/FinOps | `scripts/databricks_providers/{resolver,discovery,process,sdk,sql_connector}.py`, `scripts/databricks_finops.py`, Databricks skills and SQL recipes | Read-only provider operations and bounded results → normalized workspace/resource/query/FinOps evidence | Optional provider state/cache; live workspace and optional specialized SDK/connector packages | Permission, timeout, result-size, mutation-policy, query-schema and evidence scenarios use fixtures; no live workspace execution was performed |
 | Communication and artifacts | `scripts/artifacts.py`, `scripts/communication/{inputs,contracts,quantitative,planning,materialize,diagrams,review}.py`, `anvil-communication`, `/review` | Named local inputs + evidence/plan → bounded extraction, analysis, Markdown or accessible SVG, review findings | User-selected output files; no memory write or remote lookup | Size/type/symlink checks, provenance and recomputed metrics, no-overwrite rules, SVG layout validation; deterministic offline tests |
 | Inspect/doctor/capabilities/stats | `scripts/inspect_data.py`, `scripts/doctor_data.py`, `scripts/capabilities.py`, `scripts/stats.sh`, `scripts/stats.py` | Current HOME/XDG/runtime and optional cached provider state → human or JSON diagnostics | Read-only apart from temporary stats output, removed on exit | Public exit/output contracts, first-use/partial/corrupt states, no-runtime stats and structured formatter fixtures |
-| Engineering continuity | `scripts/engineering.py`, `scripts/engineering/`, lazy engineering/system-design and deep Spark skills | Named specification + explicit models → work units, evidence, coverage, conformance, bounded resume | Optional XDG state task generations; never memory/source mutation on resume | Atomic checksum/revision/lock, scoped drift, dependency and completion gates, fault injection and unrelated-domain replays |
+| Adaptive engineering and continuity | `scripts/engineering.py`, `scripts/engineering/`, task-local assessment, lazy engineering/system-design and deep Spark skills | Current task evidence → direct action or selected requirements/architecture/work/domain branch → proportional checks | Optional XDG task generations; local work leaves unrelated active project state dormant | No repo-size activation; path-scoped stale evidence; milestone checkpoint reuses valid invariants; atomic resume/coverage gates and paired offline replays |
 | Test/release integrity | `scripts/test.sh`, `tests/run.sh`, test drivers, `scripts/version_docs.py`, `docs/RELEASING.md` | Repo tree and local fixtures → offline assurance and release consistency result | Temporary HOME/XDG and fixtures; no external network in lifecycle suite | Python/shell syntax, shipped-set/version docs, fake OpenCode/Databricks, denied external network; static third-party linters unavailable in this environment |
 
 ## Public commands and side effects

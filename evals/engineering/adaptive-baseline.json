@@ -1,0 +1,123 @@
+{
+  "release": "2.9.0",
+  "commit": "6b6401d",
+  "method": "deterministic protocol replay on a clean archive of the structured baseline; no model execution",
+  "fixtures": [
+    {
+      "name": "ingestion",
+      "runs": [
+        {
+          "run": 1,
+          "success": true,
+          "verified_requirements": 12,
+          "architecture": {
+            "A1": "PASS",
+            "A2": "PASS",
+            "A3": "PASS",
+            "A4": "PASS"
+          },
+          "engine_transitions": 23,
+          "architecture_checkpoints": 5,
+          "state_writes": 7,
+          "architecture_check_evaluations": 20,
+          "verification_commands": 4,
+          "elapsed_seconds": 0.712
+        },
+        {
+          "run": 2,
+          "success": true,
+          "verified_requirements": 12,
+          "architecture": {
+            "A1": "PASS",
+            "A2": "PASS",
+            "A3": "PASS",
+            "A4": "PASS"
+          },
+          "engine_transitions": 23,
+          "architecture_checkpoints": 5,
+          "state_writes": 7,
+          "architecture_check_evaluations": 20,
+          "verification_commands": 4,
+          "elapsed_seconds": 0.716
+        },
+        {
+          "run": 3,
+          "success": true,
+          "verified_requirements": 12,
+          "architecture": {
+            "A1": "PASS",
+            "A2": "PASS",
+            "A3": "PASS",
+            "A4": "PASS"
+          },
+          "engine_transitions": 23,
+          "architecture_checkpoints": 5,
+          "state_writes": 7,
+          "architecture_check_evaluations": 20,
+          "verification_commands": 4,
+          "elapsed_seconds": 0.715
+        }
+      ],
+      "means": {
+        "elapsed_seconds": 0.714,
+        "state_writes": 7,
+        "architecture_check_evaluations": 20
+      }
+    },
+    {
+      "name": "scheduler",
+      "runs": [
+        {
+          "run": 1,
+          "success": true,
+          "verified_requirements": 7,
+          "architecture": {
+            "A1": "PASS",
+            "A2": "PASS"
+          },
+          "engine_transitions": 19,
+          "architecture_checkpoints": 4,
+          "state_writes": 6,
+          "architecture_check_evaluations": 8,
+          "verification_commands": 3,
+          "elapsed_seconds": 0.458
+        },
+        {
+          "run": 2,
+          "success": true,
+          "verified_requirements": 7,
+          "architecture": {
+            "A1": "PASS",
+            "A2": "PASS"
+          },
+          "engine_transitions": 19,
+          "architecture_checkpoints": 4,
+          "state_writes": 6,
+          "architecture_check_evaluations": 8,
+          "verification_commands": 3,
+          "elapsed_seconds": 0.456
+        },
+        {
+          "run": 3,
+          "success": true,
+          "verified_requirements": 7,
+          "architecture": {
+            "A1": "PASS",
+            "A2": "PASS"
+          },
+          "engine_transitions": 19,
+          "architecture_checkpoints": 4,
+          "state_writes": 6,
+          "architecture_check_evaluations": 8,
+          "verification_commands": 3,
+          "elapsed_seconds": 0.454
+        }
+      ],
+      "means": {
+        "elapsed_seconds": 0.456,
+        "state_writes": 6,
+        "architecture_check_evaluations": 8
+      }
+    }
+  ]
+}

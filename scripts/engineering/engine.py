@@ -163,7 +163,7 @@ def start(state: dict, root: Path, task_id: str) -> None:
     refresh(state)
 
 
-def _invalidate(state: dict, changed: set[str], affected_tasks: set[str] | None = None) -> set[str]:
+def _invalidate(state: dict, root: Path, changed: set[str], affected_tasks: set[str] | None = None) -> set[str]:
     affected = set(affected_tasks or [])
     items = tasks(state)
     for task in items.values():
@@ -178,8 +178,17 @@ def _invalidate(state: dict, changed: set[str], affected_tasks: set[str] | None 
         if expanded == affected:
             break
         affected = expanded
+    declared_invariants = indexed(state["models"]["architecture"].get("invariants", []), "invariant")
     for item in state["verification"]:
-        if changed & set(item.get("files", {})) or item.get("task_id") in affected or (changed and item.get("invariant_id")):
+        invariant_changed = False
+        invariant_id = item.get("invariant_id")
+        if changed and invariant_id in declared_invariants:
+            observed = set(item.get("files", {}))
+            current_scope = set(invariants.scope(root, declared_invariants[invariant_id]["paths"]))
+            # A new or removed file inside a globbed boundary changes the scope
+            # even when its path was absent from the previous evidence record.
+            invariant_changed = bool(changed & observed) or current_scope != observed
+        if changed & set(item.get("files", {})) or item.get("task_id") in affected or invariant_changed:
             item["valid"] = False
     for task_id in affected:
         if items[task_id]["status"] == "VERIFIED":
@@ -197,7 +206,7 @@ def implement(state: dict, root: Path, task_id: str, files: list[str]) -> None:
     changes = current_drift(state, root)
     require(not changes["specification_changed"] and not changes["git_changes"] and set(changes["changed_files"]) <= set(task["paths"]),
             "Changes outside this work unit require revalidation/replanning.", "WORK_STATE_STALE")
-    _invalidate(state, set(changes["changed_files"]))
+    _invalidate(state, root, set(changes["changed_files"]))
     state["anchor"] = changes["current"]
     task["implemented_by"] = sorted(set(task.get("implemented_by", [])) | set(files))
     task["status"] = "IMPLEMENTED"
@@ -271,15 +280,34 @@ def review(state: dict, root: Path, target_id: str, result: str, summary: str, o
     return record
 
 
-def checkpoint(state: dict, root: Path) -> dict:
+def checkpoint(state: dict, root: Path, milestone_id: str | None = None) -> dict:
     require_current(state, root)
-    for invariant in state["models"]["architecture"].get("invariants", []):
+    refresh(state)
+    invariants_by_id = indexed(state["models"]["architecture"].get("invariants", []), "invariant")
+    if milestone_id is None:
+        selected = set(invariants_by_id)
+    else:
+        milestones = indexed(state["models"]["work"]["milestones"], "milestone")
+        require(milestone_id in milestones, "Unknown architecture-check milestone.")
+        milestone = milestones[milestone_id]
+        linked = [task for task in tasks(state).values() if task["milestone"] == milestone_id]
+        require(linked and all(task["status"] == "VERIFIED" for task in linked)
+                and criteria_pass(state, milestone["done_when"]),
+                "Close the milestone's task and check gates before its architecture checkpoint.", "VERIFICATION_FAILED")
+        selected = set(milestone.get("invariant_ids", []))
+        require(selected <= set(invariants_by_id), "Milestone names an unknown architecture invariant.")
+    for invariant_id in selected:
+        invariant = invariants_by_id[invariant_id]
         if invariant["kind"] == "semantic":
+            continue
+        previous = latest(state, invariant_id=invariant_id)
+        if milestone_id is not None and previous and previous["valid"] and previous["result"] == "PASS":
             continue
         record = invariants.evaluate(root, invariant)
         _append_record(state, record)
-    result = conformance(state)
-    event(state, "architecture_checkpoint", results=result)
+    full_result = conformance(state)
+    result = full_result if milestone_id is None else {key: full_result[key] for key in sorted(selected)}
+    event(state, "architecture_checkpoint", milestone_id=milestone_id, results=result)
     refresh(state)
     return result
 
@@ -288,7 +316,7 @@ def revalidate(state: dict, root: Path, reason: str) -> dict:
     require(reason, "Revalidation needs the observed change or inspection rationale.")
     changes = current_drift(state, root)
     require(not changes["specification_changed"], "Specification changed; normalize affected requirements and replan before continuing.", "REQUIREMENT_CONFLICT")
-    affected = _invalidate(state, set(changes["changed_files"]))
+    affected = _invalidate(state, root, set(changes["changed_files"]))
     for decision in state["models"]["architecture"].get("decisions", []):
         if set(decision.get("paths", [])) & set(changes["changed_files"]):
             decision["needs_review"] = True
@@ -359,7 +387,7 @@ def replan(state: dict, root: Path, spec: Path, models: dict, reason: str, scope
     new_anchor = repository.observe(root, proposed, spec)
     changed_files = {p for p in set(state["anchor"]["files"]) | set(new_anchor["files"])
                      if state["anchor"]["files"].get(p) != new_anchor["files"].get(p)}
-    affected = _invalidate(state, changed_files, affected)
+    affected = _invalidate(state, root, changed_files, affected)
     if changed_invariants:
         for item in state["verification"]:
             if item.get("invariant_id"):
