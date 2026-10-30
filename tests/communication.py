@@ -187,6 +187,13 @@ def run() -> None:
           "scenario values remain visibly distinct from measured outcomes")
 
     editorial_fixtures = json.loads((ROOT / "tests/fixtures/communication/editorial-cases.json").read_text())
+    refinement_cases = json.loads((ROOT / "tests/fixtures/communication/editorial-refinement-cases.json").read_text())
+    refinement_ids = [case["id"] for case in refinement_cases["cases"]]
+    check(refinement_cases["evaluation_kind"] == "model_judgment_scenarios"
+          and len(refinement_ids) == 11 and len(set(refinement_ids)) == 11
+          and all(case.get("evidence") and case.get("context") and case.get("expected_judgment")
+                  for case in refinement_cases["cases"]),
+          "editorial-context evaluation cases must keep evidence, context and intended judgment explicit")
     for case in editorial_fixtures["cases"]:
         insight = analyze_metric({"id": f"QI-{case['id']}", "name": case["id"], "kind": case["kind"],
                                   "unit": case["unit"], "semantics": case["semantics"], "confidence": "LOW",

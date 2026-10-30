@@ -132,7 +132,7 @@ PY
 import shutil,sys
 from pathlib import Path
 root=Path(sys.argv[1])
-for prefix in (".anvil-config-stage.", ".anvil-config-previous-"):
+for prefix in (".anvil-config-stage.", ".anvil-config-previous-", ".anvil-config-rollback-stage."):
     for path in root.parent.glob(prefix+"*"):
         if path.is_dir() and not path.is_symlink():
             shutil.rmtree(path)

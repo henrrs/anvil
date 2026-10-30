@@ -167,6 +167,11 @@ bash "$ROOT/scripts/inspect.sh"
 
 ready_config="$tmp_root/global-config"
 anvil_build_config "$ready_config" "$ANVIL_CONFIG_DIR" yes "$target_major" "$previous_anvil_version" yes
+if [[ -d "$ANVIL_CONFIG_DIR" ]]; then
+  anvil_print_config_plan "$ANVIL_CONFIG_DIR" "$ready_config" "$previous_anvil_version" "$ANVIL_VERSION" yes
+else
+  anvil_log 'No existing OpenCode config directory was found; reforge will install Anvil-owned profile files and a pre-mutation snapshot.'
+fi
 if [[ "$target_major" == 1 ]]; then
   python3 "$ROOT/scripts/configure.py" audit-v1 "$ready_config/opencode.jsonc"
 else

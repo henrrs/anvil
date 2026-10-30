@@ -3,9 +3,15 @@
 set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source "$ROOT/scripts/lib/common.sh"
+source "$ROOT/scripts/lib/install.sh"
 
 backup=""
 internal=0
+rollback_stage=""
+cleanup_rollback_stage() {
+  [[ -z "$rollback_stage" || ! -d "$rollback_stage" ]] || rm -rf -- "$rollback_stage"
+}
+trap cleanup_rollback_stage EXIT
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --backup)
@@ -109,6 +115,8 @@ printf 'Backup                %s\n' "$backup_real"
 printf 'Rollback scope        %s\n' "$backup_scope"
 printf 'Prior OpenCode        %s\n' "${old_version:-not found}"
 printf 'Restore global config %s\n' "$config_present"
+printf '%s\n' '  Anvil-owned files are restored; current shared settings and user files are merged where paths do not conflict.'
+printf '%s\n' '  Configuration outside the OpenCode config directory is left untouched.'
 if [[ "$backup_scope" == runtime ]]; then
   printf 'Restore installer dir %s\n' "$installer_present"
   printf 'Restore OpenCode data %s\n' "${data_present:-not captured by this backup}"
@@ -137,7 +145,13 @@ fi
 
 config_archive="$backup_real/config.tar.gz"
 if (( ! internal )); then python3 "$ROOT/scripts/lifecycle_transaction.py" phase restoring-config; fi
-python3 "$ROOT/scripts/archive.py" restore "$config_archive" "$ANVIL_CONFIG_DIR" "$config_present"
+umask 077
+rollback_stage="$(mktemp -d "$(dirname -- "$ANVIL_CONFIG_DIR")/.anvil-config-rollback-stage.XXXXXX")"
+rollback_config="$rollback_stage/$(basename -- "$ANVIL_CONFIG_DIR")"
+python3 "$ROOT/scripts/archive.py" restore "$config_archive" "$rollback_config" "$config_present"
+if [[ "$config_present" != yes ]]; then mkdir -m 700 -- "$rollback_config"; fi
+python3 "$ROOT/scripts/managed_config.py" restore-merge --source "$ANVIL_CONFIG_DIR" --target "$rollback_config" >/dev/null
+anvil_apply_config "$rollback_config" yes
 if [[ "$backup_scope" == runtime ]]; then
   installer_archive="$backup_real/opencode-root.tar.gz"
   python3 "$ROOT/scripts/archive.py" restore "$installer_archive" "$ANVIL_INSTALL_ROOT" "$installer_present"
@@ -201,6 +215,15 @@ if [[ "$backup_scope" == runtime && -n "$old_version" ]]; then
 fi
 if [[ -n "$memory_backup" ]]; then
   anvil_ok "Current Anvil memory was archived before rollback: $memory_backup"
+fi
+if [[ "$config_present" == no && -d "$ANVIL_CONFIG_DIR" ]]; then
+  remaining_entries="$(python3 - "$ANVIL_CONFIG_DIR" <<'PY'
+import sys
+from pathlib import Path
+print("yes" if any(Path(sys.argv[1]).iterdir()) else "no")
+PY
+)"
+  if [[ "$remaining_entries" == no ]]; then rmdir -- "$ANVIL_CONFIG_DIR"; fi
 fi
 if (( ! internal )); then
   python3 "$ROOT/scripts/lifecycle_transaction.py" phase postflight-validated

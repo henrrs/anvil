@@ -14,7 +14,8 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from configure import BUILTINS, parse_jsonc
+from configure import (ANVIL_PLUGIN, BUILTINS, extract_user_configuration,
+                       merge_prior_configuration, parse_jsonc)
 from semver import compare, parse as parse_version
 
 
@@ -48,6 +49,10 @@ COMMUNICATION_VERSION = SKILL_INTRODUCED.get("anvil-communication", (2, 7, 0))
 ENGINEERING_VERSION = SKILL_INTRODUCED.get("anvil-engineering", (2, 9, 0))
 DATABRICKS_PROVIDER_VERSION = (2, 3, 0)
 USER_PREFERENCES = {"cli.json", "tui.json", "tui.jsonc"}
+SHARED_PROFILE_KEYS = {
+    "provider", "providers", "plugin", "plugins", "mcp", "references",
+    "compaction", "tool_output", "watcher",
+}
 BASE_REQUIRED_SCRIPTS = {
     "scripts/memory.py", "scripts/source_registry.py", "scripts/runtime.py", "scripts/runtime_state.py",
 }
@@ -271,8 +276,22 @@ def _legacy_owned(root: Path, source_version: str | None, *, allow_missing: bool
     return owned, missing
 
 
+def _external_source_state(root: Path, actual: dict[str, Path], symlinks: set[str], other: set[str]) -> dict[str, Any]:
+    """Describe an existing non-Anvil OpenCode tree without claiming it."""
+    if "opencode.jsonc" in symlinks or "opencode.jsonc" in other:
+        raise ManagedConfigError("existing OpenCode profile is not a regular file; refusing to replace it")
+    nodes = set(actual) | symlinks | other
+    user_files = sorted(path for path in nodes
+                        if path not in {"opencode.jsonc", MANIFEST_NAME}
+                        and not _is_user_preference(path))
+    return {"owned_files": [], "owned_digests": {}, "user_files": user_files,
+            "external_symlinks": sorted(symlinks), "manifest_present": False,
+            "manifest_version": None, "config_external": True}
+
+
 def inspect_source(root: Path, source_version: str | None = None,
-                   expected_manifest_sha256: str | None = None, *, recover_managed: bool = False) -> dict[str, Any]:
+                   expected_manifest_sha256: str | None = None, *, recover_managed: bool = False,
+                   allow_external: bool = False) -> dict[str, Any]:
     actual, symlinks, other = _scan(root)
     if MANIFEST_NAME in symlinks or MANIFEST_NAME in other:
         raise ManagedConfigError("Anvil managed file manifest is not a regular file")
@@ -300,6 +319,12 @@ def inspect_source(root: Path, source_version: str | None = None,
                      or any(not isinstance(name, str) or not name for name in managed_agents)
                      or len(set(managed_agents)) != len(managed_agents))):
             raise ManagedConfigError("managed file manifest agent ownership is invalid")
+        for field in ("managed_top_level_keys", "managed_plugins", "managed_references"):
+            values = config_ownership.get(field)
+            if values is not None and (not isinstance(values, list)
+                    or any(not isinstance(name, str) or not name for name in values)
+                    or len(set(values)) != len(values)):
+                raise ManagedConfigError(f"managed file manifest {field} ownership is invalid")
         owned: set[str] = set()
         owned_digests: dict[str, str | None] = {}
         managed_links: set[str] = set()
@@ -332,6 +357,20 @@ def inspect_source(root: Path, source_version: str | None = None,
     else:
         if expected_manifest_sha256:
             raise ManagedConfigError("Anvil managed file manifest is missing")
+        if allow_external and not parse_version(source_version):
+            profile = actual.get("opencode.jsonc")
+            has_anvil_profile = False
+            if profile is not None:
+                try:
+                    config = parse_jsonc(_read_regular(root, "opencode.jsonc").decode("utf-8"), str(profile))
+                except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+                    raise ManagedConfigError(f"existing OpenCode profile cannot be safely inspected: {exc}") from exc
+                has_anvil_profile = (isinstance(config, dict)
+                                     and any(isinstance(config.get(key), dict)
+                                             and isinstance(config[key].get("anvil"), dict)
+                                             for key in ("agent", "agents")))
+            if not has_anvil_profile:
+                return _external_source_state(root, actual, symlinks, other)
         owned, _ = _legacy_owned(root, source_version, allow_missing=recover_managed)
         owned_digests = {path: (None if path == "opencode.jsonc" else _digest_regular(root, path))
                          for path in owned if path in actual}
@@ -344,7 +383,8 @@ def inspect_source(root: Path, source_version: str | None = None,
             "user_files": user_files,
             "external_symlinks": sorted(symlinks - owned),
             "manifest_present": manifest_present,
-            "manifest_version": (manifest.get("anvil_version") if manifest_present else None)}
+            "manifest_version": (manifest.get("anvil_version") if manifest_present else None),
+            "config_external": False}
 
 
 def _target_manifest(root: Path, target_version: str, *, excluded: set[str] | None = None) -> dict[str, Any]:
@@ -372,8 +412,21 @@ def _target_manifest(root: Path, target_version: str, *, excluded: set[str] | No
     if not isinstance(agents, dict):
         raise ManagedConfigError("target OpenCode profile has an invalid agent map")
     managed_agents = sorted((set(agents) & (BUILTINS | {"anvil"})))
+    template_path = ROOT / "config" / ("runtimes/opencode-v1.jsonc" if agents_key == "agent" else "opencode.jsonc")
+    template = parse_jsonc(template_path.read_text(encoding="utf-8"), str(template_path))
+    if not isinstance(template, dict):
+        raise ManagedConfigError("Anvil profile template has an invalid root")
+    managed_top_level = sorted(set(template) - SHARED_PROFILE_KEYS)
+    template_plugins = template.get("plugins" if agents_key == "agents" else "plugin", [])
+    managed_plugins = sorted({value for value in template_plugins
+                              if isinstance(value, str) and value == ANVIL_PLUGIN}) if isinstance(template_plugins, list) else []
+    template_references = template.get("references", {})
+    managed_references = sorted(template_references) if isinstance(template_references, dict) else []
     return {"schema_version": 1, "anvil_version": target_version, "files": inventory,
-            "config": {"managed_agents": managed_agents}}
+            "config": {"managed_agents": managed_agents,
+                       "managed_top_level_keys": managed_top_level,
+                       "managed_plugins": managed_plugins,
+                       "managed_references": managed_references}}
 
 
 def _write_manifest(root: Path, manifest: dict[str, Any]) -> None:
@@ -395,6 +448,167 @@ def _write_manifest(root: Path, manifest: dict[str, Any]) -> None:
         raise
 
 
+def _copy_entry(source_root: Path, target_root: Path, relative: str, *, replace: bool = False) -> None:
+    rel = _relative(relative)
+    source = source_root.joinpath(*rel.parts)
+    target = target_root.joinpath(*rel.parts)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if _symlink_ancestor(relative, {p.relative_to(target_root).as_posix()
+                                    for p in target_root.rglob("*") if p.is_symlink()}):
+        raise ManagedConfigError(f"refusing to write through a symbolic link while preserving: {relative}")
+    if os.path.lexists(target):
+        if not replace:
+            raise ManagedConfigError(f"refusing to overwrite staged user-owned path: {relative}")
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        elif target.is_dir():
+            try:
+                target.rmdir()
+            except OSError as exc:
+                raise ManagedConfigError(f"staged path type conflicts with preserved user file: {relative}") from exc
+        else:
+            raise ManagedConfigError(f"staged path has an unsupported type: {relative}")
+    if source.is_symlink():
+        os.symlink(os.readlink(source), target)
+        return
+    if not source.is_file():
+        raise ManagedConfigError(f"cannot safely snapshot external filesystem node: {relative}")
+    descriptor = _open_regular(source_root, relative)
+    metadata = os.fstat(descriptor)
+    with os.fdopen(descriptor, "rb") as input_stream, target.open("xb") as output_stream:
+        shutil.copyfileobj(input_stream, output_stream)
+    target.chmod(stat.S_IMODE(metadata.st_mode))
+    os.utime(target, ns=(metadata.st_atime_ns, metadata.st_mtime_ns), follow_symlinks=False)
+
+
+def snapshot(root: Path, target: Path) -> dict[str, Any]:
+    """Copy only Anvil-owned files and the shared OpenCode profile/preferences."""
+    source_state = inspect_source(root, recover_managed=True, allow_external=True)
+    actual, _, _ = _scan(root)
+    selected = set(source_state["owned_files"])
+    selected.update(path for path in ("opencode.jsonc", MANIFEST_NAME, *USER_PREFERENCES) if path in actual)
+    target.mkdir(parents=True, exist_ok=False)
+    for relative in sorted(selected):
+        _copy_entry(root, target, relative)
+    return {"copied_files": len(selected), "excluded_user_files": len(source_state["user_files"])}
+
+
+def _remove_entry(root: Path, relative: str) -> None:
+    path = root.joinpath(*_relative(relative).parts)
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        try:
+            path.rmdir()
+        except OSError as exc:
+            raise ManagedConfigError(f"cannot remove stale staged external path: {relative}") from exc
+    parent = path.parent
+    while parent != root and parent.is_dir() and not any(parent.iterdir()):
+        parent.rmdir()
+        parent = parent.parent
+
+
+def _config_data(root: Path) -> dict[str, Any] | None:
+    path = root / "opencode.jsonc"
+    if not os.path.lexists(path):
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise ManagedConfigError("shared OpenCode profile is not a regular file")
+    try:
+        value = parse_jsonc(path.read_text(encoding="utf-8"), str(path))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ManagedConfigError(f"shared OpenCode profile cannot be safely merged: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ManagedConfigError("shared OpenCode profile root is not an object")
+    return value
+
+
+def _has_anvil_profile(value: dict[str, Any] | None) -> bool:
+    return bool(value and any(isinstance(value.get(key), dict)
+                              and isinstance(value[key].get("anvil"), dict)
+                              for key in ("agent", "agents")))
+
+
+def _write_config(root: Path, value: dict[str, Any]) -> None:
+    path = root / "opencode.jsonc"
+    temporary = path.with_name(path.name + f".tmp-{os.getpid()}")
+    try:
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def restore_merge(source: Path, target: Path) -> dict[str, Any]:
+    """Merge post-snapshot user state into a staged rollback configuration."""
+    target.mkdir(parents=True, exist_ok=True)
+    source_present = source.is_dir() and not source.is_symlink()
+    if source_present:
+        source_state = inspect_source(source, recover_managed=True, allow_external=True)
+        source_files, source_links, _ = _scan(source)
+    else:
+        source_state = {"owned_files": [], "user_files": [], "external_symlinks": []}
+        source_files, source_links = {}, set()
+    target_state = inspect_source(target, recover_managed=True, allow_external=True)
+    target_files, target_links, target_other = _scan(target)
+    source_external = set(source_state["user_files"])
+    target_external = set(target_state["user_files"])
+    source_external.update(name for name in USER_PREFERENCES if name in source_files or name in source_links)
+    target_external.update(name for name in USER_PREFERENCES if name in target_files or name in target_links)
+    target_owned = set(target_state["owned_files"])
+    target_manifest = target_files.get(MANIFEST_NAME)
+    if target_manifest is not None:
+        try:
+            manifest_data = json.loads(_read_regular(target, MANIFEST_NAME).decode("utf-8"))
+            target_owned.update(_relative(path).as_posix() for path in manifest_data.get("files", {}))
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError, AttributeError) as exc:
+            raise ManagedConfigError(f"rollback target ownership manifest cannot be read: {exc}") from exc
+    conflicts = sorted(path for path in source_external if path in target_owned)
+    if conflicts:
+        raise ManagedConfigError("rollback found user-owned paths that conflict with the prior Anvil profile; current config was left intact: "
+                                 + ", ".join(conflicts[:10]))
+    if source_present:
+        for relative in sorted(target_external - source_external, key=lambda value: len(PurePosixPath(value).parts), reverse=True):
+            _remove_entry(target, relative)
+    for relative in sorted(source_external):
+        if _symlink_ancestor(relative, target_links):
+            raise ManagedConfigError(f"rollback cannot merge through a symbolic link: {relative}")
+        _copy_entry(source, target, relative, replace=True)
+
+    source_config = _config_data(source) if source_present else None
+    target_config = _config_data(target)
+    if source_config is not None:
+        if _has_anvil_profile(target_config):
+            target_major = 1 if isinstance(target_config.get("agent"), dict) else 2
+            merge_prior_configuration(target_config, source, target_major)
+            _write_config(target, target_config)
+        else:
+            target_major = 1 if isinstance(target_config or source_config, dict) and isinstance((target_config or source_config).get("agent"), dict) else 2
+            user_config = extract_user_configuration(source, target_major)
+            if target_config is None:
+                merged_config = user_config
+            else:
+                merged_config = dict(target_config)
+                for key, value in user_config.items():
+                    if key in merged_config and isinstance(value, dict) and isinstance(merged_config[key], dict):
+                        merged_config[key] = {**merged_config[key], **value}
+                    else:
+                        merged_config[key] = value
+            if merged_config:
+                _write_config(target, merged_config)
+
+    _, target_links_after, target_other_after = _scan(target)
+    managed_link_conflicts = sorted(link for link in target_links_after
+                                    if link in target_owned
+                                    or any(path.startswith(link + "/") for path in target_owned))
+    if managed_link_conflicts or target_other_after:
+        raise ManagedConfigError("rollback staging contains an unsupported Anvil-owned symbolic link or filesystem node")
+    return {"preserved_files": len(source_external), "preserved_shared_config": source_config is not None,
+            "staged_entries": len(list(target.rglob("*")))}
+
+
 def prepare(source: Path | None, target: Path, source_version: str | None,
             target_version: str, *, recover_managed: bool = False,
             source_manifest_sha256: str | None = None) -> dict[str, Any]:
@@ -404,7 +618,7 @@ def prepare(source: Path | None, target: Path, source_version: str | None,
     source_state: dict[str, Any] = {"owned_files": [], "user_files": [], "manifest_present": False}
     if source is not None and source.is_dir():
         source_state = inspect_source(source, source_version, source_manifest_sha256,
-                                      recover_managed=recover_managed)
+                                      recover_managed=recover_managed, allow_external=True)
         target_prefixes: set[str] = set()
         for target_path in target_owned:
             parts = PurePosixPath(target_path).parts
@@ -485,6 +699,13 @@ def main() -> int:
     p_plan.add_argument("--target", type=Path, required=True)
     p_plan.add_argument("--source-version", default="")
     p_plan.add_argument("--target-version", required=True)
+    p_plan.add_argument("--recover-managed", action="store_true")
+    p_snapshot = sub.add_parser("snapshot")
+    p_snapshot.add_argument("--source", type=Path, required=True)
+    p_snapshot.add_argument("--target", type=Path, required=True)
+    p_restore_merge = sub.add_parser("restore-merge")
+    p_restore_merge.add_argument("--source", type=Path, required=True)
+    p_restore_merge.add_argument("--target", type=Path, required=True)
     p_inspect = sub.add_parser("inspect")
     p_inspect.add_argument("--root", type=Path, required=True)
     p_inspect.add_argument("--installed-version", default="")
@@ -498,10 +719,15 @@ def main() -> int:
                              recover_managed=args.recover_managed,
                              source_manifest_sha256=args.source_manifest_sha256 or None)
         elif args.action == "plan":
-            source_state = inspect_source(args.source, args.source_version or None) if args.source else {
+            source_state = inspect_source(args.source, args.source_version or None,
+                                          recover_managed=args.recover_managed, allow_external=True) if args.source else {
                 "owned_files": [], "user_files": []}
             manifest = json.loads((args.target / MANIFEST_NAME).read_text(encoding="utf-8"))
             result = plan(source_state, manifest, args.source_version or None, args.target_version)
+        elif args.action == "snapshot":
+            result = snapshot(args.source, args.target)
+        elif args.action == "restore-merge":
+            result = restore_merge(args.source, args.target)
         else:
             result = validate_installed(args.root, args.installed_version or None, args.target_version,
                                         args.manifest_sha256 or None)

@@ -22,6 +22,8 @@ Deterministic checks + semantic review
 
 `config/skills/anvil-communication/SKILL.md` teaches the single Anvil agent this workflow. The generic `/review` command operates on explicitly named artifacts. `scripts/communication` contains the standard-library deterministic core, and `scripts/artifacts.py` is its CLI. There are no communication-specific Make targets, agents, background jobs, memory writes, or required Python packages.
 
+The skill now asks for trustworthy comparison context before interpreting a change, separates finding/insight/implication, and favors editorial compression over slide-count or chart-count targets. Visual composition and motion remain model judgments; the skill offers concise questions about chart value, direct annotation, whitespace, asymmetric emphasis, repeated geometry, and whether each temporal step changes understanding. It is activated for artifact work only; routine engineering requests do not load the additional guidance.
+
 The initial architecture audit is recorded in [communication-artifact-assessment.md](communication-artifact-assessment.md). The design decision is [ADR-0015](decisions/ADR-0015-communication-artifact-intelligence.md).
 
 ## Contracts and provenance

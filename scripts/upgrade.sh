@@ -221,6 +221,7 @@ if [[ "$operation" == update-runtime ]]; then
   cp -R -- "$ANVIL_CONFIG_DIR" "$ready_config"
 else
   anvil_build_config "$ready_config" "$ANVIL_CONFIG_DIR" yes "$target_major"
+  anvil_print_config_plan "$ANVIL_CONFIG_DIR" "$ready_config" "$old_anvil_version" "$ANVIL_VERSION"
 fi
 if [[ "$operation" == update-runtime ]]; then
   if [[ "$target_major" == 1 ]]; then

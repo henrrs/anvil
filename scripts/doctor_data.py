@@ -143,10 +143,6 @@ def main() -> int:
             problems.append(f"managed configuration integrity check failed: {exc}")
     if runtime_major == 2 and (not plugin_file.is_file() or "anvil_memory_search" not in plugin_file.read_text(encoding="utf-8", errors="replace")):
         problems.append("anvil-core memory search plugin entrypoint is missing")
-    if unexpected_plugins:
-        warnings.append(f"additional global plugins are configured: {unexpected_plugins}")
-    if mcp_servers:
-        warnings.append(f"global MCP servers are configured: {sorted(mcp_servers)}")
     if memory_audit["invalid"]:
         warnings.append(f"invalid Markdown memory files: {memory_audit['invalid']}")
     if registry_audit["invalid"]:
@@ -167,7 +163,8 @@ def main() -> int:
     print(f"OpenCode {runtime_major} configuration")
     print(f"  runtime config         {'valid' if not config_audit(config_path) else 'invalid'}")
     print(f"  default agent          {config.get('default_agent', 'missing')}")
-    print(f"  model pinned           {'yes' if config.get('model') or anvil.get('model') else 'no'}")
+    print(f"  model pinned           {'yes' if anvil.get('model') or anvil.get('variant') else 'no'}")
+    print(f"  user model preference  {'set' if config.get('model') else 'not set'}")
     denied_subagents = rules.get(("task", "*")) == "deny" if runtime_major == 1 else rules.get(("subagent", "*")) == "deny"
     print(f"  subagents denied       {'yes' if denied_subagents else 'no'}")
     print(f"  primary agents         {1 if anvil.get('mode') == 'primary' else 0}")
@@ -181,8 +178,8 @@ def main() -> int:
     print("Stats")
     print(f"  native stats           {'YES' if capabilities['stats']['native_stats'] else 'NO'}")
     print(f"  structured stats       {'YES' if capabilities['stats']['structured_native_stats'] else 'NO'}")
-    print(f"  global MCP count       {len(mcp_servers)}")
-    print(f"  unexpected plugins     {len(unexpected_plugins)}")
+    print(f"  global MCP servers     {len(mcp_servers)} configured")
+    print(f"  user plugins           {len(unexpected_plugins)} configured")
     print(f"  native compaction      {'enabled' if compaction.get('auto') else 'missing'}")
     print(f"  tool output cap        {output.get('max_lines', 'not available')} lines / {output.get('max_bytes', 'not available')} bytes")
     print("Memory")

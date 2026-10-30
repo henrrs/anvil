@@ -1,0 +1,71 @@
+{
+  "evaluation_kind": "model_judgment_scenarios",
+  "cases": [
+    {
+      "id": "stable_metric",
+      "evidence": "A measured service rate moved from 98.2% to 98.3% across two periods.",
+      "context": "No confidence interval or expected variation was supplied.",
+      "expected_judgment": "Describe the observed difference without dramatizing it; stability or uncertainty may be more useful than a chart."
+    },
+    {
+      "id": "material_change",
+      "evidence": "One workload fell from 240 ms to 110 ms while four other measured workloads stayed within 2% of baseline.",
+      "context": "The same measurement method and workload population were used.",
+      "expected_judgment": "Give the material change more visual weight and keep stable workloads subordinate."
+    },
+    {
+      "id": "concentrated_contribution",
+      "evidence": "Three of twenty groups account for 78% of the observed improvement.",
+      "context": "Group totals reconcile to the reported overall delta.",
+      "expected_judgment": "Surface the concentration instead of presenting all groups as equivalent."
+    },
+    {
+      "id": "missing_benchmark",
+      "evidence": "A completion metric is 73% for the latest month.",
+      "context": "No target, historical range, denominator, or comparison period is available.",
+      "expected_judgment": "Report the value as observed and leave performance classification unknown."
+    },
+    {
+      "id": "redundant_slides",
+      "evidence": "Two proposed slides repeat the same baseline-to-current spend comparison with different labels.",
+      "context": "The decision audience and source evidence are identical.",
+      "expected_judgment": "Merge or remove the duplicate argument rather than preserving one slide per topic."
+    },
+    {
+      "id": "weak_chart",
+      "evidence": "A single category has one observed value and no meaningful comparison.",
+      "context": "The proposed bar has one bar and no target or distribution.",
+      "expected_judgment": "Use a direct statement or number unless the chart reveals a useful relationship."
+    },
+    {
+      "id": "direct_annotation",
+      "evidence": "A time series has one sharp, source-verified outage on Tuesday.",
+      "context": "The outage timestamp is already labeled on the chart.",
+      "expected_judgment": "Place its supported implication near the event rather than adding a generic highlights panel."
+    },
+    {
+      "id": "sparse_executive_message",
+      "evidence": "A pilot reduced verified cost by 85.6%; other metrics are unchanged.",
+      "context": "The executive asks whether to expand the pilot.",
+      "expected_judgment": "Allow the decision and dominant finding to occupy the page with supporting evidence and breathing room."
+    },
+    {
+      "id": "decorative_animation",
+      "evidence": "Identical circles remain unchanged while a decorative square moves among them.",
+      "context": "No ordering, dependency, or state change is explained.",
+      "expected_judgment": "Remove the motion or replace it with a static relationship that carries evidence."
+    },
+    {
+      "id": "progressive_process",
+      "evidence": "A request is checked, rejected when invalid, otherwise executed and verified.",
+      "context": "The reject path returns to correction before execution.",
+      "expected_judgment": "Use a storyboard or diagram that reveals the gate and return path, not a falsely linear sequence."
+    },
+    {
+      "id": "feedback_loop",
+      "evidence": "A failed validation sends work back for correction before the next attempt.",
+      "context": "Retries stop after two attempts and unresolved failures escalate to an operator.",
+      "expected_judgment": "Represent the bounded feedback and escalation so the audience sees what changes after failure."
+    }
+  ]
+}

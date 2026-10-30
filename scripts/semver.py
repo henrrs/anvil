@@ -22,7 +22,7 @@ def compare(left: object, right: object) -> int | None:
     return (a > b) - (a < b)
 
 
-def supported_migration(source: object, target: object, *, minor_window: int = 5) -> bool:
+def supported_migration(source: object, target: object, *, minor_window: int = 6) -> bool:
     """Return whether an installed release is inside the documented source window."""
     old = parse(source)
     new = parse(target)

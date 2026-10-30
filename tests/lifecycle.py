@@ -388,10 +388,10 @@ def lifecycle_version_order_test() -> None:
     check(parse_version("2.10.0") == (2, 10, 0), "semantic version parser did not retain numeric minor ordering")
     check(compare_versions("2.10.0", "2.9.9") == 1, "semantic version ordering compared minor releases lexically")
     check(compare_versions("2.08.0", "2.8.0") is None, "semantic version parser accepted a non-canonical leading zero")
-    check(supported_migration("2.6.1", "2.11.0"), "2.11 rejected the 2.6 source line retained by 2.10")
-    check(not supported_migration("2.5.9", "2.11.0"), "source outside the five-minor compatibility window was accepted")
+    check(supported_migration("2.6.1", "2.12.0"), "2.12 rejected the 2.6 source line retained by prior releases")
+    check(not supported_migration("2.5.9", "2.12.0"), "source outside the six-minor compatibility window was accepted")
     check(not supported_migration("2.5.9", "2.10.0", minor_window=4), "2.10 historical source window changed")
-    check(not supported_migration("2.11.0", "2.10.0"), "a newer installed release was treated as migratable")
+    check(not supported_migration("2.12.0", "2.11.0"), "a newer installed release was treated as migratable")
     print("PASS semantic release ordering, supported source window, and downgrade rejection")
 
 
@@ -423,6 +423,13 @@ def config_ownership_transition_test(temp: pathlib.Path) -> None:
     check(set(manifest.get("config", {}).get("managed_agents", [])) ==
           {"build", "plan", "general", "explore", "anvil"},
           "managed config manifest did not record ownership of the shipped inline agent set")
+    config_ownership = manifest["config"]
+    check({"$schema", "default_agent", "agent"}.issubset(set(config_ownership.get("managed_top_level_keys", [])))
+          and "plugins" not in config_ownership.get("managed_top_level_keys", [])
+          and "mcp" not in config_ownership.get("managed_top_level_keys", [])
+          and config_ownership.get("managed_plugins") == []
+          and config_ownership.get("managed_references") == [],
+          "ownership manifest did not separate Anvil-owned keys from shared user configuration")
     installation = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
     check((paths["config"] / "commands/user-command.md").read_text(encoding="utf-8") == "legacy user command\n",
           "Anvil upgrade overwrote or lost a user-owned command")
@@ -1124,6 +1131,16 @@ def run(command: list[str], env: dict[str, str], *, cwd: pathlib.Path = ROOT, ex
 
 def provider_migration_test(temp: pathlib.Path) -> None:
     paths = fixture(temp)
+    prior_path = paths["config"] / "opencode.jsonc"
+    prior = json.loads(prior_path.read_text(encoding="utf-8"))
+    prior["plugin"] = ["@company/opencode-audit"]
+    prior["mcp"] = {"internal-catalog": {"type": "local", "command": "company-catalog"}}
+    prior["references"] = {"company-runbook": {"path": "/srv/company/runbook"}}
+    prior["compaction"].update(auto=False, custom_window="preserve")
+    prior["model"] = "company/model"
+    prior["enterpriseRepository"] = {"url": "https://nexus.example.invalid", "trust": "company-root-ca"}
+    prior["agent"]["company-reviewer"] = {"mode": "subagent", "description": "Company review agent"}
+    write_json(prior_path, prior)
     proc = run(
         ["bash", "-c", "source \"$ANVIL_ROOT/scripts/lib/common.sh\"; "
          "source \"$ANVIL_ROOT/scripts/lib/install.sh\"; anvil_build_config \"$1\" \"$2\" yes",
@@ -1139,7 +1156,30 @@ def provider_migration_test(temp: pathlib.Path) -> None:
     check(model["modelID"] == "fixture-model-v2", "V1 model id was not migrated")
     check(model["settings"]["maxTokens"] == 2048, "V1 model options were not preserved")
     check(model["variants"] == [{"id": "reasoning", "settings": {"reasoningEffort": "high"}}], "V1 model variants were not migrated")
-    check(not ({"provider", "agent", "plugin", "model"} & set(config)), "V1 top-level config keys remain")
+    check(not ({"provider", "agent", "plugin"} & set(config)), "V1 structural config keys remain after migration")
+    check("@company/opencode-audit" in config["plugins"] and "./plugins/anvil-core" in config["plugins"],
+          "runtime migration replaced an external OpenCode plugin")
+    check(config["mcp"]["servers"]["internal-catalog"]["command"] == "company-catalog",
+          "runtime migration replaced the user's MCP server")
+    check(config["references"]["company-runbook"]["path"] == "/srv/company/runbook",
+          "runtime migration dropped an external OpenCode reference")
+    check(config["references"]["anvil-knowledge"]["path"].endswith("/anvil/knowledge"),
+          "Anvil's owned knowledge reference did not update to the current data path")
+    check(config["compaction"]["auto"] is False and config["compaction"]["custom_window"] == "preserve",
+          "runtime migration reset local compaction preferences")
+    check(config["model"] == "company/model" and config["enterpriseRepository"]["trust"] == "company-root-ca",
+          "runtime migration dropped unknown machine-owned OpenCode settings")
+    check(config["agents"]["company-reviewer"]["description"] == "Company review agent",
+          "runtime migration dropped an active user-owned inline agent")
+    manifest = json.loads((temp / "built-config" / ".anvil-managed.json").read_text(encoding="utf-8"))
+    ownership = manifest["config"]
+    check(ownership["managed_plugins"] == ["./plugins/anvil-core"]
+          and ownership["managed_references"] == ["anvil-knowledge"]
+          and "plugins" not in ownership["managed_top_level_keys"]
+          and "mcp" not in ownership["managed_top_level_keys"],
+          "V2 manifest did not identify Anvil's plugin/reference keys and shared user configuration")
+    run([sys.executable, str(ROOT / "scripts" / "configure.py"), "audit",
+         str(temp / "built-config" / "opencode.jsonc")], env_for(paths))
     check((temp / "built-config" / "cli.json").read_text(encoding="utf-8").startswith("{\"theme\""), "native CLI config was not preserved")
     check((temp / "built-config" / "tui.json").is_file(), "V1 TUI config needed for native migration was not preserved")
     run(
@@ -1151,8 +1191,157 @@ def provider_migration_test(temp: pathlib.Path) -> None:
     v1_roundtrip = json.loads((temp / "rebuilt-v1" / "opencode.jsonc").read_text(encoding="utf-8"))
     provider_v1 = v1_roundtrip["provider"]["custom"]
     check(provider_v1["npm"] == "@ai-sdk/openai-compatible" and provider_v1["api"] == "https://example.invalid/v1", "V2-to-V1 runtime adapter lost provider settings")
+    check(provider_v1["options"]["headers"] == {"x-fixture": "safe"},
+          "V2-to-V1 runtime adapter moved user provider headers out of their V1 settings")
     check(provider_v1["models"]["fixture-model"]["id"] == "fixture-model-v2", "V2-to-V1 runtime adapter lost model identity")
-    print("PASS V1 provider/model settings migrate, and CLI/TUI preferences survive config staging")
+    check(v1_roundtrip["plugin"] == ["@company/opencode-audit"], "V2-to-V1 migration dropped the external plugin")
+    check(v1_roundtrip["mcp"]["internal-catalog"]["command"] == "company-catalog", "V2-to-V1 migration dropped the external MCP server")
+    check(v1_roundtrip["enterpriseRepository"]["url"] == "https://nexus.example.invalid", "V2-to-V1 migration dropped an unknown enterprise setting")
+    check(v1_roundtrip["compaction"]["auto"] is False, "V2-to-V1 migration reset user compaction settings")
+    check("company-reviewer" in v1_roundtrip["agent"], "V2-to-V1 migration dropped the active custom agent")
+    print("PASS V1/V2 profile transitions preserve plugins, MCP, references, custom agents, providers and user settings")
+
+
+def local_environment_preservation_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
+    paths = fixture(temp)
+    external_config = temp / "preexisting-opencode-config"
+    external_config.mkdir()
+    write_json(external_config / "opencode.jsonc", {
+        "theme": "company-dark", "plugin": ["@company/first-use-plugin"],
+        "mcp": {"catalog": {"type": "local", "command": "company-catalog"}},
+        "organizationEndpoint": {"url": "https://opencode.example.invalid"},
+    })
+    (external_config / "cli.json").write_text('{"theme":"company-cli"}\n', encoding="utf-8")
+    (external_config / "commands").mkdir()
+    (external_config / "commands" / "company.md").write_text("external command\n", encoding="utf-8")
+    first_install_target = temp / "first-install-config"
+    run(["bash", "-c", "source \"$ANVIL_ROOT/scripts/lib/common.sh\"; "
+         "source \"$ANVIL_ROOT/scripts/lib/install.sh\"; "
+         "anvil_build_config \"$1\" \"$2\" yes 1",
+         "_", str(first_install_target), str(external_config)],
+        env_for(paths, ANVIL_ROOT=str(ROOT), XDG_DATA_HOME=str(temp / "first-install-data")))
+    first_install_profile = json.loads((first_install_target / "opencode.jsonc").read_text(encoding="utf-8"))
+    first_install_manifest = json.loads((first_install_target / ".anvil-managed.json").read_text(encoding="utf-8"))
+    check(first_install_profile["theme"] == "company-dark"
+          and first_install_profile["plugin"] == ["@company/first-use-plugin"]
+          and first_install_profile["mcp"]["catalog"]["command"] == "company-catalog"
+          and first_install_profile["organizationEndpoint"]["url"] == "https://opencode.example.invalid",
+          "first Anvil install replaced a pre-existing user OpenCode profile")
+    check((first_install_target / "cli.json").read_text(encoding="utf-8").find("company-cli") >= 0
+          and (first_install_target / "commands" / "company.md").is_file()
+          and "commands/company.md" not in first_install_manifest["files"],
+          "first Anvil install did not preserve user preferences and external files without claiming ownership")
+    run([sys.executable, str(ROOT / "scripts" / "configure.py"), "audit-v1",
+         str(first_install_target / "opencode.jsonc")], env_for(paths))
+
+    use_v2_profile(paths, temp, wrapper)
+    config_path = paths["config"] / "opencode.jsonc"
+    link_target = temp / "company-reference-target.md"
+    link_target.write_text("user-owned symbolic link target\n", encoding="utf-8")
+    external_link = paths["config"] / "references" / "company-reference.md"
+    external_link.parent.mkdir(parents=True, exist_ok=True)
+    external_link.symlink_to(link_target)
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["plugins"] = [*config.get("plugins", []), "@company/opencode-audit"]
+    config["mcp"] = {"servers": {"internal-catalog": {"type": "local", "command": "company-catalog"}}}
+    config["references"] = {"company-runbook": {"path": "/srv/company/runbook"}}
+    config["compaction"].update(auto=False, userWindow="keep")
+    config["model"] = "company/model"
+    config["enterpriseRepository"] = {"url": "https://nexus.example.invalid", "trust": "company-root-ca"}
+    write_json(config_path, config)
+
+    external = {
+        paths["home"] / ".npmrc": "registry=https://nexus.example.invalid/repository/npm/\n//nexus.example.invalid/:_authToken=USER_SECRET_SENTINEL\n",
+        paths["home"] / ".databrickscfg": "[company]\nhost = https://workspace.example.invalid\ntoken = ${DATABRICKS_TOKEN}\n",
+        paths["home"] / ".config" / "pip" / "pip.conf": "[global]\nindex-url = https://nexus.example.invalid/simple\n",
+        paths["home"] / ".config" / "certs" / "company-root.pem": "company certificate reference\n",
+        paths["home"] / ".bashrc": "# company shell setup\nexport HTTPS_PROXY=http://proxy.example.invalid:8080\n",
+    }
+    for path, content in external.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    before_external = {str(path): file_hash(path) for path in external}
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper),
+                      ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0", ANVIL_SKIP_RUNTIME_PROBE="1")
+
+    before_dry = filesystem_snapshot(paths["config"])
+    dry = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env)
+    check(filesystem_snapshot(paths["config"]) == before_dry, "upgrade dry-run changed shared or user config")
+    check("shared config" in dry.stdout and "local environment" in dry.stdout and "snapshot" in dry.stdout,
+          "dry-run did not summarize Anvil ownership, preservation, and snapshot behavior")
+    check("USER_SECRET_SENTINEL" not in dry.stdout, "dry-run printed a user configuration value")
+
+    run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
+    upgraded = json.loads(config_path.read_text(encoding="utf-8"))
+    check("@company/opencode-audit" in upgraded["plugins"] and "./plugins/anvil-core" in upgraded["plugins"],
+          "Anvil upgrade deleted the user's OpenCode plugin")
+    check(upgraded["mcp"]["servers"]["internal-catalog"]["command"] == "company-catalog",
+          "Anvil upgrade deleted the user's MCP configuration")
+    check(upgraded["references"]["company-runbook"]["path"] == "/srv/company/runbook",
+          "Anvil upgrade deleted an external reference")
+    check(upgraded["model"] == "company/model" and upgraded["enterpriseRepository"]["trust"] == "company-root-ca",
+          "Anvil upgrade replaced an unknown OpenCode environment setting")
+    check(upgraded["compaction"]["auto"] is False and upgraded["compaction"]["userWindow"] == "keep",
+          "Anvil upgrade reset a local runtime preference")
+    check(all(file_hash(path) == before_external[str(path)] for path in external),
+          "Anvil upgrade changed a package repository, proxy, certificate, credential reference, or shell file")
+
+    upgraded["plugins"].append("@company/post-upgrade-plugin")
+    upgraded["mcp"]["servers"]["post-upgrade"] = {"type": "local", "command": "new-catalog"}
+    upgraded["postUpgradeSetting"] = {"endpoint": "https://local.example.invalid"}
+    upgraded["compaction"]["userWindow"] = "changed-after-upgrade"
+    write_json(config_path, upgraded)
+    cli_path = paths["config"] / "cli.json"
+    cli_path.write_text('{"theme":"company-after-upgrade"}\n', encoding="utf-8")
+    post_upgrade_file = paths["config"] / "commands" / "company-post-upgrade.md"
+    post_upgrade_file.write_text("user-added after Anvil upgrade\n", encoding="utf-8")
+    (paths["home"] / ".npmrc").write_text(external[paths["home"] / ".npmrc"] + "fund=false\n", encoding="utf-8")
+    latest_npmrc = file_hash(paths["home"] / ".npmrc")
+
+    run(["/usr/bin/make", "--no-print-directory", "rollback"], env)
+    rolled_config = json.loads(config_path.read_text(encoding="utf-8"))
+    check(set(rolled_config["plugins"]) == {"./plugins/anvil-core", "@company/opencode-audit",
+                                             "@company/post-upgrade-plugin"}
+          and len(rolled_config["plugins"]) == 3,
+          "rollback did not preserve the user's latest plugin config alongside the Anvil core plugin")
+    check(rolled_config["mcp"]["servers"]["post-upgrade"]["command"] == "new-catalog",
+          "rollback discarded a post-upgrade MCP change")
+    check(rolled_config["postUpgradeSetting"]["endpoint"] == "https://local.example.invalid",
+          "rollback discarded a post-upgrade unknown config key")
+    check(rolled_config["compaction"]["userWindow"] == "changed-after-upgrade",
+          "rollback restored an old value over a local runtime preference")
+    check(json.loads(cli_path.read_text(encoding="utf-8"))["theme"] == "company-after-upgrade",
+          "rollback reverted a post-upgrade CLI preference")
+    check(post_upgrade_file.read_text(encoding="utf-8") == "user-added after Anvil upgrade\n",
+          "rollback discarded an external file added after upgrade")
+    check(external_link.is_symlink() and external_link.resolve() == link_target,
+          "rollback discarded or followed an external user-owned symlink")
+    check(file_hash(paths["home"] / ".npmrc") == latest_npmrc and
+          all(file_hash(path) == before_external[str(path)] for path in list(external)[1:]),
+          "rollback changed user-local package, proxy, certificate, or shell configuration")
+
+    run(["/usr/bin/make", "--no-print-directory", "reforge"], env)
+    reforged = json.loads(config_path.read_text(encoding="utf-8"))
+    check("@company/opencode-audit" in reforged["plugins"] and "./plugins/anvil-core" in reforged["plugins"],
+          "reforge deleted the external OpenCode plugin")
+    check(reforged["mcp"]["servers"]["post-upgrade"]["command"] == "new-catalog",
+          "reforge deleted post-upgrade MCP configuration")
+    check(post_upgrade_file.is_file(), "reforge deleted a user-owned file")
+    check(external_link.is_symlink() and external_link.resolve() == link_target,
+          "reforge discarded or followed an external user-owned symlink")
+    check(all(file_hash(path) == (latest_npmrc if path.name == ".npmrc" else before_external[str(path)])
+              for path in external), "reforge changed machine-local repository, proxy, certificate, or shell files")
+
+    backup_root = paths["anvil_data"] / "backups"
+    archives = sorted(backup_root.glob("*/config.tar.gz"))
+    check(archives, "upgrade/reforge did not create configuration snapshots")
+    import tarfile
+    with tarfile.open(archives[-1], "r:gz") as bundle:
+        members = bundle.getnames()
+    check(not any("node_modules" in name or "company-post-upgrade" in name for name in members),
+          "Anvil snapshot copied unrelated external configuration content")
+    assert_no_external_network(temp)
+    print("PASS upgrade, rollback, and reforge preserve shared/user configuration and leave machine-local settings intact")
 
 
 def rehearsal_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
@@ -1450,6 +1639,7 @@ def upgrade_test(
     promote_fixture_to_current_anvil(paths, temp)
 
     original_config = tree_hash(paths["config"])
+    original_profile = json.loads((paths["config"] / "opencode.jsonc").read_text(encoding="utf-8"))
     original_data = tree_hash(paths["data_opencode"])
     original_state = tree_hash(paths["state_opencode"])
     original_memory = tree_hash(paths["memory"])
@@ -1494,7 +1684,13 @@ def upgrade_test(
     proc = run(["/usr/bin/make", "--no-print-directory", "migrate-runtime", "OPENCODE_MAJOR=2"], upgrade_env(**extra), expected=2 if fail else 0)
     if fail:
         check("Automatic rollback completed" in proc.stderr, "upgrade failure did not report automatic rollback")
-        check(tree_hash(paths["config"]) == original_config, "automatic rollback did not restore V1 config")
+        restored_config = tree_hash(paths["config"])
+        restored_config.pop("opencode.jsonc", None)
+        original_managed_files = dict(original_config)
+        original_managed_files.pop("opencode.jsonc", None)
+        restored_profile = json.loads((paths["config"] / "opencode.jsonc").read_text(encoding="utf-8"))
+        check(restored_config == original_managed_files and restored_profile == original_profile,
+              "automatic rollback did not restore V1 managed files and shared user settings")
         check(file_hash(paths["binary"]) == original_binary, "automatic rollback did not restore V1 executable")
         check(tree_hash(paths["data_opencode"]) == original_data, "automatic rollback did not restore OpenCode data")
         check(tree_hash(paths["state_opencode"]) == original_state, "automatic rollback did not restore OpenCode state")
@@ -1524,7 +1720,12 @@ def upgrade_test(
 
     rolled = run(["/usr/bin/make", "--no-print-directory", "rollback"], env_for(paths))
     restored_config = tree_hash(paths["config"])
-    check(restored_config == original_config, "manual rollback did not restore all V1 config files")
+    restored_config.pop("opencode.jsonc", None)
+    original_managed_files = dict(original_config)
+    original_managed_files.pop("opencode.jsonc", None)
+    restored_profile = json.loads((paths["config"] / "opencode.jsonc").read_text(encoding="utf-8"))
+    check(restored_config == original_managed_files and restored_profile == original_profile,
+          "manual rollback did not restore V1 managed files and shared user settings")
     check(file_hash(paths["binary"]) == original_binary, "manual rollback did not restore V1 executable")
     check(tree_hash(paths["data_opencode"]) == original_data and tree_hash(paths["state_opencode"]) == original_state, "manual rollback did not restore OpenCode data/state")
     check(tree_hash(paths["memory"]) == original_memory, "manual rollback changed Anvil memory")
@@ -1827,6 +2028,8 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="anvil-provider-migration-", dir=TEST_ROOT) as name:
         provider_migration_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-local-config-preservation-", dir=TEST_ROOT) as name:
+        local_environment_preservation_test(pathlib.Path(name), wrapper_v2)
     with tempfile.TemporaryDirectory(prefix="anvil-first-install-stats-", dir=TEST_ROOT) as name:
         temp = pathlib.Path(name)
         home = temp / "home"

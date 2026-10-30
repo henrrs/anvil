@@ -4,6 +4,7 @@
 
 - Solve the requested task. Do not claim success when meaningful validation failed. Use repository evidence and current official sources for facts that can change.
 - Preserve unrelated work and normal safety controls. Do not publish, deploy, send messages, or change external accounts without authorization.
+- Anvil owns only manifest-managed files and profile keys; preserve user plugins, shared settings, unknown external config and machine-local files during lifecycle changes.
 - Never reveal credentials. Databricks auth stays in supported Unified Authentication storage; Anvil stores only profile, host, and non-secret provider metadata.
 - Do not write durable Anvil memory unless `/remember`, `/distill`, or the user explicitly asks. Never start, stop, restart, resize, edit, or delete Databricks compute without direct approval; do not start cost-generating workloads silently.
 - Describe Databricks usage/list-price evidence accurately. Do not call it a measured total cloud bill or precise shared-workload attribution without evidence.

@@ -4,7 +4,7 @@
 >
 > **Better harness. Better execution.**
 
-Anvil 2.11.0 adds evidence-led editorial and visual communication: audience framing, materiality, semantic visual intent, numerical context and bounded artifact critique. Adaptive engineering depth, long-horizon quality, OpenCode 1/2, memory, Databricks and artifact capabilities remain supported.
+Anvil 2.12.0 refines artifact-only editorial judgment and preserves shared OpenCode configuration through upgrades, reforge, and rollback. Adaptive engineering depth, OpenCode 1/2, memory, Databricks, and existing artifact capabilities remain supported.
 
 ```bash
 # First installation
@@ -129,4 +129,4 @@ Numerical values remain tied to evidence IDs. The deterministic core separates a
 
 ## Version history
 
-See the [Anvil 2.11.0 release notes](docs/versions/v2.11.0.md), [2.10-to-2.11 migration guide](docs/migrations/v2.10.0-to-v2.11.0.md), [system map](docs/system-map.md), [full-system quality audit](docs/quality-audit.md), [communication and artifact architecture](docs/communication-artifact-intelligence.md), [public command contracts](docs/command-contracts.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).
+See the [Anvil 2.12.0 release notes](docs/versions/v2.12.0.md), [2.11-to-2.12 migration guide](docs/migrations/v2.11.0-to-v2.12.0.md), [system map](docs/system-map.md), [full-system quality audit](docs/quality-audit.md), [communication and artifact architecture](docs/communication-artifact-intelligence.md), [public command contracts](docs/command-contracts.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).

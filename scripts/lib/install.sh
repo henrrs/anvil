@@ -75,9 +75,10 @@ PY
 }
 
 anvil_print_config_plan() {
-  local source_config="$1" target_config="$2" source_version="${3:-}" target_version="${4:-$(cat "$ANVIL_ROOT/VERSION")}"
+  local source_config="$1" target_config="$2" source_version="${3:-}" target_version="${4:-$(cat "$ANVIL_ROOT/VERSION")}" recover_managed="${5:-no}"
   local plan_args=(plan --source "$source_config" --target "$target_config" --target-version "$target_version")
   if [[ -n "$source_version" ]]; then plan_args+=(--source-version "$source_version"); fi
+  if [[ "$recover_managed" == yes ]]; then plan_args+=(--recover-managed); fi
   (
     set -o pipefail
     python3 "$ANVIL_ROOT/scripts/managed_config.py" "${plan_args[@]}" | python3 -c '
@@ -99,15 +100,18 @@ for key, label in (("added", "add"), ("updated", "update"), ("removed", "remove"
     if len(items) > 10:
         print(f"    ... {len(items) - 10} more paths omitted from display")
 print("  runtime action    " + plan["runtime_action"])
+print("  shared config     merge Anvil-owned profile keys; preserve external providers, plugins, MCP, references and user preferences")
+print("  local environment package, proxy, certificate, shell and credential-reference files outside OpenCode config remain untouched")
+print("  snapshot          scoped Anvil files plus shared profile/preferences before mutation; config values are not displayed")
 '
   )
 }
 
 anvil_apply_config() {
-  local source_config="$1"
+  local source_config="$1" allow_user_only="${2:-no}"
   [[ -d "$source_config" ]] || { anvil_error "Generated Anvil config is missing: $source_config"; return 1; }
   mkdir -p -- "$(dirname -- "$ANVIL_CONFIG_DIR")"
-  local parent stage previous
+  local parent stage previous managed_script managed_tree
   parent="$(dirname -- "$ANVIL_CONFIG_DIR")"
   stage="$(mktemp -d "$parent/.anvil-config-stage.XXXXXX")"
   if ! cp -pR -- "$source_config"/. "$stage"/; then
@@ -115,7 +119,11 @@ anvil_apply_config() {
     anvil_error 'Anvil global config staging copy failed.'
     return 1
   fi
-  [[ -f "$stage/opencode.jsonc" ]] || { rm -rf -- "$stage"; anvil_error 'Anvil global config staging copy is incomplete.'; return 1; }
+  if [[ "$allow_user_only" != yes && ! -f "$stage/opencode.jsonc" ]]; then
+    rm -rf -- "$stage"
+    anvil_error 'Anvil global config staging copy is incomplete.'
+    return 1
+  fi
   previous="$parent/.anvil-config-previous-$$"
   [[ ! -e "$previous" && ! -L "$previous" ]] || { rm -rf -- "$stage"; anvil_error 'A prior config swap needs manual review.'; return 1; }
   if [[ -e "$ANVIL_CONFIG_DIR" || -L "$ANVIL_CONFIG_DIR" ]]; then
@@ -130,13 +138,15 @@ anvil_apply_config() {
   fi
   if [[ "${ANVIL_TEST_KILL_AFTER_CONFIG_PUBLISH:-0}" == 1 ]]; then kill -9 "$$"; fi
   rm -rf -- "$previous"
-  chmod 600 -- "$ANVIL_CONFIG_DIR/opencode.jsonc"
-  chmod 700 -- "$ANVIL_CONFIG_DIR/scripts/memory.py" "$ANVIL_CONFIG_DIR/scripts/source_registry.py" "$ANVIL_CONFIG_DIR/scripts/runtime.py" \
-    "$ANVIL_CONFIG_DIR/scripts/runtime_state.py" \
-    "$ANVIL_CONFIG_DIR/scripts/databricks.py" "$ANVIL_CONFIG_DIR/scripts/databricks_finops.py" \
-    "$ANVIL_CONFIG_DIR/scripts/artifacts.py" "$ANVIL_CONFIG_DIR/scripts/engineering.py"
-  find "$ANVIL_CONFIG_DIR/scripts/communication" -type f -exec chmod 600 -- {} +
-  find "$ANVIL_CONFIG_DIR/scripts/databricks_providers" -type f -exec chmod 600 -- {} +
+  [[ ! -f "$ANVIL_CONFIG_DIR/opencode.jsonc" ]] || chmod 600 -- "$ANVIL_CONFIG_DIR/opencode.jsonc"
+  for managed_script in memory.py source_registry.py runtime.py runtime_state.py databricks.py databricks_finops.py artifacts.py engineering.py public_errors.py; do
+    [[ ! -f "$ANVIL_CONFIG_DIR/scripts/$managed_script" ]] || chmod 700 -- "$ANVIL_CONFIG_DIR/scripts/$managed_script"
+  done
+  for managed_tree in communication databricks_providers engineering; do
+    if [[ -d "$ANVIL_CONFIG_DIR/scripts/$managed_tree" ]]; then
+      find "$ANVIL_CONFIG_DIR/scripts/$managed_tree" -type f -exec chmod 600 -- {} +
+    fi
+  done
 }
 
 anvil_offer_databricks_setup() {

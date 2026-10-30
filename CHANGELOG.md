@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.12.0] - 2026-10-30 (candidate; release gate pending)
+
+- Refined the lazy communication skill with context-before-interpretation, materiality, editorial compression, chart skepticism, direct annotation, whitespace, asymmetric composition, and meaningful temporal storytelling. Simple coding tasks do not load this artifact guidance.
+- Extended the managed-config manifest to distinguish Anvil-owned profile keys from shared OpenCode configuration. Upgrades and reforge now preserve external plugins, MCP servers, references, custom agents, provider settings, runtime preferences, and unknown config keys across OpenCode 1/2 migrations.
+- Scoped rollback snapshots to Anvil-owned files and the shared profile/preferences. Rollback merges current user files and shared settings into staged prior Anvil state; conflicting ownership paths stop before live replacement.
+- Kept package, proxy, certificate, credential-reference, shell, Databricks, and other files outside the OpenCode config directory outside lifecycle mutation. Dry-run now describes config ownership, preservation, and snapshot scope without showing config values.
+- Added isolated first-install, upgrade, reforge, rollback, plugin/MCP/config merge, post-upgrade edit, machine-local file, and scoped-snapshot regressions, plus eleven editorial-judgment scenarios.
+- Extended the same-major source migration window to six prior minor releases to retain supported 2.6.x installations. No OpenCode major change or new external dependency is required.
+- Semantic review of a real Anvil presentation and live-model responsiveness evaluation were unavailable. The refinement candidate remains **NOT RELEASE READY** until those product-level evaluations are completed.
+
 ## [2.11.0] - 2026-10-30 (candidate; release gate pending)
 
 - Extended renderer-independent artifact contracts with OBSERVED/CALCULATED/INFERRED and SCENARIO epistemic states, counter-evidence, alternatives, materiality, decision context, and selective appendix placement.

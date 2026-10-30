@@ -21,6 +21,11 @@ BASELINE_SKILLS = {
 SKILLS = BASELINE_SKILLS | {"anvil-communication", "anvil-engineering", "anvil-system-design"}
 COMMANDS = {"remember", "recall", "distill", "review"}
 BUILTINS = {"build", "plan", "general", "explore"}
+ANVIL_PLUGIN = "./plugins/anvil-core"
+STRUCTURED_SHARED_KEYS = {
+    "provider", "providers", "plugin", "plugins", "mcp", "references",
+    "compaction", "tool_output", "watcher", "agent", "agents",
+}
 PROTECTED_SHELL = (
     "git reset --hard*", "git clean -f*", "git checkout -- *", "git restore --worktree*",
     "git push --force*", "git push -f*", "git branch -D*", "git stash drop*", "git stash clear*",
@@ -197,19 +202,26 @@ def _old_provider(raw: Any) -> Any:
         return raw
     provider = dict(raw)
     result: dict[str, Any] = {}
-    for key in ("name", "env", "headers", "body", "models", "options", "whitelist", "blacklist"):
+    for key in ("name", "env", "models", "options", "whitelist", "blacklist"):
         if key in provider:
             result[key] = provider[key]
     package = provider.get("package")
     if isinstance(package, str):
         result["npm"] = package.removeprefix("aisdk:")
     settings = provider.get("settings", {})
+    legacy_options = result.get("options", {})
+    legacy_options = dict(legacy_options) if isinstance(legacy_options, dict) else {}
     if isinstance(settings, dict):
         settings = dict(settings)
         if "baseURL" in settings:
             result["api"] = settings.pop("baseURL")
         if settings:
-            result["options"] = {**settings, **(result.get("options") if isinstance(result.get("options"), dict) else {})}
+            legacy_options = {**settings, **legacy_options}
+    for key in ("headers", "body"):
+        if key in provider:
+            legacy_options.setdefault(key, provider[key])
+    if legacy_options:
+        result["options"] = legacy_options
     if isinstance(provider.get("models"), dict):
         result["models"] = {model_id: _old_model(model) for model_id, model in provider["models"].items()}
     known = {"name", "env", "headers", "body", "models", "options", "whitelist", "blacklist", "package", "settings"}
@@ -258,11 +270,11 @@ def new_providers(config_dir: Path) -> dict[str, Any]:
 
 
 def _user_agents(config_dir: Path, major: int) -> dict[str, dict[str, Any]]:
-    """Carry disabled inline user agents across config rebuilds.
+    """Carry user-defined inline agents across config rebuilds.
 
     Anvil owns its named baseline agents and its primary agent. Additional
-    inline agents are accepted only when disabled by the source audit; retain
-    those definitions and normalize the generation-specific disable key.
+    inline agents remain user-owned. Preserve active/disabled state and
+    normalize only the generation-specific disable key.
     """
     prior = _read_config(config_dir / "opencode.jsonc")
     key = "agent" if isinstance(prior.get("agent"), dict) else "agents"
@@ -290,18 +302,254 @@ def _user_agents(config_dir: Path, major: int) -> dict[str, dict[str, Any]]:
     else:
         reserved = BUILTINS | {"anvil"}
     disabled_key = "disable" if key == "agent" else "disabled"
+    alternate_disabled_key = "disabled" if disabled_key == "disable" else "disable"
     target_disabled_key = "disable" if major == 1 else "disabled"
     result: dict[str, dict[str, Any]] = {}
     for name, definition in agents.items():
         if name in reserved or not isinstance(name, str) or not isinstance(definition, dict):
             continue
-        if definition.get(disabled_key) is not True:
-            continue
         copied = copy.deepcopy(definition)
+        disabled = copied.get(disabled_key, copied.get(alternate_disabled_key))
         copied.pop("disable", None)
         copied.pop("disabled", None)
-        copied[target_disabled_key] = True
+        if disabled is not None:
+            copied[target_disabled_key] = disabled
         result[name] = copied
+    return result
+
+
+def _config_major(config: dict[str, Any]) -> int:
+    if isinstance(config.get("agent"), dict):
+        return 1
+    if isinstance(config.get("agents"), dict):
+        return 2
+    return 1
+
+
+def _merge_user_mapping(previous: Any, target: Any) -> Any:
+    """Merge shared config with the previous user value winning conflicts."""
+    if not isinstance(previous, dict) or not isinstance(target, dict):
+        return copy.deepcopy(previous if previous is not None else target)
+    result = copy.deepcopy(target)
+    for key, value in previous.items():
+        if key in result and isinstance(value, dict) and isinstance(result[key], dict):
+            result[key] = _merge_user_mapping(value, result[key])
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
+
+
+def _is_anvil_plugin(value: Any) -> bool:
+    if isinstance(value, str) and value in {ANVIL_PLUGIN, "anvil-core"}:
+        return True
+    if isinstance(value, dict):
+        return any(isinstance(value.get(key), str) and value[key] in {ANVIL_PLUGIN, "anvil-core"}
+                   for key in ("id", "name", "path", "plugin"))
+    return False
+
+
+def _merge_plugin_values(previous: Any, target: Any) -> Any:
+    if previous is None:
+        return copy.deepcopy(target)
+    if target is None:
+        target = [] if isinstance(previous, list) else {}
+    if isinstance(previous, list) and isinstance(target, list):
+        result = []
+        for value in [*(item for item in previous if not _is_anvil_plugin(item)), *target]:
+            if value not in result:
+                result.append(copy.deepcopy(value))
+        return result
+    if isinstance(previous, dict) and isinstance(target, dict):
+        user_values = {key: value for key, value in previous.items() if not _is_anvil_plugin(key)}
+        return _merge_user_mapping(user_values, target)
+    if previous == target:
+        return copy.deepcopy(target)
+    raise ValueError("existing OpenCode plugin configuration has an incompatible shape; it was not replaced")
+
+
+def _migrate_mcp(value: Any, source_major: int, target_major: int) -> Any:
+    if not isinstance(value, dict) or source_major == target_major:
+        return copy.deepcopy(value)
+    if source_major == 1 and target_major == 2:
+        if "servers" in value:
+            return copy.deepcopy(value)
+        return {"servers": copy.deepcopy(value)} if value else {"servers": {}}
+    if source_major == 2 and target_major == 1:
+        servers = value.get("servers")
+        if isinstance(servers, dict):
+            return _merge_user_mapping({key: item for key, item in value.items() if key != "servers"}, servers)
+    return copy.deepcopy(value)
+
+
+def _migrate_compaction(value: dict[str, Any], source_major: int, target_major: int) -> dict[str, Any]:
+    result = copy.deepcopy(value)
+    if source_major == target_major:
+        return result
+    legacy_keys = {"prune", "tail_turns", "preserve_recent_tokens", "reserved"}
+    native_keys = {"keep", "buffer"}
+    for key in legacy_keys | native_keys:
+        if key not in (native_keys if target_major == 1 else legacy_keys):
+            continue
+        result.pop(key, None)
+    return result
+
+
+def merge_prior_configuration(data: dict[str, Any], prior_config_dir: Path, major: int) -> None:
+    """Merge a user's OpenCode configuration into an Anvil-owned profile.
+
+    Generated Anvil fields stay authoritative. Providers, plugins, MCP,
+    references, runtime preferences, custom agents and unknown top-level
+    configuration are preserved with format-aware handling.
+    """
+    previous_path = prior_config_dir / "opencode.jsonc"
+    try:
+        parsed_previous = parse_jsonc(previous_path.read_text(encoding="utf-8"), str(previous_path))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        if previous_path.exists():
+            raise ValueError(f"existing OpenCode configuration cannot be safely merged: {exc}") from exc
+        parsed_previous = {}
+    if not isinstance(parsed_previous, dict):
+        raise ValueError("existing OpenCode configuration root is not an object; it was not replaced")
+    providers = old_providers(prior_config_dir) if major == 2 else new_providers(prior_config_dir)
+    if providers:
+        data["providers" if major == 2 else "provider"] = providers
+
+    previous = parsed_previous
+    source_major = _config_major(previous)
+    custom_agents = _user_agents(prior_config_dir, major)
+    agent_key = "agents" if major == 2 else "agent"
+    if custom_agents:
+        data[agent_key].update(custom_agents)
+
+    plugin_key = "plugins" if major == 2 else "plugin"
+    previous_plugins: Any = None
+    for key in (("plugins", "plugin") if source_major == 2 else ("plugin", "plugins")):
+        value = previous.get(key)
+        if value is not None:
+            previous_plugins = _merge_plugin_values(previous_plugins, value)
+    if previous_plugins is not None:
+        data[plugin_key] = _merge_plugin_values(previous_plugins, data.get(plugin_key))
+
+    if "mcp" in previous:
+        previous_mcp = _migrate_mcp(previous["mcp"], source_major, major)
+        data["mcp"] = _merge_user_mapping(previous_mcp, data.get("mcp", {}))
+
+    if isinstance(previous.get("references"), dict):
+        external_references = {key: value for key, value in previous["references"].items()
+                               if key != "anvil-knowledge"}
+        merged_references = _merge_user_mapping(external_references, data.get("references", {}))
+        if merged_references or "references" in data:
+            data["references"] = merged_references
+
+    for key in ("compaction", "tool_output"):
+        if isinstance(previous.get(key), dict):
+            previous_value = (_migrate_compaction(previous[key], source_major, major)
+                              if key == "compaction" else previous[key])
+            data[key] = _merge_user_mapping(previous_value, data.get(key, {}))
+
+    if isinstance(previous.get("watcher"), dict):
+        old_watcher = previous["watcher"]
+        target_watcher = data.get("watcher", {})
+        merged_watcher = _merge_user_mapping(old_watcher, target_watcher)
+        old_ignore = old_watcher.get("ignore", [])
+        target_ignore = target_watcher.get("ignore", []) if isinstance(target_watcher, dict) else []
+        if isinstance(old_ignore, list) and isinstance(target_ignore, list):
+            merged_watcher["ignore"] = list(dict.fromkeys([*old_ignore, *target_ignore]))
+        data["watcher"] = merged_watcher
+
+    # Configuration keys outside the Anvil profile are user/machine-owned.
+    # Preserve them verbatim unless a structured merge above owns the boundary.
+    for key, value in previous.items():
+        if key not in data and key not in STRUCTURED_SHARED_KEYS:
+            data[key] = copy.deepcopy(value)
+
+    prior_agents_key = "agent" if isinstance(previous.get("agent"), dict) else "agents"
+    prior_agents = previous.get(prior_agents_key, {})
+    prior_anvil = prior_agents.get("anvil", {}) if isinstance(prior_agents, dict) else {}
+    if prior_agents_key == "agent":
+        prior_permission = prior_anvil.get("permission", {}) if isinstance(prior_anvil, dict) else {}
+        prior_skill_rules = prior_permission.get("skill", {}) if isinstance(prior_permission, dict) else {}
+        custom_skills = {name for name, effect in prior_skill_rules.items()
+                         if name != "*" and effect == "allow" and name not in SKILLS
+                         and (prior_config_dir / "skills" / name / "SKILL.md").is_file()}
+    else:
+        prior_rules = prior_anvil.get("permissions", []) if isinstance(prior_anvil, dict) else []
+        custom_skills = {str(rule.get("resource")) for rule in prior_rules if isinstance(rule, dict)
+                         and rule.get("action") == "skill" and rule.get("effect") == "allow"
+                         and rule.get("resource") not in {"*", *SKILLS}
+                         and (prior_config_dir / "skills" / str(rule.get("resource")) / "SKILL.md").is_file()}
+    if custom_skills:
+        if major == 1:
+            data["agent"]["anvil"]["permission"]["skill"].update({name: "allow" for name in sorted(custom_skills)})
+        else:
+            permissions = data["agents"]["anvil"]["permissions"]
+            insert_at = next((index for index, rule in enumerate(permissions)
+                              if isinstance(rule, dict) and rule.get("action") == "subagent"), len(permissions))
+            permissions[insert_at:insert_at] = [
+                {"action": "skill", "resource": name, "effect": "allow"}
+                for name in sorted(custom_skills)
+            ]
+
+
+def extract_user_configuration(prior_config_dir: Path, target_major: int) -> dict[str, Any]:
+    """Return user-owned portions of a shared profile for ownership-aware rollback."""
+    path = prior_config_dir / "opencode.jsonc"
+    if not path.is_file():
+        return {}
+    try:
+        previous = parse_jsonc(path.read_text(encoding="utf-8"), str(path))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"existing OpenCode configuration cannot be safely merged: {exc}") from exc
+    if not isinstance(previous, dict):
+        raise ValueError("existing OpenCode configuration root is not an object; it was not replaced")
+
+    agents_key = "agent" if isinstance(previous.get("agent"), dict) else "agents"
+    agents = previous.get(agents_key, {})
+    if not isinstance(agents, dict) or not isinstance(agents.get("anvil"), dict):
+        return copy.deepcopy(previous)
+
+    source_major = _config_major(previous)
+    result: dict[str, Any] = {}
+    providers = old_providers(prior_config_dir) if target_major == 2 else new_providers(prior_config_dir)
+    if providers:
+        result["providers" if target_major == 2 else "provider"] = providers
+    custom_agents = _user_agents(prior_config_dir, target_major)
+    if custom_agents:
+        result["agents" if target_major == 2 else "agent"] = custom_agents
+
+    plugin_key = "plugins" if target_major == 2 else "plugin"
+    plugin_values: Any = None
+    for key in (("plugins", "plugin") if source_major == 2 else ("plugin", "plugins")):
+        if key in previous:
+            plugin_values = _merge_plugin_values(plugin_values, previous[key])
+    if isinstance(plugin_values, list):
+        plugin_values = [value for value in plugin_values if not _is_anvil_plugin(value)]
+    elif isinstance(plugin_values, dict):
+        plugin_values = {key: value for key, value in plugin_values.items() if not _is_anvil_plugin(key)}
+    if plugin_values:
+        result[plugin_key] = plugin_values
+
+    if "mcp" in previous:
+        result["mcp"] = _migrate_mcp(previous["mcp"], source_major, target_major)
+    if isinstance(previous.get("references"), dict):
+        references = {key: value for key, value in previous["references"].items()
+                      if key != "anvil-knowledge"}
+        if references:
+            result["references"] = references
+    for key in ("compaction", "tool_output", "watcher"):
+        if key in previous:
+            value = previous[key]
+            if key == "compaction" and isinstance(value, dict):
+                value = _migrate_compaction(value, source_major, target_major)
+            result[key] = copy.deepcopy(value)
+
+    anvil_owned_root = {
+        "$schema", "default_agent", "agent", "agents", "mcp", "plugin", "plugins",
+        "provider", "providers", "references", "compaction", "tool_output", "watcher",
+    }
+    for key, value in previous.items():
+        if key not in anvil_owned_root:
+            result[key] = copy.deepcopy(value)
     return result
 
 
@@ -313,39 +561,7 @@ def build(source: Path, destination: Path, prior_config_dir: Path | None, preser
     if not isinstance(data, dict):
         raise ValueError(f"Anvil OpenCode {major} config must be a JSON object")
     if prior_config_dir is not None:
-        providers = old_providers(prior_config_dir) if major == 2 else new_providers(prior_config_dir)
-        if providers:
-            data["providers" if major == 2 else "provider"] = providers
-        custom_agents = _user_agents(prior_config_dir, major)
-        if custom_agents:
-            data["agents" if major == 2 else "agent"].update(custom_agents)
-        prior = _read_config(prior_config_dir / "opencode.jsonc")
-        prior_agents_key = "agent" if isinstance(prior.get("agent"), dict) else "agents"
-        prior_agents = prior.get(prior_agents_key, {})
-        prior_anvil = prior_agents.get("anvil", {}) if isinstance(prior_agents, dict) else {}
-        if prior_agents_key == "agent":
-            prior_permission = prior_anvil.get("permission", {}) if isinstance(prior_anvil, dict) else {}
-            prior_skill_rules = prior_permission.get("skill", {}) if isinstance(prior_permission, dict) else {}
-            custom_skills = {name for name, effect in prior_skill_rules.items()
-                             if name != "*" and effect == "allow" and name not in SKILLS
-                             and (prior_config_dir / "skills" / name / "SKILL.md").is_file()}
-        else:
-            prior_rules = prior_anvil.get("permissions", []) if isinstance(prior_anvil, dict) else []
-            custom_skills = {str(rule.get("resource")) for rule in prior_rules if isinstance(rule, dict)
-                             and rule.get("action") == "skill" and rule.get("effect") == "allow"
-                             and rule.get("resource") not in {"*", *SKILLS}
-                             and (prior_config_dir / "skills" / str(rule.get("resource")) / "SKILL.md").is_file()}
-        if custom_skills:
-            if major == 1:
-                data["agent"]["anvil"]["permission"]["skill"].update({name: "allow" for name in sorted(custom_skills)})
-            else:
-                permissions = data["agents"]["anvil"]["permissions"]
-                insert_at = next((index for index, rule in enumerate(permissions)
-                                  if isinstance(rule, dict) and rule.get("action") == "subagent"), len(permissions))
-                permissions[insert_at:insert_at] = [
-                    {"action": "skill", "resource": name, "effect": "allow"}
-                    for name in sorted(custom_skills)
-                ]
+        merge_prior_configuration(data, prior_config_dir, major)
     if major == 2:
         knowledge = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "anvil" / "knowledge"
         data["references"]["anvil-knowledge"]["path"] = str(knowledge)
@@ -372,8 +588,6 @@ def _audit_v1(path: Path, *, source_compatible: bool = False) -> list[str]:
         return [f"config is unreadable or invalid JSONC: {exc}"]
     if not isinstance(data, dict):
         return ["config root must be an object"]
-    if "model" in data or "small_model" in data:
-        errors.append("global OpenCode model defaults are pinned")
     agents = data.get("agent", {})
     if not isinstance(agents, dict):
         errors.append("agent must be an object")
@@ -384,16 +598,14 @@ def _audit_v1(path: Path, *, source_compatible: bool = False) -> list[str]:
     if data.get("default_agent") != "anvil":
         errors.append("default_agent is not anvil")
     if source_compatible:
-        for name, agent in agents.items():
-            if name != "anvil" and (not isinstance(agent, dict) or agent.get("disable") is not True):
-                errors.append(f"non-primary agent {name} is not disabled")
+        for name in BUILTINS & set(agents):
+            agent = agents[name]
+            if not isinstance(agent, dict) or agent.get("disable") is not True:
+                errors.append(f"Anvil-owned built-in agent {name} is not disabled")
     else:
         for name in BUILTINS:
             if not isinstance(agents.get(name), dict) or agents[name].get("disable") is not True:
                 errors.append(f"built-in agent {name} is not disabled")
-        for name, agent in agents.items():
-            if name not in BUILTINS | {"anvil"} and (not isinstance(agent, dict) or agent.get("disable") is not True):
-                errors.append(f"custom agent {name} must remain disabled")
     anvil = agents.get("anvil", {})
     if not isinstance(anvil, dict) or anvil.get("mode") != "primary":
         errors.append("anvil primary agent is missing")
@@ -419,13 +631,13 @@ def _audit_v1(path: Path, *, source_compatible: bool = False) -> list[str]:
                     if source_compatible else SKILLS <= allowed_skills and custom_skills_present)
     if not isinstance(skill, dict) or skill.get("*") != "deny" or not skills_valid:
         errors.append("V1 skill allowlist does not match a supported Anvil profile")
-    if not source_compatible and data.get("mcp") not in ({}, None):
-        errors.append("V1 global MCP config is not empty")
-    if not source_compatible and data.get("plugin") not in ([], None):
-        errors.append("V1 managed global plugins are not empty")
+    if data.get("mcp") is not None and not isinstance(data.get("mcp"), dict):
+        errors.append("V1 MCP configuration must be an object")
+    if data.get("plugin") is not None and not isinstance(data.get("plugin"), (list, dict)):
+        errors.append("V1 plugin configuration has an unsupported shape")
     compact = data.get("compaction", {})
-    if not isinstance(compact, dict) or compact.get("auto") is not True:
-        errors.append("V1 automatic compaction is not enabled")
+    if not isinstance(compact, dict) or not isinstance(compact.get("auto"), bool):
+        errors.append("V1 compaction settings are invalid")
     return errors
 
 
@@ -437,7 +649,7 @@ def audit(path: Path, *, source_compatible: bool = False) -> list[str]:
         return [f"config is unreadable or invalid JSONC: {exc}"]
     if not isinstance(data, dict):
         return ["config root must be an object"]
-    if any(key in data for key in ("model", "small_model", "agent", "permission", "plugin")):
+    if any(key in data for key in ("agent", "permission", "plugin")):
         errors.append("legacy V1 config keys remain in the native V2 configuration")
     agents = data.get("agents", {})
     if not isinstance(agents, dict):
@@ -449,16 +661,14 @@ def audit(path: Path, *, source_compatible: bool = False) -> list[str]:
     if data.get("default_agent") != "anvil":
         errors.append("default_agent is not anvil")
     if source_compatible:
-        for name, agent in agents.items():
-            if name != "anvil" and (not isinstance(agent, dict) or agent.get("disabled") is not True):
-                errors.append(f"non-primary agent {name} is not disabled")
+        for name in BUILTINS & set(agents):
+            agent = agents[name]
+            if not isinstance(agent, dict) or agent.get("disabled") is not True:
+                errors.append(f"Anvil-owned built-in agent {name} is not disabled")
     else:
         for name in BUILTINS:
             if not isinstance(agents.get(name), dict) or agents[name].get("disabled") is not True:
                 errors.append(f"built-in agent {name} is not disabled")
-        for name, agent in agents.items():
-            if name not in BUILTINS | {"anvil"} and (not isinstance(agent, dict) or agent.get("disabled") is not True):
-                errors.append(f"custom agent {name} must remain disabled")
     anvil = agents.get("anvil", {})
     if not isinstance(anvil, dict) or anvil.get("mode") != "primary":
         errors.append("anvil primary agent is missing")
@@ -490,17 +700,18 @@ def audit(path: Path, *, source_compatible: bool = False) -> list[str]:
     if rules.get(("skill", "*")) != "deny" or not skills_valid:
         errors.append("Anvil skill allowlist does not match a supported Anvil profile")
     mcp = data.get("mcp", {})
-    if not source_compatible and (not isinstance(mcp, dict) or mcp.get("servers", {}) != {} or set(mcp) - {"servers"}):
-        errors.append("managed global MCP server config is not empty")
-    if not source_compatible and data.get("plugins") != ["./plugins/anvil-core"]:
-        errors.append("anvil-core is not the only managed plugin")
+    if not isinstance(mcp, dict) or ("servers" in mcp and not isinstance(mcp["servers"], dict)):
+        errors.append("native V2 MCP configuration has an invalid shape")
+    plugins = data.get("plugins", [])
+    if not isinstance(plugins, list) or plugins.count(ANVIL_PLUGIN) != 1:
+        errors.append("native V2 plugin configuration must retain exactly one Anvil core plugin")
     compaction = data.get("compaction", {})
-    if (not isinstance(compaction, dict) or compaction.get("auto") is not True
-            or (not source_compatible and (compaction.get("keep", {}).get("tokens") != 8000
-                or compaction.get("buffer") != 20000 or set(compaction) != {"auto", "keep", "buffer"}))):
-        errors.append("native V2 compaction settings are missing or contain legacy fields")
+    if not isinstance(compaction, dict) or not isinstance(compaction.get("auto"), bool):
+        errors.append("native V2 compaction settings are invalid")
     output = data.get("tool_output", {})
-    if not source_compatible and (not isinstance(output, dict) or not output.get("max_lines") or not output.get("max_bytes")):
+    if not source_compatible and (not isinstance(output, dict)
+            or not isinstance(output.get("max_lines"), int) or output.get("max_lines") < 1
+            or not isinstance(output.get("max_bytes"), int) or output.get("max_bytes") < 1):
         errors.append("bounded tool output is not configured")
     if not source_compatible and (not isinstance(data.get("watcher", {}).get("ignore"), list) or not data["watcher"]["ignore"]):
         errors.append("watcher ignore patterns are missing")

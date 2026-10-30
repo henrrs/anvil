@@ -5,7 +5,7 @@
 anvil_backup_create() {
   local candidate_version="$1" path_plan_json="$2"
   local scope="${3:-runtime}"
-  local backup_dir stamp suffix executable executable_resolved executable_version
+  local backup_dir stamp suffix executable executable_resolved executable_version config_snapshot_root
   local config_present=no installer_present=no path_file path_line path_added=no path_file_preexisted=no runtime_state_file runtime_state_present=no
   local data_dir="$ANVIL_DATA_HOME/opencode" state_dir="$ANVIL_STATE_DIR" data_present=no state_present=no previous_anvil_version=""
 
@@ -22,15 +22,29 @@ anvil_backup_create() {
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   backup_dir="$ANVIL_BACKUP_ROOT/$stamp"
   suffix=0
-  while [[ -e "$backup_dir" ]]; do
-    suffix=$((suffix + 1))
-    backup_dir="$ANVIL_BACKUP_ROOT/$stamp-$suffix"
+  while :; do
+    if mkdir -m 700 -- "$backup_dir" 2>/dev/null; then
+      break
+    fi
+    if [[ -e "$backup_dir" || -L "$backup_dir" ]]; then
+      suffix=$((suffix + 1))
+      backup_dir="$ANVIL_BACKUP_ROOT/$stamp-$suffix"
+      continue
+    fi
+    anvil_error "Could not create the private backup directory: $backup_dir"
+    return 1
   done
-  mkdir -m 700 -- "$backup_dir"
 
   if [[ -e "$ANVIL_CONFIG_DIR" || -L "$ANVIL_CONFIG_DIR" ]]; then
     config_present=yes
-    python3 "$ANVIL_ROOT/scripts/archive.py" create "$ANVIL_CONFIG_DIR" "$backup_dir/config.tar.gz" "$(basename -- "$ANVIL_CONFIG_DIR")"
+    config_snapshot_root="$backup_dir/config-snapshot"
+    mkdir -m 700 -- "$config_snapshot_root"
+    python3 "$ANVIL_ROOT/scripts/managed_config.py" snapshot \
+      --source "$ANVIL_CONFIG_DIR" --target "$config_snapshot_root/$(basename -- "$ANVIL_CONFIG_DIR")" >/dev/null
+    python3 "$ANVIL_ROOT/scripts/archive.py" create \
+      "$config_snapshot_root/$(basename -- "$ANVIL_CONFIG_DIR")" \
+      "$backup_dir/config.tar.gz" "$(basename -- "$ANVIL_CONFIG_DIR")"
+    rm -rf -- "$config_snapshot_root"
   fi
   if [[ "$scope" == runtime && ( -e "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_ROOT" ) ]]; then
     installer_present=yes

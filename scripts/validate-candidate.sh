@@ -132,9 +132,9 @@ config_root=Path(sys.argv[3])
 config=json.loads((root/"config.json").read_text(encoding="utf-8"))
 skills=json.loads((root/"skills.json").read_text(encoding="utf-8"))
 assert config.get("default_agent")=="anvil", "OpenCode 1 did not load the Anvil default agent"
-assert "model" not in config and "small_model" not in config, "Anvil pins a model"
 agent=config.get("agent",{}).get("anvil",{})
 assert agent.get("mode")=="primary", "OpenCode 1 did not load the Anvil primary agent"
+assert not ({"model", "variant", "prompt"} & set(agent)), "Anvil pins a model or replaces the provider prompt"
 expected_commands={path.stem for path in (config_root/"commands").glob("*.md")}
 assert expected_commands <= set(config.get("command",{})), f"OpenCode 1 did not load configured Markdown commands: {sorted(expected_commands-set(config.get('command',{})))}"
 permission=agent.get("permission",{})
@@ -185,8 +185,8 @@ docs=[item.get("info") for item in sources if item.get("type")=="document" and i
 config=next((item for item in docs if item.get("default_agent")=="anvil"),{})
 commands={path.stem for path in (config_root/"commands").glob("*.md")}
 skills={path.name for path in (config_root/"skills").iterdir() if path.is_dir() and (path/"SKILL.md").is_file()} if (config_root/"skills").is_dir() else set()
-plugins={Path(str(value)).name for value in config.get("plugins",[]) if isinstance(value,str)}
-references=set(config.get("references",{}))
+plugins={"anvil-core"} if "./plugins/anvil-core" in config.get("plugins",[]) else set()
+references={"anvil-knowledge"} if "anvil-knowledge" in config.get("references",{}) else set()
 raise SystemExit(0 if commands <= names("commands.json","name")
                  and skills <= names("skills.json","id")
                  and plugins <= names("plugins.json","id")
@@ -216,9 +216,9 @@ sources=load("config-sources.json")
 docs=[item.get("info") for item in sources if item.get("type")=="document" and isinstance(item.get("info"),dict)]
 config=next((item for item in docs if item.get("default_agent")=="anvil"),None)
 assert config, "candidate did not load the native Anvil config"
-assert "model" not in config and "small_model" not in config
 assert config["default_agent"]=="anvil"
 assert config["agents"]["anvil"]["mode"]=="primary"
+assert not ({"model", "variant", "system", "prompt"} & set(config["agents"]["anvil"])), "Anvil pins a model or replaces the native system prompt"
 assert all(name=="anvil" or agent.get("disabled") is True for name,agent in config["agents"].items())
 commands=load("commands.json").get("data",[])
 command_names={item.get("name") for item in commands}
@@ -230,10 +230,8 @@ expected={path.name for path in (config_root/"skills").iterdir() if path.is_dir(
 assert expected <= skill_ids, f"missing configured skills: {sorted(expected-skill_ids)}"
 plugins=load("plugins.json").get("data",[])
 core=[item for item in plugins if item.get("id")=="anvil-core" and item.get("state",{}).get("status")=="active"]
-expected_plugins={Path(str(value)).name for value in config.get("plugins",[]) if isinstance(value,str)}
-assert expected_plugins <= {item.get("id") for item in plugins}, "a configured V2 plugin did not load"
+assert core, "the Anvil V2 core plugin did not load"
 references=load("references.json").get("data",[])
-expected_references=set(config.get("references",{}))
-assert expected_references <= {item.get("name") for item in references}, "a configured V2 reference was not loaded"
+assert "anvil-knowledge" in {item.get("name") for item in references}, "Anvil's V2 knowledge reference did not load"
 print(f"OpenCode {version}: native config, Anvil primary agent, commands, skills, plugin and knowledge reference validated")
 PY
