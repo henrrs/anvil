@@ -1,6 +1,6 @@
 ---
 name: anvil-communication
-description: Use for turning explicitly authorized documents, repositories, data, and prior findings into evidence-backed reports, executive or technical presentations, summaries, architecture diagrams, and for reviewing existing communication artifacts. Includes deterministic quantitative analysis, audience/constraint planning, Markdown materialization, and SVG architecture validation. Do not use for routine prose edits or ordinary code changes that do not require evidence synthesis or artifact review.
+description: Use for turning explicitly authorized documents, repositories, data, and prior findings into evidence-backed reports, executive or technical presentations, summaries, architecture diagrams, and for reviewing existing communication artifacts. Includes analytical and editorial planning, six audience lenses, deterministic quantitative analysis, Markdown materialization, semantic visual intent, and SVG validation. Do not use for routine prose edits or ordinary code changes that do not require evidence synthesis or artifact review.
 ---
 
 # Anvil Communication & Artifact Intelligence
@@ -35,9 +35,9 @@ Renderer code does not select business meaning. Quantitative code does not selec
 
 Keep evidence separate from findings. Every evidence item needs a stable ID, concise claim, epistemic type, confidence, and source provenance (`type`, `locator`, and SHA-256 when the local source was hashed). Keep a useful line, slide, worksheet, table, query, period, or section locator. Do not copy a large source body into the plan.
 
-Use only these epistemic labels:
+Use these epistemic distinctions (legacy aliases remain accepted):
 
-`FACT`, `MEASUREMENT`, `OBSERVATION`, `DERIVED_VALUE`, `INFERENCE`, `ESTIMATE`, `ASSUMPTION`, `PROJECTION`, `PROPOSAL`, `UNKNOWN`.
+`OBSERVED` (`FACT`, `MEASUREMENT`, `OBSERVATION`), `CALCULATED` (`DERIVED_VALUE`), `ESTIMATED` (`ESTIMATE`), `SCENARIO`, `INFERRED` (`INFERENCE`), `ASSUMPTION`, `PROJECTION`, `PROPOSAL`, and `UNKNOWN`.
 
 Confidence is `HIGH`, `MEDIUM`, `LOW`, or `UNKNOWN`. Do not promote model prior, correlation, an estimate, or a projection into a measured fact. Conflicts and unknowns remain explicit. Findings reference evidence IDs; proposals/unknowns may be unbacked, but must be labeled as such.
 
@@ -66,9 +66,9 @@ The comparison question matters: absolute impact and relative improvement may ra
 
 ## Audience, purpose, and constraints
 
-Keep audience (`executive`, `technical`, or `mixed`) separate from tone. Current explicit user constraints override policy, relevant memory, and defaults. Hard constraints must validate; soft preferences guide selection. Detect conflicts instead of silently dropping a requirement. Use `constraints PLAN.json --prompt 'original request'` to validate the contract and catch unambiguous exact slide-count/measured-only constraints.
+Keep audience (`executive`, `financial`, `technical_leadership`, `engineering`, `technical`, or `mixed`) separate from tone. Current explicit user constraints override policy, relevant memory, and defaults. Hard constraints must validate; soft preferences guide selection. Detect conflicts instead of silently dropping a requirement. Use `constraints PLAN.json --prompt 'original request'` to validate the contract and catch unambiguous exact slide-count/measured-only constraints.
 
-Executive communication leads with decision, material impact, risk, and action; technical communication preserves method, baseline, distributions, alternatives, and operational detail; mixed communication uses progressive disclosure. Preserve raw precision in the data contract and select audience-appropriate presentation precision. State why quantitative evidence, storyline points, or exclusions matter. Titles should assert the message; a slide should carry one primary point.
+Executive communication leads with decision, material impact, risk, and action. Financial communication keeps observed actuals distinct from projections and capture scenarios. Technical leadership foregrounds architecture, scale, reliability, constraints, and trade-offs. Engineering communication retains mechanism, method, runtime evidence, diagnostics, raw measurements, and interfaces. Technical communication preserves baseline, distributions, uncertainty, and alternatives; mixed communication uses progressive disclosure. Preserve raw precision in the data contract and select audience-appropriate presentation precision. State why quantitative evidence, storyline points, or exclusions matter. Titles should assert the message; a slide should carry one primary point.
 
 For substantial work, produce a concise plan/pilot (audience, purpose, constraints, thesis, storyline, selected evidence, unknowns, and artifact structure) before lengthy rendering when the request leaves a material choice open. Do not add a user gate to simple requests or when the user explicitly asked for the final artifact.
 
@@ -81,10 +81,16 @@ Create a schema-version-1 JSON plan with:
 - `evidence`: ID, claim, epistemic, confidence, and source provenance;
 - `findings`: ID, claim, epistemic, confidence, supporting `evidence_ids`, implications/limitations, audience relevance, and insight IDs;
 - `quantitative_insights`: output of deterministic `quantify`, unchanged;
+- optional `editorial`: decision context, materiality note, and appendix finding/insight/evidence IDs;
 - for reports/summaries, human-readable `sections`; for presentations, exactly the planned `slides`, each with role/title/body and finding/evidence/insight IDs;
+- optional section/slide `visual_intent`: semantic relationship/form, primary message/evidence, supporting evidence, prominence, semantic color roles, and storyboard. Keep coordinates and raw colors in renderer-owned layers;
 - optional artifact metadata with stable ID, plan version, theme, renderer, and creation time. Never embed raw query results or secrets.
 
 Run `constraints PLAN.json` and resolve any hard error. Render `.md` with `materialize PLAN.json --output PATH.md`; presentation output is a constrained Markdown slide outline, not a binary PowerPoint. Run `review PATH.md --plan PLAN.json`, then read the materialized artifact and perform semantic review for unsupported claims, argument flow, audience fit, quantitative integrity, and clear qualifications. Correct issues and rerun the relevant checks. The renderer's structural PASS is not proof of semantic truth.
+
+Run `python3 scripts/artifacts.py critique PLAN.json` for an optional deterministic editorial pass. Treat signals as review prompts, not automatic rejection. Check materiality, the supported so-what implication, counter-evidence, alternatives, assertion titles, editorial reduction, primary-message hierarchy, and audience fit. Do not expose private reasoning; return only useful artifact changes or concise findings.
+
+Cards are one possible form for independent peer items, not the default. Match representation to the evidence relationship, vary prominence according to the storyline, and use color only for a meaningful semantic distinction. Animate only when time carries information; storyboard at least two distinct states. If the renderer cannot animate, preserve the sequence and report its static fallback.
 
 For architecture, create a renderer-independent semantic diagram JSON with one question, one viewpoint, abstraction level, typed nodes/relationships, epistemic status, evidence IDs, and a separate layout block. Labels and provenance remain in the model. State `current` versus `proposed` explicitly. Use semantic color roles, not arbitrary hex values; labels/state are always redundant to color. Run `diagram MODEL.json --output VIEW.svg`, then `review-diagram VIEW.svg --model MODEL.json`. A crossing relationship through an unrelated node is a hard layout failure. Split views instead of mixing context, component, deployment, security, and runtime flow into one diagram.
 
@@ -92,6 +98,6 @@ Binary DOCX/PPTX/PDF rendering is not currently available. Do not claim to have 
 
 ## Semantic review and iteration
 
-Use `/review` or `review` for existing Markdown/SVG plus the optional source plan. Deterministic review checks structure, hard counts, references, percentage-point wording, projection qualifications, placeholder/generic titles, and SVG validity/layout. It cannot prove semantic correctness. Also inspect claims, source relevance/conflicts, baseline choice, method, causality, distribution, normalization, visual distortion, accessibility, title-only narrative, and requested audience. Return specific findings and recommended edits; don't rewrite unless the user requested edits.
+Use `/review` or `review` for existing Markdown/SVG plus the optional source plan. Deterministic review checks structure, hard counts, references, percentage-point wording, projection qualifications, placeholder/generic titles, and SVG validity/measurable geometry; `critique PLAN.json` also reports bounded editorial signals. Neither proves semantic correctness. Also inspect claims, counter-evidence and alternatives, source relevance/conflicts, baseline choice, method, causality, distribution, normalization, visual distortion, accessibility, title-only narrative, and requested audience. Return specific findings and recommended edits; don't rewrite unless the user requested edits.
 
 For iteration, reuse validated evidence and quantitative insights when source hashes and question remain valid. Feedback about a number changes evidence/quantitative analysis; the message changes thesis/storyline; audience changes communication policy; density changes materialization/layout. Re-run only downstream stages affected by the feedback.

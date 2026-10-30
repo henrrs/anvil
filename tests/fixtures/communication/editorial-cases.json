@@ -1,0 +1,74 @@
+{
+  "cases": [
+    {
+      "id": "executive_financial_pilot",
+      "purpose": "Compare observed pilot spend and an explicitly qualified capture scenario.",
+      "audiences": ["executive", "financial"],
+      "kind": "amount",
+      "unit": "USD",
+      "semantics": "lower_is_better",
+      "baseline": "1200000",
+      "current": "870000",
+      "relationship": "comparison",
+      "form": "before_after",
+      "motion": false,
+      "primary_message": "Observed pilot spend fell while the capture scenario remains conditional."
+    },
+    {
+      "id": "architecture_boundaries",
+      "purpose": "Explain the boundary between the service and its state store.",
+      "audiences": ["technical_leadership", "engineering"],
+      "kind": "count",
+      "unit": "components",
+      "semantics": "neutral",
+      "baseline": "8",
+      "current": "11",
+      "relationship": "architecture",
+      "form": "diagram",
+      "motion": false,
+      "primary_message": "The revised service boundary isolates state ownership."
+    },
+    {
+      "id": "spark_performance",
+      "purpose": "Compare Spark task latency across representative workloads.",
+      "audiences": ["technical_leadership", "engineering"],
+      "kind": "duration",
+      "unit": "ms",
+      "semantics": "lower_is_better",
+      "baseline": "240",
+      "current": "180",
+      "relationship": "distribution",
+      "form": "box_plot",
+      "motion": false,
+      "primary_message": "Median task latency improved, while tail variance needs inspection."
+    },
+    {
+      "id": "request_process",
+      "purpose": "Show how a request moves through validation and execution states.",
+      "audiences": ["executive", "engineering"],
+      "kind": "count",
+      "unit": "steps",
+      "semantics": "neutral",
+      "baseline": "3",
+      "current": "4",
+      "relationship": "process",
+      "form": "flow",
+      "motion": true,
+      "primary_message": "Validation completes before the request reaches execution."
+    },
+    {
+      "id": "business_conversion",
+      "purpose": "Review conversion rate for a regional customer program.",
+      "audiences": ["executive", "mixed"],
+      "kind": "rate",
+      "unit": "%",
+      "semantics": "higher_is_better",
+      "baseline": "2.4",
+      "current": "3.1",
+      "relationship": "comparison",
+      "form": "bar_chart",
+      "motion": false,
+      "primary_message": "The measured conversion rate increased over the comparison period."
+    }
+  ]
+}

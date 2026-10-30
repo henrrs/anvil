@@ -10,6 +10,7 @@ from typing import Any
 
 from . import inputs
 from .diagrams import render_svg, write_svg
+from .editorial import critique_plan
 from .errors import CommunicationError
 from .materialize import render_markdown, write_markdown
 from .planning import extract_explicit_constraints, validate_plan
@@ -73,6 +74,21 @@ def _human(value: Any) -> str:
                 lines.append(f"         Next: {item['remediation']}")
         if not value["findings"]:
             lines.append("No deterministic issues found.")
+        critic = value.get("editorial_critic")
+        if critic:
+            lines.append(f"Editorial review        {critic['status']}")
+            lines.extend(f"  Signal {item['code']} [{', '.join(item['locations'])}]: {item['message']}"
+                         for item in critic["candidate_signals"])
+        return "\n".join(lines)
+    if "candidate_signals" in value and "dimensions" in value:
+        lines = [f"Editorial critique      {value['status']}",
+                 f"Audience                {value['audience_profile']['audience']}",
+                 f"Visual intent coverage  {value['visual_intent_coverage']['modeled_pages']}/"
+                 f"{value['visual_intent_coverage']['total_pages']} pages"]
+        lines.extend(f"{key.replace('_', ' ').title():<24}{status}" for key, status in value["dimensions"].items())
+        lines.extend(f"SIGNAL {item['code']} [{', '.join(item['locations'])}]: {item['message']}\n"
+                     f"       Review: {item['remediation']}" for item in value["candidate_signals"])
+        lines.append(value["limits"])
         return "\n".join(lines)
     if "communication_budget" in value:
         budget = value["communication_budget"]
@@ -111,6 +127,10 @@ def parser() -> argparse.ArgumentParser:
     constraints.add_argument("plan", type=Path)
     constraints.add_argument("--prompt", help="Optional original request; detects exact counts and measured-only wording")
     constraints.add_argument("--format", choices=("text", "json"), default="text")
+
+    critique = actions.add_parser("critique", help="Surface bounded editorial and visual review signals for a plan")
+    critique.add_argument("plan", type=Path)
+    critique.add_argument("--format", choices=("text", "json"), default="text")
 
     materialize = actions.add_parser("materialize", help="Validate and write a human-readable Markdown report or slide outline")
     materialize.add_argument("plan", type=Path)
@@ -157,6 +177,10 @@ def main(argv: list[str] | None = None) -> int:
                 existing = plan.get("request", {}).get("constraints", [])
                 plan.setdefault("request", {})["constraints"] = [*existing, *extract_explicit_constraints(args.prompt)]
             result = validate_plan(plan)
+            _emit(result, args.format)
+            return 0
+        if args.action == "critique":
+            result = critique_plan(_json(args.plan))
             _emit(result, args.format)
             return 0
         if args.action == "materialize":

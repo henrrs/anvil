@@ -18,7 +18,7 @@ def _derived_epistemic(baseline: dict[str, Any] | None, current: dict[str, Any] 
     if not baseline or not current or baseline.get("value") is None or current.get("value") is None:
         return "UNKNOWN"
     states = {baseline.get("epistemic", "MEASUREMENT"), current.get("epistemic", "MEASUREMENT")}
-    for state in ("UNKNOWN", "ASSUMPTION", "ESTIMATE", "PROJECTION", "PROPOSAL", "INFERENCE"):
+    for state in ("UNKNOWN", "ASSUMPTION", "SCENARIO", "ESTIMATE", "PROJECTION", "PROPOSAL", "INFERRED", "INFERENCE"):
         if state in states:
             return state
     return "DERIVED_VALUE"
@@ -376,10 +376,33 @@ def format_number(value: Any, *, locale: str = "en", decimals: int = 2) -> str:
     return text
 
 
+def _communicative_number(value: Any, *, locale: str) -> str:
+    """Compact an executive display while leaving the exact value in the plan/evidence."""
+    parsed = decimal_value(value, field="presentation number")
+    magnitude = abs(parsed)
+    if magnitude >= Decimal("1000000000"):
+        scale, suffix = Decimal("1000000000"), "B"
+    elif magnitude >= Decimal("1000000"):
+        scale, suffix = Decimal("1000000"), "M"
+    elif magnitude >= Decimal("1000"):
+        scale, suffix = Decimal("1000"), "k"
+    else:
+        if parsed == parsed.to_integral_value():
+            return format_number(parsed, locale=locale, decimals=0)
+        return format_number(parsed, locale=locale, decimals=1)
+    rounded = parsed / scale
+    rendered = format_number(rounded, locale=locale, decimals=1)
+    decimal_marker = "," if locale.casefold() in {"pt", "pt-br", "pt_br"} else "."
+    if rendered.endswith(decimal_marker + "0"):
+        rendered = rendered[:-2]
+    return "~" + rendered + suffix
+
+
 def format_metric(insight: dict[str, Any], *, audience: str, locale: str = "en") -> str:
     """Render a concise audience-aware statement without changing analytical values."""
-    if audience not in {"executive", "technical", "mixed"}:
-        raise CommunicationError("CONTRACT_INVALID", "Audience must be executive, technical, or mixed.")
+    audiences = {"executive", "financial", "technical_leadership", "engineering", "technical", "mixed"}
+    if audience not in audiences:
+        raise CommunicationError("CONTRACT_INVALID", "Audience must be executive, financial, technical_leadership, engineering, technical, or mixed.")
     unit = insight["unit"]
     delta = insight.get("absolute_change")
     is_pt = locale.casefold() in {"pt", "pt-br", "pt_br"}
@@ -387,8 +410,12 @@ def format_metric(insight: dict[str, Any], *, audience: str, locale: str = "en")
         message = "comparação indisponível" if is_pt else "comparison unavailable"
         return f"{insight['metric']}: {message} ({'unidade' if is_pt else 'unit'}: {unit})."
     parsed = decimal_value(delta, field="absolute_change")
+    compact_audiences = {"executive", "financial"}
+    detailed_audiences = {"technical", "technical_leadership", "engineering", "mixed"}
     decimals = 0 if insight.get("kind") == "count" or unit in {"count", "execution"} else 2
-    magnitude = format_number(abs(parsed), locale=locale, decimals=decimals)
+    magnitude = (_communicative_number(abs(parsed), locale=locale)
+                 if audience in compact_audiences and insight.get("kind") == "amount"
+                 else format_number(abs(parsed), locale=locale, decimals=decimals))
     relative = insight.get("relative_change")
     relative_text = (f" ({format_number(relative, locale=locale, decimals=1)}% {'relativo' if is_pt else 'relative'})"
                      if relative is not None else "")
@@ -404,6 +431,21 @@ def format_metric(insight: dict[str, Any], *, audience: str, locale: str = "en")
         change_text = f"{direction} {pp_magnitude} pontos percentuais" if is_pt else f"{direction} by {pp_magnitude} percentage points"
     else:
         change_text = f"{direction} {magnitude} {unit}" if is_pt else f"{direction} by {magnitude} {unit}"
+    if audience == "financial" and insight.get("kind") == "amount":
+        baseline = insight.get("baseline") or {}
+        current = insight.get("current") or {}
+        baseline_value, current_value = baseline.get("value"), current.get("value")
+        if baseline_value is not None and current_value is not None:
+            period = ""
+            if baseline.get("period") or current.get("period"):
+                period = f" ({baseline.get('period') or 'unknown period'} → {current.get('period') or 'unknown period'})"
+            observed = (f"real observado: {_communicative_number(baseline_value, locale=locale)} → "
+                        f"{_communicative_number(current_value, locale=locale)} {unit}{period}" if is_pt else
+                        f"observed actual: {_communicative_number(baseline_value, locale=locale)} → "
+                        f"{_communicative_number(current_value, locale=locale)} {unit}{period}")
+            amount_change = (f"; {direction} {magnitude} {unit}{relative_text}" if is_pt else
+                             f"; {direction} by {magnitude} {unit}{relative_text}")
+            change_text = observed + amount_change
     projection = insight.get("projection")
     interpretation = insight.get("interpretation", "unknown")
     labels = {"favorable": "favorável" if is_pt else "favorable",
@@ -415,6 +457,7 @@ def format_metric(insight: dict[str, Any], *, audience: str, locale: str = "en")
     epistemic_prefix = {
         "ESTIMATE": "Estimativa: " if is_pt else "Estimated: ",
         "ASSUMPTION": "Sob a hipótese: " if is_pt else "Under the assumption: ",
+        "SCENARIO": "Cenário: " if is_pt else "Scenario: ",
         "INFERENCE": "Inferência: " if is_pt else "Inference: ",
         "UNKNOWN": "Valores de origem não verificados: " if is_pt else "Unverified source values: ",
         "PROPOSAL": "Proposta: " if is_pt else "Proposed: ",
@@ -422,16 +465,38 @@ def format_metric(insight: dict[str, Any], *, audience: str, locale: str = "en")
     }.get(epistemic, "")
     confidence = insight.get("confidence", "UNKNOWN")
     confidence_text = ""
-    if audience in {"executive", "mixed"} and confidence in {"LOW", "UNKNOWN"}:
+    if confidence in {"LOW", "UNKNOWN"}:
         confidence_text = ("; confiança baixa" if confidence == "LOW" else "; confiança não avaliada") if is_pt else (
             "; low confidence" if confidence == "LOW" else "; confidence not assessed")
     statement = f"{insight['metric']}: {epistemic_prefix}{change_text}{relative_text}{interpretation_text}{confidence_text}."
-    if audience in {"technical", "mixed"}:
+    if audience == "executive" and insight.get("kind") == "amount":
         baseline = insight.get("baseline")
         current = insight.get("current")
         baseline_value = baseline.get("value") if baseline else None
         current_value = current.get("value") if current else None
-        if is_pt:
+        if baseline_value is not None and current_value is not None:
+            baseline_period = (baseline or {}).get("period")
+            current_period = (current or {}).get("period")
+            statement += (f" Baseline → current: {_communicative_number(baseline_value, locale=locale)} {unit}"
+                          f" → {_communicative_number(current_value, locale=locale)} {unit}"
+                          f"{f' ({baseline_period} → {current_period})' if baseline_period or current_period else ''}.")
+    if audience in detailed_audiences:
+        baseline = insight.get("baseline")
+        current = insight.get("current")
+        baseline_value = baseline.get("value") if baseline else None
+        current_value = current.get("value") if current else None
+        if audience == "technical_leadership":
+            if is_pt:
+                statement += (f" Base → atual: {baseline_value if baseline_value is not None else 'desconhecida'}"
+                              f" → {current_value if current_value is not None else 'desconhecido'} {unit}.")
+            else:
+                statement += (f" Baseline → current: {baseline_value if baseline_value is not None else 'unknown'}"
+                              f" → {current_value if current_value is not None else 'unknown'} {unit}.")
+            if (baseline or {}).get("period") or (current or {}).get("period"):
+                statement += (f" Period: {(baseline or {}).get('period') or 'unknown'} → {(current or {}).get('period') or 'unknown'}."
+                              if not is_pt else
+                              f" Período: {(baseline or {}).get('period') or 'desconhecido'} → {(current or {}).get('period') or 'desconhecido'}.")
+        elif is_pt:
             statement += (f" Base {baseline_value if baseline_value is not None else 'desconhecida'} {unit}"
                           f" ({(baseline or {}).get('period') or 'período desconhecido'});"
                           f" atual {current_value if current_value is not None else 'desconhecido'} {unit}"

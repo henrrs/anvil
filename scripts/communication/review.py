@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import CommunicationError
+from .editorial import critique_plan
 from .planning import validate_plan
 from .quantitative import format_number
 
@@ -47,9 +48,11 @@ def review_markdown(text: str, *, plan_raw: Any | None = None,
                     artifact_path: str | None = None) -> dict[str, Any]:
     findings: list[dict[str, Any]] = []
     plan = None
+    editorial_critic = None
     if plan_raw is not None:
         try:
             plan = validate_plan(plan_raw)
+            editorial_critic = critique_plan(plan_raw)
         except CommunicationError as exc:
             findings.append(_finding("error", exc.code, str(exc), "artifact plan", exc.remediation))
     if not text.strip():
@@ -152,9 +155,94 @@ def review_markdown(text: str, *, plan_raw: Any | None = None,
              "layout": "NOT_APPLICABLE", "accessibility": "NOT_APPLICABLE",
              "narrative": "WARN" if any(item["code"] in {"GENERIC_TITLE", "TITLE_NOT_ASSERTION", "GENERIC_FILLER", "SLIDE_DENSITY"} for item in findings) else "PASS",
              "semantic_claim_review": "PENDING_MODEL",
+             "editorial_review": "PENDING_MODEL",
+             "visual_intent": ("PASS" if editorial_critic and editorial_critic["visual_intent_coverage"]["modeled_pages"]
+                               else "NOT_PROVIDED"),
              "output_validity": "PASS" if status != "FAIL" else "FAIL"}
     return {"schema_version": 1, "status": status, "quality_gates": gates,
-            "counts": {"errors": errors, "warnings": warnings}, "findings": findings}
+            "counts": {"errors": errors, "warnings": warnings}, "findings": findings,
+            "editorial_critic": editorial_critic}
+
+
+def _validate_svg_geometry(root: ET.Element, viewbox: list[float]) -> list[str]:
+    """Check measurable SVG geometry against its viewport; text glyph bounds remain approximate."""
+    x_min, y_min, width, height = viewbox
+    x_max, y_max = x_min + width, y_min + height
+    issues: list[str] = []
+
+    def number(item: ET.Element, name: str, default: float = 0.0) -> float:
+        raw = item.get(name)
+        if raw is None:
+            return default
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            raise CommunicationError("OUTPUT_VALIDATION_FAILED", f"SVG {name} geometry is not numeric.") from None
+        if not math.isfinite(value):
+            raise CommunicationError("OUTPUT_VALIDATION_FAILED", f"SVG {name} geometry must be finite.")
+        return value
+
+    def within(x: float, y: float, *, label: str) -> None:
+        # A small tolerance accounts for normal SVG strokes centered on a shape edge.
+        tolerance = 3.0
+        if (x < x_min - tolerance or y < y_min - tolerance
+                or x > x_max + tolerance or y > y_max + tolerance):
+            issues.append(f"{label} has geometry outside the SVG viewBox.")
+
+    for item in root.iter():
+        if not isinstance(item.tag, str):
+            continue
+        tag = item.tag.rsplit("}", 1)[-1].casefold()
+        if tag == "rect":
+            x, y = number(item, "x"), number(item, "y")
+            w, h = number(item, "width"), number(item, "height")
+            if w < 0 or h < 0:
+                raise CommunicationError("OUTPUT_VALIDATION_FAILED", "SVG rectangle dimensions cannot be negative.")
+            within(x, y, label="SVG rectangle")
+            within(x + w, y + h, label="SVG rectangle")
+        elif tag in {"circle", "ellipse"}:
+            cx, cy = number(item, "cx"), number(item, "cy")
+            rx = number(item, "r") if tag == "circle" else number(item, "rx")
+            ry = rx if tag == "circle" else number(item, "ry")
+            if rx < 0 or ry < 0:
+                raise CommunicationError("OUTPUT_VALIDATION_FAILED", "SVG ellipse radii cannot be negative.")
+            within(cx - rx, cy - ry, label=f"SVG {tag}")
+            within(cx + rx, cy + ry, label=f"SVG {tag}")
+        elif tag == "line":
+            within(number(item, "x1"), number(item, "y1"), label="SVG line")
+            within(number(item, "x2"), number(item, "y2"), label="SVG line")
+        elif tag in {"polyline", "polygon"}:
+            points = item.get("points", "")
+            try:
+                coordinates = [float(value) for value in re.split(r"[\s,]+", points.strip()) if value]
+            except ValueError:
+                raise CommunicationError("OUTPUT_VALIDATION_FAILED", "SVG path points contain invalid coordinates.") from None
+            if len(coordinates) < 4 or len(coordinates) % 2 or any(not math.isfinite(value) for value in coordinates):
+                raise CommunicationError("OUTPUT_VALIDATION_FAILED", "SVG polyline requires finite x/y coordinate pairs.")
+            for x, y in zip(coordinates[::2], coordinates[1::2]):
+                within(x, y, label=f"SVG {tag}")
+        elif tag == "text":
+            xs = item.get("x", "0").replace(",", " ").split()
+            ys = item.get("y", "0").replace(",", " ").split()
+            try:
+                x_values = [float(value) for value in xs]
+                y_values = [float(value) for value in ys]
+            except ValueError:
+                raise CommunicationError("OUTPUT_VALIDATION_FAILED", "SVG text anchor coordinates are invalid.") from None
+            if not x_values:
+                x_values = [0.0]
+            if not y_values:
+                y_values = [0.0]
+            if len(x_values) == 1 and len(y_values) > 1:
+                x_values *= len(y_values)
+            if len(y_values) == 1 and len(x_values) > 1:
+                y_values *= len(x_values)
+            if len(x_values) != len(y_values) or any(not math.isfinite(value) for value in (*x_values, *y_values)):
+                raise CommunicationError("OUTPUT_VALIDATION_FAILED", "SVG text anchor coordinates must be finite.")
+            for x, y in zip(x_values, y_values):
+                within(x, y, label="SVG text anchor")
+
+    return issues
 
 
 def review_diagram_file(path: Path, model: Any | None = None) -> dict[str, Any]:
@@ -178,6 +266,9 @@ def review_diagram_file(path: Path, model: Any | None = None) -> dict[str, Any]:
         viewbox = []
     if len(viewbox) != 4 or any(not math.isfinite(value) for value in viewbox) or viewbox[2] <= 0 or viewbox[3] <= 0:
         raise CommunicationError("OUTPUT_VALIDATION_FAILED", "SVG viewBox must contain four finite values with positive width and height.")
+    geometry_issues = _validate_svg_geometry(root, viewbox)
+    if geometry_issues:
+        raise CommunicationError("OUTPUT_VALIDATION_FAILED", geometry_issues[0])
     if root.get("role") != "img" or not any(item.tag.endswith("title") for item in root) or not any(item.tag.endswith("desc") for item in root):
         raise CommunicationError("OUTPUT_VALIDATION_FAILED", "SVG needs an accessible image role, title, and description.")
     for item in root.iter():
@@ -225,10 +316,10 @@ def review_diagram_file(path: Path, model: Any | None = None) -> dict[str, Any]:
         findings.extend(_finding("warning", "LAYOUT_WARNING", warning, str(path)) for warning in validation["warnings"])
         status = "PASS_WITH_WARNINGS" if findings else "PASS"
         return {"schema_version": 1, "status": status, "quality_gates": {
-                    **validation["quality_gates"], "semantic_claim_review": "PENDING_MODEL"},
+                    **validation["quality_gates"], "visual_qa": "PASS", "semantic_claim_review": "PENDING_MODEL"},
                 "findings": findings, "nodes": len(svg_nodes), "viewBox": root.get("viewBox")}
     return {"schema_version": 1, "status": "PASS_WITH_WARNINGS", "quality_gates": {"output_validity": "PASS",
-            "layout": "NOT_VERIFIED_WITHOUT_MODEL", "accessibility": "NOT_VERIFIED_WITHOUT_MODEL",
+            "visual_qa": "PASS_GEOMETRY_ONLY", "layout": "NOT_VERIFIED_WITHOUT_MODEL", "accessibility": "NOT_VERIFIED_WITHOUT_MODEL",
             "semantic_claim_review": "PENDING_MODEL"},
             "findings": [_finding("warning", "SEMANTIC_MODEL_NOT_PROVIDED", "SVG parses, but layout and semantic color checks need its architecture model.", str(path))],
             "viewBox": root.get("viewBox")}

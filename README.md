@@ -4,7 +4,7 @@
 >
 > **Better harness. Better execution.**
 
-Anvil 2.10.0 adds adaptive engineering depth: direct local work stays direct, while requirements, architecture, work-state and domain reasoning expand only when task risk or uncertainty calls for them. Long-horizon quality, resumable state, OpenCode 1/2, memory, Databricks and artifact capabilities remain supported.
+Anvil 2.11.0 adds evidence-led editorial and visual communication: audience framing, materiality, semantic visual intent, numerical context and bounded artifact critique. Adaptive engineering depth, long-horizon quality, OpenCode 1/2, memory, Databricks and artifact capabilities remain supported.
 
 ```bash
 # First installation
@@ -113,13 +113,13 @@ For genuine multi-milestone work, `anvil-engineering` retains separate Requireme
 
 ## Communication and artifacts
 
-Use natural language with the Anvil agent, for example: “Analyze these named files and prepare an executive report,” “Prepare exactly five slides from this evidence,” or “Review this Markdown artifact against its plan.” The `anvil-communication` skill guides source inventory, targeted extraction, evidence provenance, quantitative interpretation, audience adaptation, planning, and review. `/review PATH` is the generic command for reviewing an explicitly named artifact.
+Use natural language with the Anvil agent, for example: “Analyze these named files and prepare an executive report,” “Prepare exactly five slides from this evidence,” or “Review this Markdown artifact against its plan.” The `anvil-communication` skill guides source inventory, targeted extraction, evidence provenance, quantitative interpretation, six audience lenses, editorial selection, semantic visual intent, and review. `/review PATH` is the generic command for reviewing an explicitly named artifact.
 
-The local core is also available at `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/scripts/artifacts.py` after installation. It provides bounded `discover` and `extract`, deterministic `quantify`, hard-constraint checks, Markdown report/slide-outline materialization, semantic architecture-to-SVG rendering, and deterministic review. `make capabilities` lists its supported inputs and renderers.
+The local core is also available at `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/scripts/artifacts.py` after installation. It provides bounded `discover` and `extract`, deterministic `quantify`, hard-constraint checks, `critique PLAN.json`, Markdown report/slide-outline materialization, semantic architecture-to-SVG rendering, and deterministic review. `make capabilities` lists its supported inputs and renderers.
 
 Supported source extraction includes Markdown/text, CSV/TSV, JSON/JSONC text, common source/config files, and text/value extraction from DOCX/PPTX/XLSX. PDF text extraction is optional and requires `pdftotext`. Embedded images, charts, speaker notes, scanned pages, workbook formulas, and media are not interpreted. Available artifact outputs are Markdown and accessible architecture SVG; binary PPTX/DOCX/PDF, quantitative chart rendering, OCR, and animation are not available in this release.
 
-Numerical values remain tied to evidence IDs. The deterministic core separates absolute change, relative change, and percentage-point change; preserves missing values and zero/negative baseline limitations; supports measured normalization and distribution summaries; and keeps annualized values labeled as projections with assumptions. It recalculates derived values before materialization. Executive, technical, and mixed audiences receive different emphasis and presentation detail without altering the underlying measurements. Structural and arithmetic PASS results do not prove that a narrative claim is true; semantic review remains required.
+Numerical values remain tied to evidence IDs. The deterministic core separates absolute change, relative change, and percentage-point change; preserves missing values and zero/negative baseline limitations; supports measured normalization and distribution summaries; and keeps estimates, scenarios, and annualized projections labeled. It recalculates derived values before materialization. Executive, financial, technical-leadership, engineering, technical, and mixed audiences receive different emphasis and presentation detail without altering the underlying measurements. Structural and arithmetic PASS results do not prove that a narrative claim is true; semantic review remains required.
 
 ## Recovery and status
 
@@ -129,4 +129,4 @@ Numerical values remain tied to evidence IDs. The deterministic core separates a
 
 ## Version history
 
-See the [Anvil 2.10.0 release notes](docs/versions/v2.10.0.md), [2.9-to-2.10 migration guide](docs/migrations/v2.9.0-to-v2.10.0.md), [system map](docs/system-map.md), [full-system quality audit](docs/quality-audit.md), [communication and artifact architecture](docs/communication-artifact-intelligence.md), [public command contracts](docs/command-contracts.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).
+See the [Anvil 2.11.0 release notes](docs/versions/v2.11.0.md), [2.10-to-2.11 migration guide](docs/migrations/v2.10.0-to-v2.11.0.md), [system map](docs/system-map.md), [full-system quality audit](docs/quality-audit.md), [communication and artifact architecture](docs/communication-artifact-intelligence.md), [public command contracts](docs/command-contracts.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).

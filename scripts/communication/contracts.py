@@ -11,15 +11,85 @@ from .errors import CommunicationError
 
 
 EPISTEMIC_TYPES = {
-    "FACT", "MEASUREMENT", "OBSERVATION", "DERIVED_VALUE", "INFERENCE",
-    "ESTIMATE", "ASSUMPTION", "PROJECTION", "PROPOSAL", "UNKNOWN",
+    "FACT", "MEASUREMENT", "OBSERVATION", "OBSERVED", "DERIVED_VALUE", "CALCULATED", "INFERENCE", "INFERRED",
+    "ESTIMATE", "ASSUMPTION", "SCENARIO", "PROJECTION", "PROPOSAL", "UNKNOWN",
 }
 CONFIDENCE_LEVELS = {"HIGH", "MEDIUM", "LOW", "UNKNOWN"}
-AUDIENCES = {"executive", "technical", "mixed"}
+AUDIENCES = {"executive", "financial", "technical_leadership", "engineering", "technical", "mixed"}
 ARTIFACT_TYPES = {"report", "presentation", "summary"}
 CONSTRAINT_STRENGTHS = {"hard", "soft"}
 CONSTRAINT_ORIGINS = {"explicit", "policy", "inferred", "memory", "default"}
 IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,63}$")
+VISUAL_RELATIONSHIPS = {"magnitude", "trend", "comparison", "process", "causality", "architecture",
+                        "hierarchy", "composition", "decision", "distribution", "textual", "unknown"}
+VISUAL_FORMS = {"hero_metric", "bar_chart", "line_chart", "before_after", "waterfall", "flow", "containment",
+                "dependency_graph", "tree", "stacked_bar", "treemap", "decision_matrix", "decision_tree",
+                "histogram", "box_plot", "table", "cards", "text", "diagram", "custom", "unknown"}
+VISUAL_PROMINENCE = {"dominant", "supporting", "context"}
+COLOR_ROLES = {"neutral", "primary_accent", "secondary_accent", "risk", "positive", "negative",
+               "observed", "scenario", "external", "proposed"}
+MOTION_PURPOSES = {"sequence", "causality", "transformation", "state_change", "progressive_reveal",
+                   "data_flow", "feedback_loop", "before_after"}
+
+
+def validate_visual_intent(item: Any, field: str) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        raise CommunicationError("CONTRACT_INVALID", f"{field} must be an object.")
+    allowed = {"relationship", "form", "primary_message", "primary_evidence_ids", "secondary_evidence_ids",
+               "prominence", "color_roles", "motion"}
+    if set(item) - allowed:
+        raise CommunicationError("CONTRACT_INVALID", f"{field} contains unsupported fields.")
+    relationship, form = item.get("relationship"), item.get("form")
+    if (not isinstance(relationship, str) or relationship not in VISUAL_RELATIONSHIPS
+            or not isinstance(form, str) or form not in VISUAL_FORMS):
+        raise CommunicationError("CONTRACT_INVALID", f"{field} needs a supported semantic relationship and visual form.")
+    prominence = item.get("prominence", "supporting")
+    if not isinstance(prominence, str) or prominence not in VISUAL_PROMINENCE:
+        raise CommunicationError("CONTRACT_INVALID", f"{field}.prominence must be dominant, supporting, or context.")
+    roles = item.get("color_roles", ["neutral"])
+    if (not isinstance(roles, list) or not roles or len(roles) > len(COLOR_ROLES)
+            or any(not isinstance(role, str) or role not in COLOR_ROLES for role in roles)):
+        raise CommunicationError("CONTRACT_INVALID", f"{field}.color_roles must use semantic palette roles, not raw colors.")
+    if len(roles) != len(set(roles)):
+        raise CommunicationError("CONTRACT_INVALID", f"{field}.color_roles cannot contain duplicates.")
+    motion_raw = item.get("motion", {"mode": "static"})
+    if not isinstance(motion_raw, dict) or set(motion_raw) - {"mode", "purpose", "states"}:
+        raise CommunicationError("CONTRACT_INVALID", f"{field}.motion must be a bounded static/animated storyboard.")
+    mode = motion_raw.get("mode", "static")
+    if not isinstance(mode, str) or mode not in {"static", "animated"}:
+        raise CommunicationError("CONTRACT_INVALID", f"{field}.motion.mode must be static or animated.")
+    states_raw = motion_raw.get("states", [])
+    if not isinstance(states_raw, list) or len(states_raw) > 20:
+        raise CommunicationError("CONTRACT_INVALID", f"{field}.motion.states must be a bounded list.")
+    states = []
+    state_ids: set[str] = set()
+    for index, state in enumerate(states_raw):
+        if not isinstance(state, dict) or set(state) - {"id", "label", "change", "new_information", "evidence_ids"}:
+            raise CommunicationError("CONTRACT_INVALID", f"{field}.motion.states[{index}] has an unsupported shape.")
+        state_id = state.get("id")
+        if not isinstance(state_id, str) or not IDENTIFIER.fullmatch(state_id) or state_id in state_ids:
+            raise CommunicationError("CONTRACT_INVALID", f"{field}.motion state IDs must be valid and unique.")
+        state_ids.add(state_id)
+        states.append({"id": state_id,
+                       "label": _string(state.get("label"), f"{field}.motion.states[{index}].label", maximum=160),
+                       "change": _string(state.get("change"), f"{field}.motion.states[{index}].change", maximum=500),
+                       "new_information": _string(state.get("new_information"), f"{field}.motion.states[{index}].new_information", maximum=500),
+                       "evidence_ids": _ids(state.get("evidence_ids", []), f"{field}.motion.states[{index}].evidence_ids")})
+    purpose = motion_raw.get("purpose")
+    if mode == "animated":
+        unique_information = {state["new_information"].casefold() for state in states}
+        if (not isinstance(purpose, str) or purpose not in MOTION_PURPOSES or len(states) < 2
+                or len(unique_information) < 2):
+            raise CommunicationError("MOTION_NOT_SEMANTIC", f"{field} animation needs a meaningful information purpose and at least two changing states.",
+                                     remediation="Use a static representation unless time itself explains sequence, causality, transformation, or state.")
+    elif purpose is not None or states:
+        raise CommunicationError("CONTRACT_INVALID", f"{field} static motion cannot contain an animation purpose or storyboard states.")
+    return {"relationship": relationship, "form": form,
+            "primary_message": _string(item.get("primary_message"), f"{field}.primary_message", maximum=500),
+            "primary_evidence_ids": _ids(item.get("primary_evidence_ids", []), f"{field}.primary_evidence_ids"),
+            "secondary_evidence_ids": _ids(item.get("secondary_evidence_ids", []), f"{field}.secondary_evidence_ids"),
+            "prominence": prominence, "color_roles": roles,
+            "motion": {"mode": mode, "purpose": purpose, "states": states}}
 
 
 def decimal_value(value: Any, *, field: str) -> Decimal:
@@ -55,6 +125,21 @@ def _ids(value: Any, field: str, *, maximum: int = 200) -> list[str]:
     if len(result) != len(set(result)):
         raise CommunicationError("CONTRACT_INVALID", f"{field} contains duplicate IDs.")
     return result
+
+
+def _insight_evidence_ids(insight: dict[str, Any]) -> set[str]:
+    refs = {ref for field in ("baseline", "current")
+            for ref in (insight.get(field) or {}).get("evidence_ids", [])}
+    normalization = insight.get("normalization") or {}
+    refs.update(normalization.get("baseline_denominator_evidence_ids", []))
+    refs.update(normalization.get("current_denominator_evidence_ids", []))
+    return refs
+
+
+def _visual_intent_evidence_ids(intent: dict[str, Any]) -> set[str]:
+    refs = set(intent["primary_evidence_ids"]) | set(intent["secondary_evidence_ids"])
+    refs.update(ref for state in intent["motion"]["states"] for ref in state["evidence_ids"])
+    return refs
 
 
 def validate_evidence(item: Any) -> dict[str, Any]:
@@ -105,6 +190,11 @@ def validate_finding(item: Any) -> dict[str, Any]:
     identifier = item.get("id")
     if not isinstance(identifier, str) or not IDENTIFIER.fullmatch(identifier):
         raise CommunicationError("CONTRACT_INVALID", "Finding ID is missing or invalid.")
+    allowed = {"id", "claim", "epistemic", "confidence", "evidence_ids", "counter_evidence_ids",
+               "alternative_explanations", "materiality", "implications", "limitations", "relevance",
+               "impact", "quantitative_insight_ids"}
+    if set(item) - allowed:
+        raise CommunicationError("CONTRACT_INVALID", f"Finding {identifier} contains unsupported fields.")
     epistemic = item.get("epistemic", "INFERENCE")
     confidence = item.get("confidence", "UNKNOWN")
     if not isinstance(epistemic, str) or epistemic not in EPISTEMIC_TYPES or not isinstance(confidence, str) or confidence not in CONFIDENCE_LEVELS:
@@ -116,14 +206,24 @@ def validate_finding(item: Any) -> dict[str, Any]:
         "id": identifier,
         "claim": _string(item.get("claim"), f"finding.{identifier}.claim"),
         "epistemic": epistemic, "confidence": confidence, "evidence_ids": evidence_ids,
+        "counter_evidence_ids": _ids(item.get("counter_evidence_ids", []), f"finding.{identifier}.counter_evidence_ids"),
+        "materiality": item.get("materiality", "unknown"),
     }
+    if not isinstance(result["materiality"], str) or result["materiality"] not in {"high", "medium", "low", "unknown"}:
+        raise CommunicationError("CONTRACT_INVALID", f"Finding {identifier} materiality must be high, medium, low, or unknown.")
+    alternatives = item.get("alternative_explanations", [])
+    if not isinstance(alternatives, list) or len(alternatives) > 20:
+        raise CommunicationError("CONTRACT_INVALID", f"Finding {identifier} alternative_explanations must be a bounded list.")
+    result["alternative_explanations"] = [_string(value, f"finding.{identifier}.alternative_explanations", maximum=1000) for value in alternatives]
     for field in ("implications", "limitations"):
         values = item.get(field, [])
         if not isinstance(values, list) or len(values) > 30:
             raise CommunicationError("CONTRACT_INVALID", f"Finding {identifier} {field} must be a bounded list.")
         result[field] = [_string(value, f"finding.{identifier}.{field}", maximum=1000) for value in values]
     relevance = item.get("relevance", {})
-    if not isinstance(relevance, dict) or any(key not in AUDIENCES or value not in {"high", "medium", "low"} for key, value in relevance.items()):
+    if (not isinstance(relevance, dict)
+            or any(key not in AUDIENCES or not isinstance(value, str) or value not in {"high", "medium", "low"}
+                   for key, value in relevance.items())):
         raise CommunicationError("CONTRACT_INVALID", f"Finding {identifier} relevance must use audience-specific low/medium/high values.")
     result["relevance"] = relevance
     impact = item.get("impact")
@@ -165,7 +265,7 @@ def validate_artifact(raw: Any) -> dict[str, Any]:
         raise CommunicationError("CONTRACT_INVALID", "Artifact plan schema_version must be 1.")
     allowed_root = {"schema_version", "request", "title", "thesis", "evidence", "findings",
                     "quantitative_insights", "storyline", "selection_rationale", "exclusions",
-                    "sections", "slides", "architecture_relevant", "metadata"}
+                    "sections", "slides", "architecture_relevant", "editorial", "metadata"}
     if set(raw) - allowed_root:
         raise CommunicationError("CONTRACT_INVALID", "Artifact plan contains unsupported top-level fields: " +
                                  ", ".join(sorted(set(raw) - allowed_root)) + ".")
@@ -222,7 +322,7 @@ def validate_artifact(raw: Any) -> dict[str, Any]:
     if len(finding_ids) != len(findings):
         raise CommunicationError("CONTRACT_INVALID", "Finding IDs must be unique.")
     for finding in findings:
-        missing = set(finding["evidence_ids"]) - evidence_ids
+        missing = (set(finding["evidence_ids"]) | set(finding["counter_evidence_ids"])) - evidence_ids
         if missing:
             raise CommunicationError("CONTRACT_INVALID", f"Finding {finding['id']} references unknown evidence IDs: {', '.join(sorted(missing))}.")
 
@@ -305,6 +405,23 @@ def validate_artifact(raw: Any) -> dict[str, Any]:
         if missing:
             raise CommunicationError("CONTRACT_INVALID", f"Finding {finding['id']} references unknown quantitative insights: {', '.join(sorted(missing))}.")
 
+    editorial_raw = raw.get("editorial", {})
+    if not isinstance(editorial_raw, dict) or set(editorial_raw) - {
+            "decision", "materiality_note", "appendix_finding_ids", "appendix_insight_ids", "appendix_evidence_ids"}:
+        raise CommunicationError("CONTRACT_INVALID", "Editorial strategy contains unsupported fields.")
+    editorial = {
+        "decision": _string(editorial_raw.get("decision"), "editorial.decision", maximum=1000, required=False),
+        "materiality_note": _string(editorial_raw.get("materiality_note"), "editorial.materiality_note", maximum=1000, required=False),
+        "appendix_finding_ids": _ids(editorial_raw.get("appendix_finding_ids", []), "editorial.appendix_finding_ids"),
+        "appendix_insight_ids": _ids(editorial_raw.get("appendix_insight_ids", []), "editorial.appendix_insight_ids"),
+        "appendix_evidence_ids": _ids(editorial_raw.get("appendix_evidence_ids", []), "editorial.appendix_evidence_ids"),
+    }
+    for field, known in (("appendix_finding_ids", finding_ids), ("appendix_insight_ids", insight_ids),
+                         ("appendix_evidence_ids", evidence_ids)):
+        missing = set(editorial[field]) - known
+        if missing:
+            raise CommunicationError("CONTRACT_INVALID", f"editorial.{field} references unknown IDs: {', '.join(sorted(missing))}.")
+
     thesis = _string(raw.get("thesis"), "thesis", maximum=2000)
     storyline_raw = raw.get("storyline", [])
     if not isinstance(storyline_raw, list) or len(storyline_raw) > 100:
@@ -327,6 +444,8 @@ def validate_artifact(raw: Any) -> dict[str, Any]:
     for index, section in enumerate(sections):
         if not isinstance(section, dict):
             raise CommunicationError("CONTRACT_INVALID", "Artifact sections must be objects.")
+        if set(section) - {"title", "body", "finding_ids", "evidence_ids", "insight_ids", "visual_intent"}:
+            raise CommunicationError("CONTRACT_INVALID", f"Section {index + 1} contains unsupported fields.")
         refs = _ids(section.get("finding_ids", []), f"sections[{index}].finding_ids")
         if set(refs) - finding_ids:
             raise CommunicationError("CONTRACT_INVALID", f"Section {index + 1} references an unknown finding.")
@@ -336,9 +455,24 @@ def validate_artifact(raw: Any) -> dict[str, Any]:
         insight_refs = _ids(section.get("insight_ids", []), f"sections[{index}].insight_ids")
         if set(insight_refs) - insight_ids:
             raise CommunicationError("CONTRACT_INVALID", f"Section {index + 1} references an unknown quantitative insight.")
-        normalized_sections.append({"title": _string(section.get("title"), f"sections[{index}].title", maximum=240),
-                                    "body": _string(section.get("body", ""), f"sections[{index}].body", maximum=20000),
-                                    "finding_ids": refs, "evidence_ids": evidence_refs, "insight_ids": insight_refs})
+        normalized = {"title": _string(section.get("title"), f"sections[{index}].title", maximum=240),
+                      "body": _string(section.get("body", ""), f"sections[{index}].body", maximum=20000),
+                      "finding_ids": refs, "evidence_ids": evidence_refs, "insight_ids": insight_refs}
+        if "visual_intent" in section:
+            intent = validate_visual_intent(section["visual_intent"], f"sections[{index}].visual_intent")
+            supported = set(evidence_refs)
+            for finding_id in refs:
+                finding = next(item for item in findings if item["id"] == finding_id)
+                supported.update(finding["evidence_ids"])
+                supported.update(finding["counter_evidence_ids"])
+            for insight_id in insight_refs:
+                insight = next(item for item in insights if item["id"] == insight_id)
+                supported.update(_insight_evidence_ids(insight))
+            intent_refs = _visual_intent_evidence_ids(intent)
+            if intent_refs - supported:
+                raise CommunicationError("CONTRACT_INVALID", f"sections[{index}].visual_intent references evidence not selected for the section.")
+            normalized["visual_intent"] = intent
+        normalized_sections.append(normalized)
 
     slides = raw.get("slides", [])
     if not isinstance(slides, list) or len(slides) > 200:
@@ -347,6 +481,8 @@ def validate_artifact(raw: Any) -> dict[str, Any]:
     for index, slide in enumerate(slides):
         if not isinstance(slide, dict):
             raise CommunicationError("CONTRACT_INVALID", "Presentation slides must be objects.")
+        if set(slide) - {"role", "title", "body", "finding_ids", "evidence_ids", "insight_ids", "visual_intent"}:
+            raise CommunicationError("CONTRACT_INVALID", f"Slide {index + 1} contains unsupported fields.")
         role = slide.get("role", "content")
         if not isinstance(role, str) or role not in {"cover", "content", "architecture", "appendix"}:
             raise CommunicationError("CONTRACT_INVALID", f"Slide {index + 1} has an unsupported role.")
@@ -355,9 +491,24 @@ def validate_artifact(raw: Any) -> dict[str, Any]:
         insight_refs = _ids(slide.get("insight_ids", []), f"slides[{index}].insight_ids")
         if set(finding_refs) - finding_ids or set(evidence_refs) - evidence_ids or set(insight_refs) - insight_ids:
             raise CommunicationError("CONTRACT_INVALID", f"Slide {index + 1} contains an unresolved evidence, finding, or insight reference.")
-        normalized_slides.append({"role": role, "title": _string(slide.get("title"), f"slides[{index}].title", maximum=240),
-                                  "body": _string(slide.get("body", ""), f"slides[{index}].body", maximum=10000),
-                                  "finding_ids": finding_refs, "evidence_ids": evidence_refs, "insight_ids": insight_refs})
+        normalized = {"role": role, "title": _string(slide.get("title"), f"slides[{index}].title", maximum=240),
+                      "body": _string(slide.get("body", ""), f"slides[{index}].body", maximum=10000),
+                      "finding_ids": finding_refs, "evidence_ids": evidence_refs, "insight_ids": insight_refs}
+        if "visual_intent" in slide:
+            intent = validate_visual_intent(slide["visual_intent"], f"slides[{index}].visual_intent")
+            supported = set(evidence_refs)
+            for finding_id in finding_refs:
+                finding = next(item for item in findings if item["id"] == finding_id)
+                supported.update(finding["evidence_ids"])
+                supported.update(finding["counter_evidence_ids"])
+            for insight_id in insight_refs:
+                insight = next(item for item in insights if item["id"] == insight_id)
+                supported.update(_insight_evidence_ids(insight))
+            intent_refs = _visual_intent_evidence_ids(intent)
+            if intent_refs - supported:
+                raise CommunicationError("CONTRACT_INVALID", f"slides[{index}].visual_intent references evidence not selected for the slide.")
+            normalized["visual_intent"] = intent
+        normalized_slides.append(normalized)
 
     if artifact_type == "presentation" and not normalized_slides:
         raise CommunicationError("CONTRACT_INVALID", "Presentation plans require at least one slide.")
@@ -375,7 +526,7 @@ def validate_artifact(raw: Any) -> dict[str, Any]:
         "selection_rationale": _bounded_text_list(raw.get("selection_rationale", []), "selection_rationale"),
         "exclusions": _bounded_text_list(raw.get("exclusions", []), "exclusions"),
         "sections": normalized_sections, "slides": normalized_slides,
-        "architecture_relevant": architecture_relevant,
+        "architecture_relevant": architecture_relevant, "editorial": editorial,
         "metadata": _validate_metadata(raw.get("metadata", {})),
     }
     if not isinstance(result["architecture_relevant"], bool):

@@ -74,7 +74,8 @@ def communication_budget(plan: dict[str, Any]) -> dict[str, Any]:
     else:
         time_messages = len(content_slides) if content_slides else max(1, len(plan.get("storyline", [])))
     primary_messages = min(len(content_slides), time_messages) if content_slides else time_messages
-    words_per_message = {"executive": 55, "technical": 95, "mixed": 75}[audience]
+    words_per_message = {"executive": 55, "financial": 65, "technical_leadership": 80,
+                         "engineering": 120, "technical": 95, "mixed": 75}[audience]
     return {
         "audience": audience,
         "minutes": minutes,
@@ -146,8 +147,10 @@ def validate_constraints(plan: dict[str, Any]) -> dict[str, Any]:
     disallow_estimates = indexed.get("no_estimates") is True or indexed.get("measured_only") is True
     if disallow_estimates:
         evidence_by_id = {item["id"]: item for item in plan["evidence"]}
-        used_ids = set()
-        used_insight_ids = set()
+        # The renderer retains evidence and supporting analysis in its provenance/appendix
+        # sections, so measured-only policy applies to the complete artifact plan.
+        used_ids = set(evidence_by_id)
+        used_insight_ids = {item["id"] for item in plan["quantitative_insights"]}
         for slide in slides:
             used_ids.update(slide["evidence_ids"])
             for finding_id in slide["finding_ids"]:
@@ -174,10 +177,10 @@ def validate_constraints(plan: dict[str, Any]) -> dict[str, Any]:
                     for observation in (insight.get("baseline"), insight.get("current")):
                         if observation:
                             used_ids.update(observation["evidence_ids"])
-        prohibited = {"ESTIMATE", "PROJECTION", "ASSUMPTION"}
+        prohibited = {"ESTIMATE", "SCENARIO", "PROJECTION", "ASSUMPTION", "INFERENCE", "INFERRED", "UNKNOWN", "PROPOSAL"}
         if any(evidence_by_id[item]["epistemic"] in prohibited for item in used_ids):
             errors.append("A no-estimates/measured-only constraint includes estimated, projected, or assumed evidence.")
-        prohibited_quantitative = {"ESTIMATE", "PROJECTION", "ASSUMPTION", "PROPOSAL"}
+        prohibited_quantitative = prohibited
         if any(insight.get("epistemic") in prohibited_quantitative or insight.get("projection")
                or (insight.get("normalization") and insight["normalization"].get("epistemic") in prohibited_quantitative)
                for insight in plan["quantitative_insights"] if insight["id"] in used_insight_ids):
@@ -190,23 +193,23 @@ def validate_constraints(plan: dict[str, Any]) -> dict[str, Any]:
 
 
 def audience_emphasis(audience: str, insight: dict[str, Any]) -> dict[str, str]:
-    if audience == "executive":
-        focus = "absolute_financial_or_operational_impact"
-        detail = "Emphasize decision relevance, material magnitude, direction, and confidence."
-    elif audience == "technical":
-        focus = "method_baseline_distribution_and_confidence"
-        detail = "Preserve baseline, raw values, normalized measures, sample size, and methodology."
-    elif audience == "mixed":
-        focus = "impact_then_supporting_method"
-        detail = "Lead with impact and reveal enough method and uncertainty for technical readers."
-    else:
-        raise CommunicationError("CONTRACT_INVALID", "Audience must be executive, technical, or mixed.")
+    profiles = {
+        "executive": ("decision_impact_risk_and_next_action", "Lead with material impact, decision relevance, risk, confidence, and next action."),
+        "financial": ("baseline_actual_savings_spend_and_scenarios", "Keep the observed baseline and spend distinct from annualized scenarios and assumptions."),
+        "technical_leadership": ("architecture_scale_reliability_and_tradeoffs", "Prioritize constraints, scalability, reliability, technical risk, and trade-offs."),
+        "engineering": ("mechanism_method_runtime_and_diagnostics", "Preserve implementation mechanism, interfaces, raw measurements, and operational diagnostics."),
+        "technical": ("method_baseline_distribution_and_confidence", "Preserve baseline, raw values, normalized measures, sample size, and methodology."),
+        "mixed": ("impact_then_supporting_method", "Lead with impact and reveal enough method and uncertainty for technical readers."),
+    }
+    if audience not in profiles:
+        raise CommunicationError("CONTRACT_INVALID", "Audience must be executive, financial, technical_leadership, engineering, technical, or mixed.")
+    focus, detail = profiles[audience]
     return {"focus": focus, "rationale": detail,
             "values_preserved": ";".join(str(insight.get(key)) for key in ("absolute_change", "relative_change", "percentage_point_change"))}
 
 
 def select_findings(findings: list[dict[str, Any]], *, audience: str, limit: int) -> dict[str, list[dict[str, Any]]]:
-    if audience not in {"executive", "technical", "mixed"} or limit < 1:
+    if audience not in {"executive", "financial", "technical_leadership", "engineering", "technical", "mixed"} or limit < 1:
         raise CommunicationError("CONTRACT_INVALID", "Finding selection needs a supported audience and a positive limit.")
     rank = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "UNKNOWN": 0}
     relevance_rank = {"high": 3, "medium": 2, "low": 1}
@@ -214,7 +217,11 @@ def select_findings(findings: list[dict[str, Any]], *, audience: str, limit: int
         confidence = rank.get(finding.get("confidence", "UNKNOWN"), 0)
         relevance = relevance_rank.get(finding.get("relevance", {}).get(audience, "medium"), 2)
         impact = abs(decimal_value(finding.get("impact", 0), field="finding.impact"))
-        return confidence, relevance, impact, finding.get("id", "")
+        if audience == "financial":
+            return impact, confidence, Decimal(relevance), finding.get("id", "")
+        if audience == "executive":
+            return relevance, confidence, impact, finding.get("id", "")
+        return relevance, confidence, impact, finding.get("id", "")
     ordered = sorted(findings, key=lambda item: (-score(item)[0], -score(item)[1], -score(item)[2], score(item)[3]))
     selected = ordered[:limit]
     selected_ids = {item["id"] for item in selected}
@@ -252,5 +259,7 @@ def validate_plan(raw: Any) -> dict[str, Any]:
     plan["constraint_warnings"] = validation["warnings"]
     plan["quality_gates"] = {"structure": "PASS", "constraints": "PASS", "evidence_traceability": "PASS",
                              "quantitative_integrity": "PASS", "provenance": "PASS",
-                             "semantic_claim_review": "PENDING_MODEL", "output_validity": "PENDING_RENDER"}
+                             "semantic_claim_review": "PENDING_MODEL", "editorial_review": "PENDING_MODEL",
+                             "visual_intent": "PASS" if any(page.get("visual_intent") for page in [*plan["slides"], *plan["sections"]]) else "NOT_PROVIDED",
+                             "output_validity": "PENDING_RENDER"}
     return plan

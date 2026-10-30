@@ -3,20 +3,26 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import stat
 import sys
 import tempfile
 import zipfile
+import xml.etree.ElementTree as ET
+from copy import deepcopy
 from pathlib import Path
+from contextlib import redirect_stdout
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from communication import inputs
 from communication.contracts import validate_artifact
+from communication.cli import main as communication_main
 from communication.diagrams import render_svg, write_svg
+from communication.editorial import critique_plan
 from communication.errors import CommunicationError
 from communication.materialize import render_markdown, write_markdown
 from communication.planning import audience_emphasis, extract_explicit_constraints, validate_plan
@@ -157,7 +163,12 @@ def run() -> None:
     insight_before = json.dumps(analyze_payload(fixture), sort_keys=True)
     emphases = [audience_emphasis(audience, spend)["focus"] for audience in ("executive", "technical", "mixed")]
     check(len(set(emphases)) == 3 and json.dumps(analyze_payload(fixture), sort_keys=True) == insight_before, "audience changes communication policy, not evidence values")
-    check("Baseline" not in format_metric(spend, audience="executive") and "Baseline" in format_metric(spend, audience="technical"), "audience controls numerical context")
+    executive_spend = format_metric(spend, audience="executive")
+    technical_spend = format_metric(spend, audience="technical")
+    financial_spend = format_metric(spend, audience="financial")
+    check("~1.2M USD → ~870k USD" in executive_spend and "Baseline 1200000 USD" in technical_spend
+          and "observed actual: ~1.2M → ~870k USD" in financial_spend,
+          "audience changes numerical framing while preserving raw values")
     rate_statement = format_metric(rate, audience="executive")
     check("2.0 percentage points" in rate_statement and "-50.0% relative" in rate_statement and "% decrease" not in rate_statement,
           "rate narrative separates percentage-point and relative-percent changes")
@@ -169,6 +180,64 @@ def run() -> None:
     checked = validate_plan(plan)
     check(checked["communication_budget"]["audience"] == "executive" and checked["quality_gates"]["semantic_claim_review"] == "PENDING_MODEL", "plan separates mechanical and semantic gates")
     check(sum(slide["role"] == "architecture" for slide in checked["slides"]) == 1, "exact five-slide role allocation")
+
+    scenario = metric("QI-scenario", {"value": "100", "epistemic": "SCENARIO", "evidence_ids": ["E-scenario-before"]},
+                      {"value": "80", "epistemic": "SCENARIO", "evidence_ids": ["E-scenario-now"]})
+    check(scenario["epistemic"] == "SCENARIO" and "Scenario:" in format_metric(scenario, audience="executive"),
+          "scenario values remain visibly distinct from measured outcomes")
+
+    editorial_fixtures = json.loads((ROOT / "tests/fixtures/communication/editorial-cases.json").read_text())
+    for case in editorial_fixtures["cases"]:
+        insight = analyze_metric({"id": f"QI-{case['id']}", "name": case["id"], "kind": case["kind"],
+                                  "unit": case["unit"], "semantics": case["semantics"], "confidence": "LOW",
+                                  "baseline": {"value": case["baseline"], "evidence_ids": [f"E-{case['id']}-before"]},
+                                  "current": {"value": case["current"], "evidence_ids": [f"E-{case['id']}-now"]}})
+        candidate = make_plan([insight], artifact="report")
+        candidate["request"]["audience"] = case["audiences"][0]
+        candidate["title"] = case["primary_message"]
+        candidate["sections"][0]["title"] = case["primary_message"]
+        candidate["sections"][0]["visual_intent"] = {
+            "relationship": case["relationship"], "form": case["form"],
+            "primary_message": case["primary_message"],
+            "primary_evidence_ids": [f"E-{case['id']}-before"],
+            "secondary_evidence_ids": [f"E-{case['id']}-now"],
+            "prominence": "dominant", "color_roles": ["observed", "scenario"] if case["id"] == "executive_financial_pilot" else ["neutral"],
+            "motion": ({"mode": "animated", "purpose": "state_change", "states": [
+                {"id": "validated", "label": "Validated", "change": "Validation succeeds.",
+                 "new_information": "The request can proceed.", "evidence_ids": [f"E-{case['id']}-before"]},
+                {"id": "executed", "label": "Executed", "change": "Execution completes.",
+                 "new_information": "The result becomes available.", "evidence_ids": [f"E-{case['id']}-now"]}]}
+                       if case["motion"] else {"mode": "static"}),
+        }
+        original_values = json.dumps(candidate["quantitative_insights"], sort_keys=True)
+        transformed = validate_artifact(candidate)
+        critic = critique_plan(candidate)
+        check(transformed["request"]["audience"] == case["audiences"][0]
+              and critic["visual_intent_coverage"] == {"modeled_pages": 1, "total_pages": 1},
+              f"{case['id']} evaluation has a validated audience-specific semantic visual plan")
+        statement_a = format_metric(insight, audience=case["audiences"][0])
+        statement_b = format_metric(insight, audience=case["audiences"][1])
+        check(statement_a != statement_b and json.dumps(candidate["quantitative_insights"], sort_keys=True) == original_values,
+              f"{case['id']} audience transformation changes communication but not analytical values")
+        if case["motion"]:
+            rendered, render_result = render_markdown(candidate)
+            check("static renderer fallback" in rendered and render_result["fallbacks"],
+                  "semantic motion storyboard degrades to an explicit static fallback")
+            check(any(signal["code"] == "STATIC_RENDERER_FALLBACK" for signal in render_result["editorial_critic"]["candidate_signals"]),
+                  "critic identifies the static renderer limitation")
+            repeated_information = deepcopy(candidate)
+            repeated_states = repeated_information["sections"][0]["visual_intent"]["motion"]["states"]
+            repeated_states[1]["new_information"] = repeated_states[0]["new_information"]
+            expect_code("MOTION_NOT_SEMANTIC", validate_artifact, repeated_information)
+            repeated_change = deepcopy(candidate)
+            repeated_states = repeated_change["sections"][0]["visual_intent"]["motion"]["states"]
+            repeated_states[1]["change"] = repeated_states[0]["change"]
+            check(any(signal["code"] == "DECORATIVE_MOTION"
+                      for signal in critique_plan(repeated_change)["candidate_signals"]),
+                  "critic flags repetitive state changes as decorative motion")
+        if case["id"] == "executive_financial_pilot":
+            candidate["sections"][0]["visual_intent"]["color_roles"] = ["#ff0000"]
+            expect_code("CONTRACT_INVALID", validate_artifact, candidate)
     broken = make_plan(amounts)
     broken["slides"].pop()
     expect_code("CONSTRAINT_CONFLICT", validate_plan, broken)
@@ -178,6 +247,13 @@ def run() -> None:
     expect_code("CONSTRAINT_CONFLICT", validate_plan, conflict)
     measured = make_plan([projected], artifact="report", constraints=[{"kind": "measured_only", "value": True, "strength": "hard", "origin": "explicit"}])
     expect_code("CONSTRAINT_CONFLICT", validate_plan, measured)
+    measured_scenario = make_plan([scenario], artifact="report", constraints=[{"kind": "measured_only", "value": True, "strength": "hard", "origin": "explicit"}])
+    expect_code("CONSTRAINT_CONFLICT", validate_plan, measured_scenario)
+    observed = metric("QI-observed", {"value": "10", "epistemic": "OBSERVED", "evidence_ids": ["E-observed-before"]},
+                      {"value": "8", "epistemic": "OBSERVED", "evidence_ids": ["E-observed-now"]})
+    observed_plan = make_plan([observed], artifact="report", constraints=[{"kind": "measured_only", "value": True, "strength": "hard", "origin": "explicit"}])
+    check(validate_plan(observed_plan)["quality_gates"]["constraints"] == "PASS",
+          "measured-only policy accepts observed and deterministically derived values")
     conditional = make_plan(amounts, constraints=[{"kind": "architecture_if_relevant", "value": True, "strength": "hard", "origin": "explicit"}])
     conditional["architecture_relevant"] = False
     conditional["request"]["architecture_relevant"] = False
@@ -199,6 +275,7 @@ def run() -> None:
     check(render_result["quality_gates"]["semantic_claim_review"] == "PENDING_MODEL", "renderer does not claim semantic truth")
     review = review_markdown(markdown, plan_raw=plan)
     check(review["status"] != "FAIL", "generated Markdown passes deterministic review")
+    check(review["quality_gates"]["editorial_review"] == "PENDING_MODEL", "editorial reviewer keeps semantic judgments pending")
     rate_plan = make_plan([rate], artifact="report")
     pp_review = review_markdown("## Rate change\n\nRate changed by -2.0%.\n", plan_raw=rate_plan)
     check(any(item["code"] == "PERCENTAGE_POINT_MISLABELLED" for item in pp_review["findings"]), "review catches percentage-point regression")
@@ -207,6 +284,43 @@ def run() -> None:
     check(any(item["code"] == "PROJECTION_UNQUALIFIED" for item in projection_review["findings"]), "review catches unqualified projection")
     generic_review = review_markdown("## Slide 1 — Overview\n\nSummary.\n")
     check(any(item["code"] == "GENERIC_TITLE" for item in generic_review["findings"]), "review catches generic slide title")
+
+    selective = make_plan(amounts)
+    selective["editorial"] = {"decision": "Decide whether to expand the pilot while retaining a success-rate guardrail.",
+                              "materiality_note": "Spend fell materially, but the observed rate decline should remain visible.",
+                              "appendix_insight_ids": ["QI-success-rate"]}
+    selective["slides"][2]["insight_ids"] = []
+    selective["slides"][2]["evidence_ids"] = ["E-rate-before", "E-rate-now"]
+    selective["slides"][2]["title"] = "Success rate remains the guardrail for scale"
+    selective["slides"][2]["body"] = "Keep the observed rate movement in the decision review; inspect its underlying comparison in supporting analysis."
+    selective_output, _ = render_markdown(selective)
+    appendix = selective_output.split("## Appendix — Supporting analysis", 1)[1]
+    check("## Decision context" in selective_output and "## Materiality" in selective_output
+          and "**QI-success-rate:**" in appendix and "E-rate-now" in selective_output,
+          "editorial reduction moves detail to appendix while retaining source evidence")
+    benchmark_root = ROOT / "tests/fixtures/communication"
+    benchmark_plan = json.loads((benchmark_root / "communication-benchmark-plan.json").read_text())
+    baseline_artifact = (benchmark_root / "baseline-v2.10-quantitative.md").read_text()
+    candidate_artifact, candidate_meta = render_markdown(benchmark_plan)
+    candidate_reference = (benchmark_root / "candidate-v2.11-editorial.md").read_text()
+    exact_amount = baseline_artifact.count("330,000.00 USD")
+    compact_amount = candidate_artifact.count("~330k USD")
+    check(exact_amount == 2 and compact_amount == 1 and candidate_artifact.count("## Slide ") == 5
+          and "## Appendix — Supporting analysis" in candidate_artifact
+          and all(item["id"] in candidate_artifact for item in benchmark_plan["evidence"])
+          and candidate_meta["editorial_critic"]["status"] == "PENDING_MODEL_REVIEW"
+          and "## Slide " in candidate_reference,
+          "Anvil quantitative fixture reduces repeated precision, promotes decision context, and retains evidence")
+    with tempfile.TemporaryDirectory(prefix="anvil-editorial-cli-") as temporary:
+        plan_path = Path(temporary) / "plan.json"
+        plan_path.write_text(json.dumps(selective), encoding="utf-8")
+        captured = io.StringIO()
+        with redirect_stdout(captured):
+            exit_code = communication_main(["critique", str(plan_path), "--format", "json"])
+        critique = json.loads(captured.getvalue())
+        check(exit_code == 0 and critique["status"] == "PENDING_MODEL_REVIEW"
+              and critique["audience_profile"]["audience"] == "executive",
+              "editorial critic is available through the local artifact CLI")
 
     with tempfile.TemporaryDirectory(prefix="anvil-communication-") as temporary:
         root = Path(temporary)
@@ -276,8 +390,21 @@ def run() -> None:
         write_svg(diagram, svg_path)
         checked_svg = review_diagram_file(svg_path, diagram)
         check(checked_svg["status"] == "PASS_WITH_WARNINGS" and checked_svg["quality_gates"]["semantic_claim_review"] == "PENDING_MODEL", "SVG review reports semantic review as pending")
+        check(checked_svg["quality_gates"]["visual_qa"] == "PASS", "SVG reviewer reports measurable geometry QA")
         unmodeled_svg = review_diagram_file(svg_path)
         check(unmodeled_svg["status"] == "PASS_WITH_WARNINGS", "SVG review does not imply layout proof without the model")
+        check(unmodeled_svg["quality_gates"]["visual_qa"] == "PASS_GEOMETRY_ONLY", "model-free SVG review states its geometry-only scope")
+        root = ET.fromstring(svg)
+        edge = next(item for item in root.iter() if item.tag.endswith("polyline"))
+        edge.set("points", "-40,300 1240,300")
+        svg_path.write_bytes(ET.tostring(root, encoding="utf-8"))
+        expect_code("OUTPUT_VALIDATION_FAILED", review_diagram_file, svg_path)
+        write_svg(diagram, svg_path, force=True)
+        outside_route = dict(diagram)
+        outside_route["edges"] = [{"id": "route", "from": "Router", "to": "Trino", "relation": "routes to",
+                                    "role": "CONTROL", "evidence_ids": ["E-architecture"],
+                                    "points": [[170, 340], [-20, 350], [1010, 340]]}]
+        expect_code("LAYOUT_INVALID", render_svg, outside_route)
         boundary = dict(diagram)
         boundary["boundaries"] = [{"id": "inside", "label": "Internal", "kind": "trust zone", "role": "SECURITY", "node_ids": ["Router"]}]
         boundary["layout"] = {**diagram["layout"], "boundaries": {"inside": {"x": 60, "y": 270, "width": 220, "height": 140}}}

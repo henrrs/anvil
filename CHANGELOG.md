@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.11.0] - 2026-10-30 (candidate; release gate pending)
+
+- Extended renderer-independent artifact contracts with OBSERVED/CALCULATED/INFERRED and SCENARIO epistemic states, counter-evidence, alternatives, materiality, decision context, and selective appendix placement.
+- Added financial, technical-leadership and engineering audience lenses while preserving executive, technical and mixed policies; numeric wording adapts to audience without changing stored values.
+- Added semantic visual intent for relationship, form, evidence focus, prominence, color roles and information-bearing motion storyboards. Markdown preserves motion intent and reports its static fallback.
+- Added an advisory editorial critic for generic assertions, repetitive/card-heavy composition, undifferentiated prominence, semantic-form mismatch, color competition, decorative motion, precision theater, exhaustive inputs, and generic corporate prose.
+- Strengthened SVG QA to reject measurable off-viewBox geometry and out-of-canvas routes; existing node collision, containment and unrelated-node crossing checks remain.
+- Added five offline evaluation fixtures spanning finance, architecture, Spark performance, process motion and unrelated business communication.
+- No runtime, persistent user-data or external dependency migration is required. The Anvil presentation benchmark named in the implementation specification is not present in this repository; this candidate is **NOT RELEASE READY** until that comparison is completed.
+- Extended source-profile migration support to five prior minor releases to keep 2.6.x installations upgradeable.
+
 ## [2.10.0] - 2026-10-27
 
 - Added task-local adaptive engineering depth: request/project size no longer forces long-horizon state, and requirements, architecture, work, and domain knowledge activate only when the current risk or uncertainty warrants them.

@@ -35,11 +35,37 @@ def _epistemic_note(epistemic: str, confidence: str) -> str:
     return f"{epistemic.replace('_', ' ').title()}; confidence {confidence.lower()}"
 
 
+def _visual_note(intent: dict[str, Any]) -> list[str]:
+    lines = [f"\n**Visual intent:** {intent['relationship']} → {intent['form']} ({intent['prominence']}).",
+             f"**Primary message:** {intent['primary_message']}"]
+    if intent["primary_evidence_ids"]:
+        lines.append("**Evidence focus:** " + ", ".join(intent["primary_evidence_ids"]))
+    if intent["secondary_evidence_ids"]:
+        lines.append("**Supporting evidence:** " + ", ".join(intent["secondary_evidence_ids"]))
+    if intent["color_roles"] != ["neutral"]:
+        lines.append("**Semantic color roles:** " + ", ".join(intent["color_roles"]))
+    motion = intent["motion"]
+    if motion["mode"] == "animated":
+        lines.append(f"**Motion storyboard ({motion['purpose']}; static renderer fallback):**")
+        for state in motion["states"]:
+            refs = "; evidence " + ", ".join(state["evidence_ids"]) if state["evidence_ids"] else ""
+            lines.append(f"- **{state['label']}** — {state['change']} New information: {state['new_information']}{refs}")
+    return lines
+
+
 def render_markdown(raw: Any) -> tuple[str, dict[str, Any]]:
     plan = validate_plan(raw)
     request = plan["request"]
     findings = _finding_by_id(plan)
     insights = _insight_by_id(plan)
+    evidence = {item["id"]: item for item in plan["evidence"]}
+    editorial = plan["editorial"]
+    appendix_findings = set(editorial["appendix_finding_ids"])
+    appendix_insights = set(editorial["appendix_insight_ids"])
+    appendix_evidence = set(editorial["appendix_evidence_ids"])
+    editorial_active = bool(editorial["decision"] or editorial["materiality_note"] or appendix_findings
+                            or appendix_insights or appendix_evidence)
+    used_findings: set[str] = set()
     artifact_id = plan["metadata"].get("artifact_id")
     if artifact_id is None:
         canonical = json.dumps(plan, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -51,6 +77,10 @@ def render_markdown(raw: Any) -> tuple[str, dict[str, Any]]:
              f"**Tone:** {request['tone']}  ",
              f"**Language:** {request['language']}", "",
              "## Thesis", "", plan["thesis"], ""]
+    if editorial["decision"]:
+        lines.extend(["## Decision context", "", editorial["decision"], ""])
+    if editorial["materiality_note"]:
+        lines.extend(["## Materiality", "", editorial["materiality_note"], ""])
     metadata = plan["metadata"]
     visible_metadata = [(label, metadata[key]) for key, label in (
         ("artifact_id", "Artifact ID"), ("created_at", "Created"), ("plan_version", "Plan version"),
@@ -70,41 +100,77 @@ def render_markdown(raw: Any) -> tuple[str, dict[str, Any]]:
         for index, slide in enumerate(plan["slides"], 1):
             lines.extend([f"## Slide {index} — {slide['title']}", "", f"**Role:** {slide['role'].title()}", "", slide["body"]])
             for finding_id in slide["finding_ids"]:
+                used_findings.add(finding_id)
                 finding = findings[finding_id]
                 lines.append(f"\n**Finding {finding_id} — {_epistemic_note(finding['epistemic'], finding['confidence'])}:** {finding['claim']}")
+                if finding["implications"]:
+                    lines.append("\n**Implication:** " + " ".join(finding["implications"]))
+                if finding["limitations"]:
+                    lines.append("\n**Qualification:** " + " ".join(finding["limitations"]))
+                if finding["materiality"] != "unknown":
+                    lines.append("\n**Materiality:** " + finding["materiality"].title())
+                if finding["counter_evidence_ids"]:
+                    lines.append("\n**Counter-evidence:** " + ", ".join(
+                        f"[{ref}](#{ref.casefold()})" for ref in finding["counter_evidence_ids"]))
+                if finding["alternative_explanations"]:
+                    lines.append("\n**Alternative explanations:** " + " ".join(finding["alternative_explanations"]))
             for insight_id in slide["insight_ids"]:
                 insight = insights[insight_id]
                 used_insights.add(insight_id)
                 lines.append(f"\n**Quantitative evidence {insight_id}:** {format_metric(insight, audience=request['audience'], locale=request['language'])}")
             refs = list(dict.fromkeys([
                 *slide["evidence_ids"],
-                *(ref for fid in slide["finding_ids"] for ref in findings[fid]["evidence_ids"]),
+                *(ref for fid in slide["finding_ids"] for ref in [*findings[fid]["evidence_ids"], *findings[fid]["counter_evidence_ids"]]),
                 *(ref for iid in slide["insight_ids"] for ref in _insight_evidence_refs(insights[iid])),
             ]))
             if refs:
                 lines.append("\n**Evidence:** " + ", ".join(f"[{ref}](#{ref.casefold()})" for ref in refs))
+            if slide.get("visual_intent"):
+                lines.extend(_visual_note(slide["visual_intent"]))
             lines.append("")
     else:
         for section in plan["sections"]:
             lines.extend([f"## {section['title']}", "", section["body"]])
             for finding_id in section["finding_ids"]:
+                used_findings.add(finding_id)
                 finding = findings[finding_id]
                 lines.append(f"\n**Finding {finding_id} — {_epistemic_note(finding['epistemic'], finding['confidence'])}:** {finding['claim']}")
+                if finding["implications"]:
+                    lines.append("\n**Implication:** " + " ".join(finding["implications"]))
+                if finding["limitations"]:
+                    lines.append("\n**Qualification:** " + " ".join(finding["limitations"]))
+                if finding["materiality"] != "unknown":
+                    lines.append("\n**Materiality:** " + finding["materiality"].title())
+                if finding["counter_evidence_ids"]:
+                    lines.append("\n**Counter-evidence:** " + ", ".join(
+                        f"[{ref}](#{ref.casefold()})" for ref in finding["counter_evidence_ids"]))
+                if finding["alternative_explanations"]:
+                    lines.append("\n**Alternative explanations:** " + " ".join(finding["alternative_explanations"]))
             for insight_id in section["insight_ids"]:
                 insight = insights[insight_id]
                 used_insights.add(insight_id)
                 lines.append(f"\n**Quantitative evidence {insight_id}:** {format_metric(insight, audience=request['audience'], locale=request['language'])}")
             refs = list(dict.fromkeys([
                 *section["evidence_ids"],
-                *(ref for fid in section["finding_ids"] for ref in findings[fid]["evidence_ids"]),
+                *(ref for fid in section["finding_ids"] for ref in [*findings[fid]["evidence_ids"], *findings[fid]["counter_evidence_ids"]]),
                 *(ref for iid in section["insight_ids"] for ref in _insight_evidence_refs(insights[iid])),
             ]))
             if refs:
                 lines.append("\n**Evidence:** " + ", ".join(f"[{ref}](#{ref.casefold()})" for ref in refs))
+            if section.get("visual_intent"):
+                lines.extend(_visual_note(section["visual_intent"]))
             lines.append("")
-    if plan["quantitative_insights"]:
+    main_insight_ids = used_insights if editorial_active else set(insights)
+    appendix_findings.update(set(findings) - used_findings if editorial_active else set())
+    appendix_insights.update(set(insights) - main_insight_ids if editorial_active else set())
+    appendix_findings.difference_update(used_findings)
+    appendix_insights.difference_update(main_insight_ids)
+    highlight_insight_ids = main_insight_ids - used_insights if editorial_active else main_insight_ids
+    if highlight_insight_ids:
         lines.extend(["## Quantitative highlights", ""])
         for insight in plan["quantitative_insights"]:
+            if insight["id"] not in highlight_insight_ids:
+                continue
             used_insights.add(insight["id"])
             refs = _insight_evidence_refs(insight)
             citations = " — Evidence: " + ", ".join(f"[{ref}](#{ref.casefold()})" for ref in refs) if refs else ""
@@ -112,6 +178,34 @@ def render_markdown(raw: Any) -> tuple[str, dict[str, Any]]:
             for warning in insight.get("warnings", []):
                 lines.append(f"  - Qualification: {warning}")
         lines.append("")
+    if appendix_findings or appendix_insights:
+        lines.extend(["## Appendix — Supporting analysis", ""])
+        for finding_id in sorted(appendix_findings):
+            finding = findings[finding_id]
+            lines.append(f"### {finding['claim']}")
+            lines.append(f"\n**Finding {finding_id} — {_epistemic_note(finding['epistemic'], finding['confidence'])}.**")
+            if finding["implications"]:
+                lines.append("\n**Implication:** " + " ".join(finding["implications"]))
+            if finding["limitations"]:
+                lines.append("\n**Qualification:** " + " ".join(finding["limitations"]))
+            if finding["materiality"] != "unknown":
+                lines.append("\n**Materiality:** " + finding["materiality"].title())
+            refs = list(dict.fromkeys([*finding["evidence_ids"], *finding["counter_evidence_ids"]]))
+            if refs:
+                lines.append("\n**Evidence:** " + ", ".join(f"[{ref}](#{ref.casefold()})" for ref in refs))
+            if finding["alternative_explanations"]:
+                lines.append("\n**Alternative explanations:** " + " ".join(finding["alternative_explanations"]))
+            lines.append("")
+        for insight_id in sorted(appendix_insights):
+            insight = insights[insight_id]
+            used_insights.add(insight_id)
+            refs = _insight_evidence_refs(insight)
+            citations = " — Evidence: " + ", ".join(f"[{ref}](#{ref.casefold()})" for ref in refs) if refs else ""
+            lines.append(f"- **{insight_id}:** {format_metric(insight, audience=request['audience'], locale=request['language'])}{citations}")
+        lines.append("")
+    if appendix_evidence:
+        lines.extend(["## Appendix evidence selection", "", "Supporting evidence retained for technical follow-up: "
+                      + ", ".join(sorted(appendix_evidence)) + ".", ""])
     if plan["selection_rationale"] or plan["exclusions"]:
         lines.extend(["## Selection notes", ""])
         for item in plan["selection_rationale"]:
@@ -125,9 +219,10 @@ def render_markdown(raw: Any) -> tuple[str, dict[str, Any]]:
         locator = source.get("locator") or "source not specified"
         digest = source.get("sha256")
         digest_note = f"; SHA-256 `{digest}`" if digest else ""
+        disposition = "Appendix evidence" if evidence["id"] in appendix_evidence else "Evidence"
         lines.append(f"<a id=\"{evidence['id'].casefold()}\"></a>")
         safe_locator = locator.replace("`", "\\`")
-        lines.append(f"- **{evidence['id']} — {_epistemic_note(evidence['epistemic'], evidence['confidence'])}:** "
+        lines.append(f"- **{disposition} {evidence['id']} — {_epistemic_note(evidence['epistemic'], evidence['confidence'])}:** "
                      f"{evidence['claim']} — `{safe_locator}`{digest_note}")
         if evidence.get("period"):
             lines.append(f"  - Applies to: {evidence['period']}")
@@ -145,14 +240,22 @@ def render_markdown(raw: Any) -> tuple[str, dict[str, Any]]:
     if plan.get("constraint_warnings"):
         lines.extend(["## Planning warnings", "", *[f"- {item}" for item in plan["constraint_warnings"]], ""])
     result = "\n".join(lines).rstrip() + "\n"
+    from .editorial import critique_plan
+    critic = critique_plan(raw)
     quality = {"structure": "PASS", "constraints": "PASS", "evidence_traceability": "PASS",
                "quantitative_integrity": "PASS", "provenance": "PASS",
-               "semantic_claim_review": "PENDING_MODEL", "output_validity": "PASS"}
+               "semantic_claim_review": "PENDING_MODEL", "editorial_review": "PENDING_MODEL",
+               "visual_intent": "PASS" if any(page.get("visual_intent") for page in [*plan["slides"], *plan["sections"]]) else "NOT_PROVIDED",
+               "output_validity": "PASS"}
+    fallbacks = (["Semantic animation storyboard retained as text; no dynamic renderer is installed."]
+                 if any(page.get("visual_intent", {}).get("motion", {}).get("mode") == "animated"
+                        for page in [*plan["slides"], *plan["sections"]]) else [])
     return result, {"format": "markdown", "artifact": request["artifact"],
                     "slides": len(plan["slides"]) if request["artifact"] == "presentation" else None,
                     "evidence": len(plan["evidence"]), "findings": len(plan["findings"]),
                     "insights": len(plan["quantitative_insights"]), "quality_gates": quality,
-                    "warnings": plan["constraint_warnings"]}
+                    "warnings": [*plan["constraint_warnings"], *fallbacks], "fallbacks": fallbacks,
+                    "editorial_critic": critic}
 
 
 def write_markdown(raw: Any, destination: Path, *, force: bool = False) -> dict[str, Any]:

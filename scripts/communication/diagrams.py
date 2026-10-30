@@ -270,6 +270,8 @@ def validate_diagram(raw: Any) -> dict[str, Any]:
             points = [_point(point, f"edge.{edge['id']}.points") for point in raw_points]
             if points[0] != start_center or points[-1] != end_center:
                 raise CommunicationError("LAYOUT_INVALID", f"Relationship {edge['id']} route must start/end at its endpoint centers.")
+        if any(x < 0 or y < 0 or x > canvas["width"] or y > canvas["height"] for x, y in points):
+            raise CommunicationError("LAYOUT_INVALID", f"Relationship {edge['id']} route leaves the declared canvas.")
         for node_id, box in boxes.items():
             if node_id in {edge["from"], edge["to"]}:
                 continue

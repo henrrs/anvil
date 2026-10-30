@@ -1,0 +1,321 @@
+{
+  "schema_version": 1,
+  "request": {
+    "artifact": "presentation",
+    "audience": "executive",
+    "purpose": "Explain material operational changes.",
+    "tone": "direct",
+    "language": "en",
+    "minutes": 10,
+    "constraints": [
+      {
+        "kind": "exact_slides",
+        "value": 5,
+        "strength": "hard",
+        "origin": "explicit"
+      },
+      {
+        "kind": "cover_count",
+        "value": 1,
+        "strength": "hard",
+        "origin": "explicit"
+      },
+      {
+        "kind": "content_count",
+        "value": 3,
+        "strength": "hard",
+        "origin": "explicit"
+      },
+      {
+        "kind": "architecture_count",
+        "value": 1,
+        "strength": "hard",
+        "origin": "explicit"
+      }
+    ]
+  },
+  "title": "Spend fell while success rate also declined",
+  "thesis": "The observed spend reduction is material, but success rate remains a decision guardrail.",
+  "evidence": [
+    {
+      "id": "E-spend-before",
+      "claim": "Spend was USD 1,200,000 in the previous 30 days.",
+      "epistemic": "MEASUREMENT",
+      "confidence": "HIGH",
+      "source": {
+        "type": "fixture",
+        "locator": "fixture://E-spend-before"
+      }
+    },
+    {
+      "id": "E-spend-now",
+      "claim": "Spend was USD 870,000 in the last 30 days.",
+      "epistemic": "MEASUREMENT",
+      "confidence": "HIGH",
+      "source": {
+        "type": "fixture",
+        "locator": "fixture://E-spend-now"
+      }
+    },
+    {
+      "id": "E-rate-before",
+      "claim": "Success rate was 4 percent.",
+      "epistemic": "MEASUREMENT",
+      "confidence": "HIGH",
+      "source": {
+        "type": "fixture",
+        "locator": "fixture://E-rate-before"
+      }
+    },
+    {
+      "id": "E-rate-now",
+      "claim": "Success rate was 2 percent.",
+      "epistemic": "MEASUREMENT",
+      "confidence": "HIGH",
+      "source": {
+        "type": "fixture",
+        "locator": "fixture://E-rate-now"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "F-spend",
+      "claim": "Spend fell while success rate also declined.",
+      "epistemic": "INFERENCE",
+      "confidence": "HIGH",
+      "evidence_ids": [
+        "E-spend-before",
+        "E-spend-now",
+        "E-rate-before",
+        "E-rate-now"
+      ],
+      "implications": [
+        "Retain success rate as a guardrail before expanding the cost-reduction approach."
+      ],
+      "limitations": [
+        "The comparison does not isolate cause or establish that the observed reduction will persist."
+      ],
+      "relevance": {
+        "executive": "high",
+        "technical": "high"
+      },
+      "quantitative_insight_ids": [
+        "QI-spend",
+        "QI-success-rate"
+      ],
+      "materiality": "high"
+    }
+  ],
+  "quantitative_insights": [
+    {
+      "id": "QI-spend",
+      "metric": "Monthly spend",
+      "kind": "amount",
+      "unit": "USD",
+      "semantics": "lower_is_better",
+      "baseline": {
+        "value": "1200000",
+        "unit": "USD",
+        "period": "previous 30 days",
+        "evidence_ids": [
+          "E-spend-before"
+        ],
+        "epistemic": "MEASUREMENT"
+      },
+      "current": {
+        "value": "870000",
+        "unit": "USD",
+        "period": "last 30 days",
+        "evidence_ids": [
+          "E-spend-now"
+        ],
+        "epistemic": "MEASUREMENT"
+      },
+      "absolute_change": "-330000",
+      "relative_change": "-27.5",
+      "percentage_point_change": null,
+      "direction": "decrease",
+      "interpretation": "favorable",
+      "epistemic": "DERIVED_VALUE",
+      "confidence": "UNKNOWN",
+      "baseline_semantics": null,
+      "warnings": []
+    },
+    {
+      "id": "QI-success-rate",
+      "metric": "Success rate",
+      "kind": "rate",
+      "unit": "%",
+      "semantics": "higher_is_better",
+      "baseline": {
+        "value": "4",
+        "unit": "%",
+        "period": null,
+        "evidence_ids": [
+          "E-rate-before"
+        ],
+        "epistemic": "MEASUREMENT"
+      },
+      "current": {
+        "value": "2",
+        "unit": "%",
+        "period": null,
+        "evidence_ids": [
+          "E-rate-now"
+        ],
+        "epistemic": "MEASUREMENT"
+      },
+      "absolute_change": "-2",
+      "relative_change": "-50",
+      "percentage_point_change": "-2",
+      "direction": "decrease",
+      "interpretation": "unfavorable",
+      "epistemic": "DERIVED_VALUE",
+      "confidence": "UNKNOWN",
+      "baseline_semantics": null,
+      "warnings": []
+    }
+  ],
+  "storyline": [
+    {
+      "title": "Spend and success rate moved in different directions",
+      "finding_ids": [
+        "F-spend"
+      ],
+      "rationale": "Lead with the trade-off relevant to an expansion decision."
+    }
+  ],
+  "selection_rationale": [
+    "Selected the measured period comparison."
+  ],
+  "exclusions": [],
+  "sections": [],
+  "slides": [
+    {
+      "role": "cover",
+      "title": "Spend fell, but the success rate also declined",
+      "body": "Consider expansion only with a clear service-quality guardrail.",
+      "finding_ids": [],
+      "evidence_ids": [],
+      "insight_ids": []
+    },
+    {
+      "role": "content",
+      "title": "Spend fell by 27.5% in the observed window",
+      "body": "The measured comparison shows a material decrease over aligned 30-day windows.",
+      "finding_ids": [
+        "F-spend"
+      ],
+      "evidence_ids": [],
+      "insight_ids": [
+        "QI-spend"
+      ],
+      "visual_intent": {
+        "relationship": "magnitude",
+        "form": "hero_metric",
+        "primary_message": "Spend fell by 27.5% in the observed window.",
+        "primary_evidence_ids": [
+          "E-spend-before",
+          "E-spend-now"
+        ],
+        "secondary_evidence_ids": [],
+        "prominence": "dominant",
+        "color_roles": [
+          "observed"
+        ],
+        "motion": {
+          "mode": "static"
+        }
+      }
+    },
+    {
+      "role": "content",
+      "title": "Success rate remains the guardrail for scale",
+      "body": "Review the measured rate change before deciding whether to expand.",
+      "finding_ids": [],
+      "evidence_ids": [
+        "E-rate-before",
+        "E-rate-now"
+      ],
+      "insight_ids": [],
+      "visual_intent": {
+        "relationship": "comparison",
+        "form": "before_after",
+        "primary_message": "The rate change qualifies the spend improvement.",
+        "primary_evidence_ids": [
+          "E-rate-before",
+          "E-rate-now"
+        ],
+        "secondary_evidence_ids": [],
+        "prominence": "supporting",
+        "color_roles": [
+          "negative"
+        ],
+        "motion": {
+          "mode": "static"
+        }
+      }
+    },
+    {
+      "role": "content",
+      "title": "The comparison does not isolate why either metric changed",
+      "body": "The evidence supports a bounded observation, not a causal explanation.",
+      "finding_ids": [
+        "F-spend"
+      ],
+      "evidence_ids": [],
+      "insight_ids": [],
+      "visual_intent": {
+        "relationship": "causality",
+        "form": "text",
+        "primary_message": "The available comparison does not isolate cause.",
+        "primary_evidence_ids": [
+          "E-spend-before",
+          "E-spend-now"
+        ],
+        "secondary_evidence_ids": [
+          "E-rate-before",
+          "E-rate-now"
+        ],
+        "prominence": "context",
+        "color_roles": [
+          "neutral"
+        ],
+        "motion": {
+          "mode": "static"
+        }
+      }
+    },
+    {
+      "role": "architecture",
+      "title": "Architecture detail is outside this measured comparison",
+      "body": "No architecture evidence is included in the named source set.",
+      "finding_ids": [],
+      "evidence_ids": [],
+      "insight_ids": [],
+      "visual_intent": {
+        "relationship": "architecture",
+        "form": "diagram",
+        "primary_message": "This evidence set does not support an architecture conclusion.",
+        "primary_evidence_ids": [],
+        "secondary_evidence_ids": [],
+        "prominence": "context",
+        "color_roles": [
+          "neutral"
+        ],
+        "motion": {
+          "mode": "static"
+        }
+      }
+    }
+  ],
+  "architecture_relevant": true,
+  "editorial": {
+    "decision": "Decide whether to expand the pilot while retaining success rate as a guardrail.",
+    "materiality_note": "Spend fell materially in the observed window. The comparison does not establish cause or prove savings capture.",
+    "appendix_insight_ids": [
+      "QI-success-rate"
+    ]
+  }
+}

@@ -27,8 +27,10 @@ def communication_state() -> dict:
         "status": "AVAILABLE",
         "interface": "anvil-communication skill and local deterministic helper",
         "capabilities": ["evidence_inventory", "bounded_text_extraction", "quantitative_analysis",
-                         "quantitative_visual_selection", "audience_and_constraint_planning", "markdown_materialization",
-                         "architecture_svg", "artifact_review"],
+                         "quantitative_visual_selection", "six_audience_lenses", "scenario_and_epistemic_contracts",
+                         "editorial_selection_and_critique", "semantic_visual_intent", "motion_storyboard_static_fallback",
+                         "audience_and_constraint_planning", "markdown_materialization", "architecture_svg",
+                         "measurable_svg_geometry_review", "artifact_review"],
         "inputs": {"supported": supported_inputs, "optional": optional_inputs,
                    "media_analysis": False, "notes": [
                        "OOXML extraction reads supported text and values only; images, charts, media, and embedded objects are not analyzed.",
@@ -110,6 +112,8 @@ def main() -> int:
     if communication["inputs"]["optional"]:
         print("  Optional inputs        " + ", ".join(communication["inputs"]["optional"]))
     print("  Outputs                Markdown, slide outline, accessible SVG")
+    print("  Editorial planning     Six audience lenses, materiality, appendix selection, semantic visual intent")
+    print("  Critic                 Optional deterministic candidate signals; semantic review remains pending")
     print("  Unavailable renderers  PPTX, DOCX, PDF, quantitative charts, OCR, animation")
     print()
     print("Engineering & system design")
