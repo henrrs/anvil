@@ -47,6 +47,7 @@ def _load_inventory() -> tuple[dict[str, tuple[int, int, int]], dict[str, tuple[
 SKILL_INTRODUCED, COMMAND_INTRODUCED = _load_inventory()
 COMMUNICATION_VERSION = SKILL_INTRODUCED.get("anvil-communication", (2, 7, 0))
 ENGINEERING_VERSION = SKILL_INTRODUCED.get("anvil-engineering", (2, 9, 0))
+ANALYSIS_INTELLIGENCE_VERSION = (2, 13, 0)
 DATABRICKS_PROVIDER_VERSION = (2, 3, 0)
 USER_PREFERENCES = {"cli.json", "tui.json", "tui.jsonc"}
 SHARED_PROFILE_KEYS = {
@@ -230,6 +231,9 @@ def _legacy_owned(root: Path, source_version: str | None, *, allow_missing: bool
         required.update({"scripts/artifacts.py", "skills/anvil-communication/SKILL.md", "commands/review.md"})
     if version and version >= ENGINEERING_VERSION:
         required.update({"scripts/engineering.py", "scripts/public_errors.py"})
+    if version and version >= ANALYSIS_INTELLIGENCE_VERSION:
+        required.add("scripts/analyze.py")
+        required.update(_shipped_package("scripts/analysis", "scripts/analysis"))
     if version is None and "anvil-communication" in skills:
         required.update(path for path in ("scripts/artifacts.py", "skills/anvil-communication/SKILL.md", "commands/review.md")
                         if path in actual or path in symlinks or path in other)
@@ -250,6 +254,9 @@ def _legacy_owned(root: Path, source_version: str | None, *, allow_missing: bool
     if version and version >= ENGINEERING_VERSION:
         owned.update({"scripts/engineering.py", "scripts/public_errors.py"})
         owned.update(_shipped_package("scripts/engineering", "scripts/engineering"))
+    if version and version >= ANALYSIS_INTELLIGENCE_VERSION:
+        owned.add("scripts/analyze.py")
+        owned.update(_shipped_package("scripts/analysis", "scripts/analysis"))
     for skill in skills:
         introduced = SKILL_INTRODUCED.get(skill)
         if version is not None and introduced is not None and version < introduced:

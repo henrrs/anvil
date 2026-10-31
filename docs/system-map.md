@@ -1,6 +1,6 @@
 # Anvil System Map
 
-This map describes the Anvil 2.11.0 candidate. It follows the public Make targets through configuration, lifecycle, runtime, providers, persistent state, and local verification. The companion [quality audit](quality-audit.md) records evidence, findings, and confidence.
+This map describes the Anvil 2.13.0 candidate. It follows the public Make targets through configuration, lifecycle, runtime, providers, persistent state, analytical helpers, and local verification. The companion [quality audit](quality-audit.md) records evidence, findings, and confidence.
 
 ## Shape and data flow
 
@@ -23,6 +23,12 @@ flowchart TD
     Memory --> Store[Anvil Markdown memory + source registry]
     User --> Comms[Communication and artifact workflows]
     Comms --> Artifacts[Markdown and SVG artifacts]
+    User --> Intent[Existing Anvil agent + lazy communication skill]
+    Intent -->|data task| Profile[scripts/analysis profiling and contracts]
+    Intent -->|direct task| OpenCode[OpenCode execution]
+    Profile --> Operations[Bounded deterministic operations]
+    Operations --> Findings[Evidence, findings, materiality and narrative]
+    Findings --> Comms
     DB --> Resolver[Databricks provider resolver]
     Resolver --> CLI[Databricks CLI]
     Resolver --> SDK[Isolated Python SDK]
@@ -34,7 +40,7 @@ Anvil owns the global OpenCode harness, its lifecycle, explicit Markdown memory,
 
 ## Executable inventory
 
-The repository contains 69 Python files and 15 shell files under `scripts/` (84 executable source files), 5 top-level test drivers, and 56 files under `config/`. The eight shipped skills and four slash commands are versioned in [`config/managed-inventory.json`](../config/managed-inventory.json). OpenCode profiles and runtime policy are under `config/`; release behavior is described in the changelog, version notes, migration notes, and command contracts.
+The repository contains Python and shell helpers under `scripts/`, offline Python and shell test drivers under `tests/`, and managed profiles, skills, commands, and plugin code under `config/`. The eight shipped skills and four slash commands are versioned in [`config/managed-inventory.json`](../config/managed-inventory.json). OpenCode profiles and runtime policy are under `config/`; release behavior is described in the changelog, version notes, migration notes, and command contracts.
 
 | Subsystem | Main modules and entrypoints | Inputs → outputs | Persistent state / external dependency | Failure boundary and test evidence |
 |---|---|---|---|---|
@@ -51,6 +57,7 @@ The repository contains 69 Python files and 15 shell files under `scripts/` (84 
 | Databricks bootstrap/readiness | `scripts/databricks.py`, `scripts/databricks_providers/{owned_config,topology,auth_strategy,auth,readiness,presentation}.py` | Workspace and selected auth flow → staged Anvil profile and readiness evidence | `$XDG_CONFIG_HOME/anvil/databricks*`; user-local CLI/isolated SDK under Anvil data; credentials are delegated to supported providers | Profile isolation, child-env sanitation, timeouts, bounded subprocesses, staged activation, provider-scoped fallback; local CLI/auth fakes only |
 | Databricks discovery/execution/FinOps | `scripts/databricks_providers/{resolver,discovery,process,sdk,sql_connector}.py`, `scripts/databricks_finops.py`, Databricks skills and SQL recipes | Read-only provider operations and bounded results → normalized workspace/resource/query/FinOps evidence | Optional provider state/cache; live workspace and optional specialized SDK/connector packages | Permission, timeout, result-size, mutation-policy, query-schema and evidence scenarios use fixtures; no live workspace execution was performed |
 | Communication and artifacts | `scripts/artifacts.py`, `scripts/communication/{inputs,contracts,quantitative,planning,editorial,materialize,diagrams,review}.py`, `anvil-communication`, `/review` | Named local inputs + evidence/plan → bounded extraction, analysis, editorial selection/critique, Markdown or accessible SVG | User-selected output files; no memory write or remote lookup | Size/type/symlink checks, provenance/recomputation, no-overwrite, appendix selection, advisory critique, SVG geometry validation; deterministic offline tests |
+| Intent and analytical intelligence | `scripts/analyze.py`, `scripts/analysis/{contracts,profiling,primitives,findings,adapter}.py`, existing lazy `anvil-communication` | Exact user request + explicitly named local table → profile, bounded operations, evidence-linked findings and narrative inputs → optional artifact adapter | Task-local only; no memory/state, network, package, or new runtime feature | Source SHA-256 pinning, source mutation detection, byte/row/group/output budgets, unit/provenance/type validation, FAST/STANDARD/DEEP limits; offline fixtures and installed-helper lifecycle test |
 | Inspect/doctor/capabilities/stats | `scripts/inspect_data.py`, `scripts/doctor_data.py`, `scripts/capabilities.py`, `scripts/stats.sh`, `scripts/stats.py` | Current HOME/XDG/runtime and optional cached provider state → human or JSON diagnostics | Read-only apart from temporary stats output, removed on exit | Public exit/output contracts, first-use/partial/corrupt states, no-runtime stats and structured formatter fixtures |
 | Adaptive engineering and continuity | `scripts/engineering.py`, `scripts/engineering/`, task-local assessment, lazy engineering/system-design and deep Spark skills | Current task evidence → direct action or selected requirements/architecture/work/domain branch → proportional checks | Optional XDG task generations; local work leaves unrelated active project state dormant | No repo-size activation; path-scoped stale evidence; milestone checkpoint reuses valid invariants; atomic resume/coverage gates and paired offline replays |
 | Test/release integrity | `scripts/test.sh`, `tests/run.sh`, test drivers, `scripts/version_docs.py`, `docs/RELEASING.md` | Repo tree and local fixtures → offline assurance and release consistency result | Temporary HOME/XDG and fixtures; no external network in lifecycle suite | Python/shell syntax, shipped-set/version docs, fake OpenCode/Databricks, denied external network; static third-party linters unavailable in this environment |

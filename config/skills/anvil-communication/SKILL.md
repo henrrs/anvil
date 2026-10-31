@@ -1,6 +1,6 @@
 ---
 name: anvil-communication
-description: Use for turning explicitly authorized documents, repositories, data, and prior findings into evidence-backed reports, executive or technical presentations, summaries, architecture diagrams, and for reviewing existing communication artifacts. Includes analytical and editorial planning, six audience lenses, deterministic quantitative analysis, Markdown materialization, semantic visual intent, and SVG validation. Do not use for routine prose edits or ordinary code changes that do not require evidence synthesis or artifact review.
+description: Use for bounded, evidence-backed analysis of explicitly authorized data and for turning source evidence/findings into reports, presentations, summaries, architecture diagrams, or for reviewing communication artifacts. Includes task-intent preservation, deterministic table profiling and analysis, semantic question selection, editorial planning, six audience lenses, Markdown materialization, semantic visual intent, and SVG validation. Keep it lazy: do not use for routine prose/code edits, trivial calculations, or simple tasks that do not need data analysis.
 ---
 
 # Anvil Communication & Artifact Intelligence
@@ -20,6 +20,40 @@ Intent and hard constraints
   → Markdown/SVG materialization
   → deterministic checks + semantic review
 ```
+
+For a data task, analysis is independent of artifact format and precedes the existing evidence-to-artifact flow:
+
+```text
+Original request → task brief → deterministic profile → semantic model/questions
+  → bounded plan → deterministic operations → typed evidence/findings
+  → materiality and narrative → response or existing artifact plan
+```
+
+## Intent compilation and adaptive analysis
+
+- Keep short code, writing, and explanation requests on the ordinary direct path. Do not profile data, create a brief, or invoke analysis helpers unless the task benefits from evidence exploration.
+- For a material or underspecified analytical request, preserve the exact original request in `TaskBrief.original_request`. Separate explicit requirements from derived quality refinements. Derived requirements need a short rationale and may not broaden the requested objective. Ask only when an unresolved ambiguity could materially change the answer or action.
+- Keep the brief, profiles, plans, evidence, and findings in the current task context or private temporary working files. Never store one-off analytical results in Anvil memory.
+- Profile only named/authorized local sources. Use the installed `scripts/analyze.py` helper, or the checkout copy, for deterministic local table work. It does not recurse, write files, contact a model, or require Databricks:
+
+  ```bash
+  python3 "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/scripts/analyze.py" profile ./named-data.csv
+  python3 "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/scripts/analyze.py" execute ./named-data.csv analysis-plan.json
+  ```
+
+- Supported tables are UTF-8 CSV, TSV, JSON arrays of flat row objects, and JSON Lines. Inputs are capped at 32 MiB, 100,000 rows, 200 columns, and 250,000 profile cells. A profile can report exact total rows with prefix-sampled column statistics when it exceeds its profile row budget; do not represent those statistics as complete. Plan execution stops rather than silently calculate over a partial prefix. Nested or duplicate JSON fields, unsupported encodings, missing columns, changed input, and symlink paths remain explicit blockers.
+- Semantic discovery is reasoning work: classify fields as identifier, temporal dimension, dimension, measure, rate, status, or unknown, with HIGH/MEDIUM/LOW/UNKNOWN confidence and a rationale. Candidate roles in the profile are hints only; column names are not proof of business meaning.
+- Generate only questions grounded in the task and profile. Consider magnitude, change, trend, distribution, composition, concentration, coverage, segmentation, relationships, and exceptions where relevant; do not run every lens mechanically. If population membership can change, check population size/coverage and use `cohort` for common/added/removed entities when stable entity IDs exist. Compare aggregate change with the common cohort before attributing a shift to performance. Do not claim a numeric composition/performance decomposition unless separately computed.
+- Choose depth from user wording, decision importance, ambiguity, available evidence, and profile complexity. FAST allows at most 4 questions/operations, STANDARD 12, and DEEP 20. Plan execution is bounded to 100,000 rows, 100 groups per expansion, two grouping dimensions, and 100 ranked categories. FAST is a sensible default for a focused summary; use DEEP only when requested or justified. Stop when the main question is answered, additional analysis is unlikely to alter the conclusion, evidence is insufficient, or a budget is reached.
+- Use supported deterministic operations (`count`, `distinct_count`, `sum`, `mean`, `median`, `percentile`, `min`, `max`, `ratio`, `share`, `delta`, `delta_percent`, `delta_percentage_points`, `rank`, `top_n`, `bottom_n`, `distribution`, `trend`, `volatility`, `coverage`, `cohort`, `concentration`, `correlation`). Do arithmetic, grouping, ranking, and validation through the helper, not model mental math. Ratios require a meaningful denominator; relative change is unknown for missing/non-positive baselines. Numeric distributions retain median, quartiles, tail percentiles, range, and a simple 1.5-IQR outlier count. Correlation is association, never causal evidence.
+- Two temporal observations support a comparison, not a trend. Use three or more points before describing a trend, and qualify short or irregular coverage. Compare units and periods before combining metrics. Missing remains unknown, never zero.
+
+## Findings, materiality, and narrative
+
+- Separate OBSERVED, DERIVED, INTERPRETED, HYPOTHESIS, and UNKNOWN findings. Every non-unknown finding must cite evidence IDs. Evidence retains the input locator/hash and, for deterministic operations, its operation, method, and bounded result data. A hypothesis remains a hypothesis even when plausible.
+- Assess competing explanations for material movement, including composition, coverage, ownership, measurement/data quality, and time-window differences when the source can distinguish them. Do not investigate unsupported possibilities indefinitely.
+- Give findings a rationale and separate HIGH/MEDIUM/LOW/UNKNOWN materiality dimensions for magnitude, breadth, persistence, decision relevance, confidence, exception severity, and novelty. The helper forms transparent Pareto tiers; it does not calculate a weighted universal score. Select primary narrative findings by their decision value and evidence quality, and explain meaningful exclusions.
+- Build the conclusion and narrative before choosing a report or slide structure. State what changed, why it matters, what explains it, what remains unresolved, and a possible action only when supported. Unknown is a valid result. Artifact generators consume validated findings; they do not discover the analysis or change its numerical meaning.
 
 Renderer code does not select business meaning. Quantitative code does not select layouts. Never start by choosing slides or charts.
 

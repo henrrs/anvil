@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import math
+import json
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -12,7 +13,7 @@ from .errors import CommunicationError
 
 EPISTEMIC_TYPES = {
     "FACT", "MEASUREMENT", "OBSERVATION", "OBSERVED", "DERIVED_VALUE", "CALCULATED", "INFERENCE", "INFERRED",
-    "ESTIMATE", "ASSUMPTION", "SCENARIO", "PROJECTION", "PROPOSAL", "UNKNOWN",
+    "ESTIMATE", "ASSUMPTION", "SCENARIO", "PROJECTION", "PROPOSAL", "UNKNOWN", "DERIVED", "INTERPRETED", "HYPOTHESIS",
 }
 CONFIDENCE_LEVELS = {"HIGH", "MEDIUM", "LOW", "UNKNOWN"}
 AUDIENCES = {"executive", "financial", "technical_leadership", "engineering", "technical", "mixed"}
@@ -181,6 +182,17 @@ def validate_evidence(item: Any) -> dict[str, Any]:
         if not isinstance(item["assumptions"], list) or len(item["assumptions"]) > 30:
             raise CommunicationError("CONTRACT_INVALID", f"Evidence {identifier} assumptions must be a bounded list.")
         normalized["assumptions"] = [_string(value, "evidence assumption", maximum=500) for value in item["assumptions"]]
+    for field in ("method", "calculation"):
+        if item.get(field) is not None:
+            normalized[field] = _string(item[field], f"evidence.{identifier}.{field}", maximum=2000)
+    if "data" in item:
+        try:
+            encoded_data = json.dumps(item["data"], ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            raise CommunicationError("CONTRACT_INVALID", f"Evidence {identifier} data must be JSON-compatible.") from None
+        if len(encoded_data.encode("utf-8")) > 100_000:
+            raise CommunicationError("CONTRACT_INVALID", f"Evidence {identifier} data exceeds the 100 KiB limit.")
+        normalized["data"] = item["data"]
     return normalized
 
 

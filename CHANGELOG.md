@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.13.0] - 2026-10-30 (candidate; release gate pending)
+
+- Added stateless intent and analytical-intelligence contracts, deterministic bounded table profiling and generic operations, source-snapshot validation, evidence-linked findings, explainable Pareto materiality tiers, and an adapter to the existing artifact contracts.
+- Extended the existing lazy `anvil-communication` skill to compile scope-preserving task briefs, select analytical questions/depth, compare distributions and populations, qualify claims, and build narrative before artifact layout. Ordinary small tasks remain on the direct path.
+- Added the local `scripts/analyze.py` profile, plan-execution, contract-validation, and artifact-adaptation helper. CSV, TSV, flat JSON rows, and JSON Lines are supported within explicit byte/row/column/cell/group/output limits; no network, external package, persistent state, or new Make target is introduced.
+- Added offline intent, profiling, operation, cohort, trend, coverage, provenance, materiality, report/presentation adapter, unrelated-fixture, three-period mixed-results benchmark, 10,000-row performance, and installed-helper lifecycle tests. `make capabilities FORMAT=json` reports analytical availability and limits.
+- Kept the Anvil-owned helper in the existing managed-config transaction/manifest boundary; no OpenCode profile, provider, runtime, or memory policy changes are required. Extended the automatic same-major source window to seven prior minor releases so supported 2.6.x installs remain upgradeable.
+- Live-model semantic/question/claim-quality, model latency/token use, and a user-facing real-data benchmark were unavailable. The candidate is **NOT RELEASE READY** pending those evaluations.
+
 ## [2.12.0] - 2026-10-30 (candidate; release gate pending)
 
 - Refined the lazy communication skill with context-before-interpretation, materiality, editorial compression, chart skepticism, direct annotation, whitespace, asymmetric composition, and meaningful temporal storytelling. Simple coding tasks do not load this artifact guidance.

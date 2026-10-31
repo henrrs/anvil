@@ -172,10 +172,13 @@ env ANVIL_DATABRICKS_CLI=/nonexistent/anvil-test-databricks \
 python3 - "$tmp_root/capabilities.json" <<'PY' || fail 'capabilities output is not one valid runtime/Databricks JSON document'
 import json,sys
 data=json.load(open(sys.argv[1],encoding="utf-8"))
-assert set(data) >= {"runtime","databricks","databricks_capabilities","communication"}
+assert set(data) >= {"runtime","databricks","databricks_capabilities","communication","analysis"}
 assert data["communication"]["status"] == "AVAILABLE"
 assert "markdown_report" in data["communication"]["outputs"]["available"]
 assert "pptx" in data["communication"]["outputs"]["unavailable"]
+assert data["analysis"]["status"] == "AVAILABLE"
+assert data["analysis"]["dependencies"] == {"required": [], "network": False, "persistent_state": False}
+assert data["analysis"]["depths"]["FAST"]["max_operations"] == 4
 assert data["databricks"]["cli_installed"] is False
 PY
 pass 'make capabilities emits one combined machine-readable JSON document'
@@ -241,6 +244,7 @@ python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d=={"valid":1,"in
 pass 'V1 memory reads without rewrites; Python search works with ripgrep unavailable'
 
 python3 "$ROOT/tests/distill.py" || fail '/distill fixture, provenance, drift and idempotency checks'
+python3 "$ROOT/tests/analysis.py" || fail 'intent and analytical intelligence offline contracts and regressions'
 python3 "$ROOT/tests/communication.py" || fail 'communication/artifact intelligence offline contracts and regressions'
 pass 'Communication and artifact intelligence runs deterministic offline regressions'
 python3 "$ROOT/tests/engineering.py" || fail 'engineering state, interruption, stale evidence and direct-path regressions'

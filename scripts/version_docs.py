@@ -20,7 +20,7 @@ def main() -> int:
     release_doc = patch_release_doc if (ROOT / patch_release_doc).is_file() else f"docs/versions/v{version.rsplit('.', 1)[0]}.md"
     required = {
         "CHANGELOG.md": [f"## [{version}]"],
-        "README.md": [f"Anvil {version}", "make upgrade DRY_RUN=1", "make reforge", "docs/system-map.md", "docs/quality-audit.md"],
+        "README.md": [f"Anvil {version}", "make upgrade DRY_RUN=1", "make reforge", "docs/system-map.md", "docs/quality-audit.md", "docs/analytical-intelligence.md"],
         release_doc: [f"# Anvil {version}", "make update-runtime", "exact validated", "Network required"],
         "docs/versions/README.md": ["Anvil 2.2 + OpenCode 1", "Anvil 2.2 + OpenCode 2", "Anvil 2.3 + OpenCode 1", "Anvil 2.3 + OpenCode 2", "Anvil 2.4 + OpenCode 1", "Anvil 2.4 + OpenCode 2", "Anvil 2.7 + OpenCode 1", "Anvil 2.7 + OpenCode 2", "Communication & artifact intelligence", "Binary PPTX/DOCX/PDF rendering", "Databricks live system catalog and FinOps", "Topology-aware Databricks auth setup", "Runtime quiescing during Anvil upgrade", "Runtime-major migration command", "do not require OpenCode 2"],
         "docs/versions/v2.7.0.md": ["Communication & Artifact Intelligence", "OpenCode 1.x and 2.x", "make upgrade", "exact validated", "Binary PPTX", "Network required"],
@@ -64,6 +64,14 @@ def main() -> int:
         "docs/migrations/v2.11.0-to-v2.12.0.md": ["make upgrade DRY_RUN=1", "shared OpenCode profile", "scoped", "rollback", "NOT RELEASE READY"],
         "docs/decisions/ADR-0020-editorial-intelligence-and-local-config-preservation.md": ["Status:** Accepted", "Anvil-owned top-level keys", "Snapshot only", "NOT RELEASE READY"],
         "docs/environment-preservation-v2.12-report.md": ["Current Architecture Assessment", "OpenCode plugin preservation", "Enterprise/local configuration preservation", "Baseline vs candidate observations", "Performance impact", "NOT RELEASE READY"],
+        "docs/versions/v2.13.0.md": ["Intent Compilation & Analytical Intelligence", "make update-runtime", "exact validated", "Network required", "NOT RELEASE READY", "FAST (4 operations) at **151.3 ms**", "STANDARD (12) at **189.6 ms**", "DEEP (20) at **235.7 ms**", "live-model"],
+        "docs/migrations/v2.12.0-to-v2.13.0.md": ["make upgrade DRY_RUN=1", "scripts/analyze.py", "same-major", "seven prior minor releases", "NOT RELEASE READY"],
+        "docs/intent-analytical-report-v2.13.0.md": ["Architecture assessment", "missed material findings", "two source scans", "Anti-overengineering review", "Release recommendation", "NOT READY"],
+        "docs/analytical-intelligence.md": ["scripts/analyze.py profile", "FAST", "STANDARD", "DEEP", "source_sha256", "Pareto", "Correlation is association only", "make capabilities"],
+        "docs/intent-analytical-architecture-assessment.md": ["Anvil 2.12.0", "scripts/analysis", "No runtime profile change", "artifact-independent analytical result"],
+        "docs/decisions/ADR-0021-intent-compilation-and-analytical-intelligence.md": ["Status:** Accepted", "scripts/analysis", "artifact-independent", "No network"],
+        "docs/system-map.md": ["Anvil 2.13.0 candidate", "Intent and analytical intelligence", "scripts/analysis", "tests/run.sh"],
+        "docs/versions/README.md": ["Anvil 2.13 + OpenCode 1", "Anvil 2.13 + OpenCode 2", "Anvil 2.13 adds task-local intent compilation"],
         "docs/adaptive-engineering.md": ["requested change", "next safe", "repository size", "no numeric risk score", "completion gates", "NOT MEASURED"],
         "docs/decisions/ADR-0018-adaptive-engineering-execution.md": ["Status:** Accepted", "task-local", "milestone-scoped", "scoring engine", "OpenCode 1/2"],
         "docs/versions/README.md": ["Anvil 2.10 + OpenCode 1", "Anvil 2.10 + OpenCode 2", "Anvil 2.11 + OpenCode 1", "Anvil 2.11 + OpenCode 2", "Anvil 2.12 + OpenCode 1", "Anvil 2.12 + OpenCode 2", "Adaptive task-local activation", "Milestone-scoped architecture checks", "Anvil 2.11.0 adds the next layer", "Anvil 2.12 refines comparison context"],

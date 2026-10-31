@@ -177,7 +177,7 @@ def validate_constraints(plan: dict[str, Any]) -> dict[str, Any]:
                     for observation in (insight.get("baseline"), insight.get("current")):
                         if observation:
                             used_ids.update(observation["evidence_ids"])
-        prohibited = {"ESTIMATE", "SCENARIO", "PROJECTION", "ASSUMPTION", "INFERENCE", "INFERRED", "UNKNOWN", "PROPOSAL"}
+        prohibited = {"ESTIMATE", "SCENARIO", "PROJECTION", "ASSUMPTION", "INFERENCE", "INFERRED", "UNKNOWN", "PROPOSAL", "HYPOTHESIS"}
         if any(evidence_by_id[item]["epistemic"] in prohibited for item in used_ids):
             errors.append("A no-estimates/measured-only constraint includes estimated, projected, or assumed evidence.")
         prohibited_quantitative = prohibited

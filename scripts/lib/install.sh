@@ -29,6 +29,7 @@ anvil_build_config() {
   install -m 0600 -- "$ANVIL_ROOT/scripts/artifacts.py" "$destination/scripts/artifacts.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/engineering.py" "$destination/scripts/engineering.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/public_errors.py" "$destination/scripts/public_errors.py"
+  install -m 0700 -- "$ANVIL_ROOT/scripts/analyze.py" "$destination/scripts/analyze.py"
   rm -rf -- "$destination/scripts/engineering"
   cp -R -- "$ANVIL_ROOT/scripts/engineering" "$destination/scripts/engineering"
   find "$destination/scripts/engineering" -type d -name __pycache__ -prune -exec rm -rf -- {} +
@@ -44,6 +45,11 @@ anvil_build_config() {
   find "$destination/scripts/databricks_providers" -type d -name __pycache__ -prune -exec rm -rf -- {} +
   find "$destination/scripts/databricks_providers" -type f -name '*.pyc' -delete
   find "$destination/scripts/databricks_providers" -type f -exec chmod 600 -- {} +
+  rm -rf -- "$destination/scripts/analysis"
+  cp -R -- "$ANVIL_ROOT/scripts/analysis" "$destination/scripts/analysis"
+  find "$destination/scripts/analysis" -type d -name __pycache__ -prune -exec rm -rf -- {} +
+  find "$destination/scripts/analysis" -type f -name '*.pyc' -delete
+  find "$destination/scripts/analysis" -type f -exec chmod 600 -- {} +
   if [[ -z "$source_version" && -f "$ANVIL_DATA_DIR/installation.json" ]]; then
     source_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
 import json,sys
@@ -139,10 +145,10 @@ anvil_apply_config() {
   if [[ "${ANVIL_TEST_KILL_AFTER_CONFIG_PUBLISH:-0}" == 1 ]]; then kill -9 "$$"; fi
   rm -rf -- "$previous"
   [[ ! -f "$ANVIL_CONFIG_DIR/opencode.jsonc" ]] || chmod 600 -- "$ANVIL_CONFIG_DIR/opencode.jsonc"
-  for managed_script in memory.py source_registry.py runtime.py runtime_state.py databricks.py databricks_finops.py artifacts.py engineering.py public_errors.py; do
+  for managed_script in memory.py source_registry.py runtime.py runtime_state.py databricks.py databricks_finops.py artifacts.py engineering.py public_errors.py analyze.py; do
     [[ ! -f "$ANVIL_CONFIG_DIR/scripts/$managed_script" ]] || chmod 700 -- "$ANVIL_CONFIG_DIR/scripts/$managed_script"
   done
-  for managed_tree in communication databricks_providers engineering; do
+  for managed_tree in communication databricks_providers engineering analysis; do
     if [[ -d "$ANVIL_CONFIG_DIR/scripts/$managed_tree" ]]; then
       find "$ANVIL_CONFIG_DIR/scripts/$managed_tree" -type f -exec chmod 600 -- {} +
     fi

@@ -4,7 +4,7 @@
 >
 > **Better harness. Better execution.**
 
-Anvil 2.12.0 refines artifact-only editorial judgment and preserves shared OpenCode configuration through upgrades, reforge, and rollback. Adaptive engineering depth, OpenCode 1/2, memory, Databricks, and existing artifact capabilities remain supported.
+Anvil 2.13.0 adds lazy intent compilation and bounded, model-agnostic analytical intelligence while preserving existing artifact, runtime, memory, Databricks, and local configuration behavior. This release is a candidate; live-model analytical quality and responsiveness have not been evaluated.
 
 ```bash
 # First installation
@@ -129,4 +129,4 @@ Numerical values remain tied to evidence IDs. The deterministic core separates a
 
 ## Version history
 
-See the [Anvil 2.12.0 release notes](docs/versions/v2.12.0.md), [2.11-to-2.12 migration guide](docs/migrations/v2.11.0-to-v2.12.0.md), [system map](docs/system-map.md), [full-system quality audit](docs/quality-audit.md), [communication and artifact architecture](docs/communication-artifact-intelligence.md), [public command contracts](docs/command-contracts.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).
+See the [Anvil 2.13.0 candidate notes](docs/versions/v2.13.0.md), [2.12-to-2.13 migration guide](docs/migrations/v2.12.0-to-v2.13.0.md), [analytical intelligence guide](docs/analytical-intelligence.md), [system map](docs/system-map.md), [full-system quality audit](docs/quality-audit.md), [communication and artifact architecture](docs/communication-artifact-intelligence.md), [public command contracts](docs/command-contracts.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).

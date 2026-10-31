@@ -1,0 +1,7 @@
+period,owner,entity,volume,latency_minutes,success_percent,eligible,evaluated
+2026-01,A,table-a,10,100,92,2,2
+2026-01,B,table-b,20,200,88,2,1
+2026-02,A,table-a,15,90,94,2,2
+2026-02,C,table-c,25,300,85,2,1
+2026-03,A,table-a,18,80,96,2,2
+2026-03,,table-c,30,310,86,2,2

@@ -20,7 +20,11 @@ Lifecycle checks use local OpenCode wrappers and isolated HOME/XDG trees. They c
 
 ## Release, harness, and stats checks
 
-The suite checks shell/Python syntax, runtime policy and capabilities, release documentation, the global harness budget and required invariants, skill use/do-not-use descriptions, query recipe constraints, combined JSON runtime/Databricks/communication capabilities, and the absence of the standalone legacy organization token in tracked or untracked repository text. The stats formatter is checked with a structured local fixture.
+The suite checks shell/Python syntax, runtime policy and capabilities, release documentation, the global harness budget and required invariants, skill use/do-not-use descriptions, query recipe constraints, combined JSON runtime/Databricks/communication/analysis capabilities, and the absence of the standalone legacy organization token in tracked or untracked repository text. The stats formatter is checked with a structured local fixture.
+
+## Intent and analytical intelligence checks
+
+`tests/analysis.py` covers exact original-request provenance, explicit/derived requirement separation, semantic references/confidence, FAST/STANDARD/DEEP budgets, supported table formats, symlink/size/row/output limits, source-hash drift, deterministic primitives, units and percentage points, trend evidence thresholds, distribution versus mean, cohort population changes and like-for-like comparison, eligible-population coverage, correlation wording, evidence references, Pareto materiality tiers, artifact adaptation, and transfer to an unrelated helpdesk dataset. It records a local 10,000-row profile-plus-grouped-operation runtime. The lifecycle suite verifies that a 2.6.1 source upgrade installs and manifests the new helper and that the installed helper profiles a named local fixture. These tests use no model, external service, or persistent state; they cannot validate live semantic judgments or model responsiveness.
 
 ## Communication and artifact checks
 

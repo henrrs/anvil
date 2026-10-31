@@ -180,6 +180,9 @@ def downgrade_to_legacy_profile(paths: dict[str, pathlib.Path], version: str) ->
     for path in (config_dir / "commands" / "review.md", config_dir / "scripts" / "artifacts.py",
                  config_dir / ".anvil-managed.json"):
         path.unlink(missing_ok=True)
+    if compare_versions(version, "2.13.0") == -1:
+        shutil.rmtree(config_dir / "scripts" / "analysis", ignore_errors=True)
+        (config_dir / "scripts" / "analyze.py").unlink(missing_ok=True)
     installation_path = paths["anvil_data"] / "installation.json"
     try:
         installation = json.loads(installation_path.read_text(encoding="utf-8"))
@@ -388,8 +391,8 @@ def lifecycle_version_order_test() -> None:
     check(parse_version("2.10.0") == (2, 10, 0), "semantic version parser did not retain numeric minor ordering")
     check(compare_versions("2.10.0", "2.9.9") == 1, "semantic version ordering compared minor releases lexically")
     check(compare_versions("2.08.0", "2.8.0") is None, "semantic version parser accepted a non-canonical leading zero")
-    check(supported_migration("2.6.1", "2.12.0"), "2.12 rejected the 2.6 source line retained by prior releases")
-    check(not supported_migration("2.5.9", "2.12.0"), "source outside the six-minor compatibility window was accepted")
+    check(supported_migration("2.6.1", ANVIL_VERSION), "current release rejected the 2.6 source line retained by prior releases")
+    check(not supported_migration("2.5.9", ANVIL_VERSION), "source outside the seven-minor compatibility window was accepted")
     check(not supported_migration("2.5.9", "2.10.0", minor_window=4), "2.10 historical source window changed")
     check(not supported_migration("2.12.0", "2.11.0"), "a newer installed release was treated as migratable")
     print("PASS semantic release ordering, supported source window, and downgrade rejection")
@@ -657,6 +660,19 @@ def brownfield_legacy_npm_symlink_test(temp: pathlib.Path) -> None:
           "the brownfield upgrade did not publish current Anvil metadata and a pinned manifest")
     check(not any(path == "node_modules" or path.startswith("node_modules/") for path in manifest["files"]),
           "the new Anvil manifest adopted external node_modules content")
+    expected_analysis = {"scripts/analyze.py"} | {
+        "scripts/analysis/" + path.relative_to(ROOT / "scripts/analysis").as_posix()
+        for path in (ROOT / "scripts/analysis").rglob("*.py")
+    }
+    missing_manifest = sorted(expected_analysis - set(manifest["files"]))
+    missing_install = sorted(relative for relative in expected_analysis if not (paths["config"] / relative).is_file())
+    check(not missing_manifest and not missing_install,
+          "2.13 lifecycle upgrade did not install and manifest all analytical helper modules; "
+          f"manifest omissions={missing_manifest}, installed omissions={missing_install}")
+    profile = run([sys.executable, str(paths["config"] / "scripts/analyze.py"), "profile",
+                   str(ROOT / "tests/fixtures/analysis/monthly-operations.csv")], env_for(paths))
+    check(json.loads(profile.stdout)["row_count"] == 6,
+          "installed analytical helper cannot profile a named local fixture")
     check(filesystem_snapshot(node_modules) == filesystem_snapshot(paths["config"] / "node_modules"),
           "upgrade changed the external npm dependency tree or symlink targets")
     check(link.is_symlink() and os.readlink(link) == "../node-gyp-build-optional-packages/build-test.js"
@@ -1763,6 +1779,10 @@ def upgrade_preserves_v1_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
     check(installed["anvil_version"] == (ROOT / "VERSION").read_text().strip(), "make upgrade did not update the Anvil release independently")
     check(config.get("default_agent") == "anvil" and "agent" in config, "Anvil 2.3 V1 runtime config was not installed")
     check(config["provider"]["custom"]["api"] == "https://example.invalid/v1", "same-major Anvil upgrade lost V1 provider config")
+    helper = paths["config"] / "scripts/analyze.py"
+    profile = run([sys.executable, str(helper), "profile", str(ROOT / "tests/fixtures/analysis/monthly-operations.csv")], env)
+    check(json.loads(profile.stdout)["row_count"] == 6,
+          "OpenCode 1 Anvil upgrade did not install a usable analytical helper")
     check(tree_hash(paths["data_opencode"]) == before_data and tree_hash(paths["state_opencode"]) == before_state, "make upgrade changed OpenCode data/state")
     check("Network required      NO" in proc.stdout and "PRESERVE EXACT VERSION" in proc.stdout, "upgrade plan did not state the offline exact-runtime invariant")
     check(file_hash(paths["binary"]) == original_binary, "Anvil-only upgrade changed the OpenCode executable bytes")
@@ -1799,6 +1819,10 @@ def upgrade_preserves_v2_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
     check(installed["runtime_major"] == 2 and installed["version"].startswith("2."), "make upgrade changed OpenCode 2 major")
     check(installed["anvil_version"] == (ROOT / "VERSION").read_text().strip(), "make upgrade did not advance the Anvil release on OpenCode 2")
     check("agents" in config and "agent" not in config and "anvil-core" in str(config.get("plugins")), "OpenCode 2 profile was not retained by same-major upgrade")
+    helper = paths["config"] / "scripts/analyze.py"
+    profile = run([sys.executable, str(helper), "profile", str(ROOT / "tests/fixtures/analysis/monthly-operations.csv")], env)
+    check(json.loads(profile.stdout)["row_count"] == 6,
+          "OpenCode 2 Anvil upgrade did not install a usable analytical helper")
     check(tree_hash(paths["data_opencode"]) == before_data and tree_hash(paths["state_opencode"]) == before_state, "OpenCode 2 upgrade changed opaque user data/state")
     check("Network required      NO" in proc.stdout and "PRESERVE EXACT VERSION" in proc.stdout, "upgrade plan did not state the offline exact-runtime invariant")
     check(file_hash(paths["binary"]) == original_binary, "Anvil-only upgrade changed the OpenCode 2 executable bytes")

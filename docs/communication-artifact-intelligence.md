@@ -1,15 +1,15 @@
 # Communication & Artifact Intelligence
 
-Anvil's communication capability turns explicitly authorized sources into a defensible explanation and then materializes that explanation into a supported artifact. Natural language remains the primary interface; the helper performs deterministic work and does not replace the model's source reasoning.
+Anvil's communication capability turns explicitly authorized sources into a defensible explanation and then materializes that explanation into a supported artifact. For data tasks, the artifact-independent analysis layer profiles and computes bounded evidence first; natural language reasoning interprets that evidence before this artifact flow begins.
 
-The target flow is **Evidence → Finding → Analysis → Insight → Decision Relevance → Audience → Storyline → Editorial Judgment → Visual Intent → Materialization → Critic/QA**.
+The artifact flow is **Evidence → Finding → Analysis → Insight → Decision Relevance → Audience → Storyline → Editorial Judgment → Visual Intent → Materialization → Critic/QA**. For data work, see the [intent and analytical intelligence architecture](analytical-intelligence.md) for request compilation, profiling, bounded execution, and source-snapshot provenance before this stage.
 
 ## Responsibility flow
 
 ```text
 User intent and constraints
         ↓
-Named input inventory → bounded, targeted extraction
+Named input inventory → bounded, targeted extraction/profile
         ↓
 Evidence records → findings and unknowns
         ↓
@@ -22,7 +22,7 @@ Deterministic checks + semantic review
 
 `config/skills/anvil-communication/SKILL.md` teaches the single Anvil agent this workflow. The generic `/review` command operates on explicitly named artifacts. `scripts/communication` contains the standard-library deterministic core, and `scripts/artifacts.py` is its CLI. There are no communication-specific Make targets, agents, background jobs, memory writes, or required Python packages.
 
-The skill now asks for trustworthy comparison context before interpreting a change, separates finding/insight/implication, and favors editorial compression over slide-count or chart-count targets. Visual composition and motion remain model judgments; the skill offers concise questions about chart value, direct annotation, whitespace, asymmetric emphasis, repeated geometry, and whether each temporal step changes understanding. It is activated for artifact work only; routine engineering requests do not load the additional guidance.
+The skill now asks for trustworthy comparison context before interpreting a change, separates finding/insight/implication, and favors editorial compression over slide-count or chart-count targets. It also handles evidence-backed analysis that ends in a chat response, without requiring an artifact. Visual composition and motion remain model judgments; the skill offers concise questions about chart value, direct annotation, whitespace, asymmetric emphasis, repeated geometry, and whether each temporal step changes understanding. It remains lazy for data/communication tasks; routine engineering and simple requests do not load the additional guidance.
 
 The initial architecture audit is recorded in [communication-artifact-assessment.md](communication-artifact-assessment.md). The design decision is [ADR-0015](decisions/ADR-0015-communication-artifact-intelligence.md).
 
@@ -31,6 +31,8 @@ The initial architecture audit is recorded in [communication-artifact-assessment
 Plans use schema version 1. An artifact plan contains a request, thesis, storyline, evidence, findings, quantitative insights, selection rationale, and either report sections or presentation slides. Each evidence record has a stable ID, claim, epistemic type, confidence, and source descriptor (`type`, `locator`, and optional SHA-256). Findings reference evidence IDs. Quantitative observations reference their source measurements. The validator rejects unknown references, duplicate IDs, unsupported contract fields, and measured observations without evidence.
 
 Epistemic status and confidence remain separate. In addition to legacy values, plans may use `OBSERVED`, `CALCULATED`, and `INFERRED`; `SCENARIO` distinguishes hypothetical/capture cases from observed outcomes. Confidence is `HIGH`, `MEDIUM`, `LOW`, or `UNKNOWN`. The deterministic validator checks structure and provenance links; it cannot prove that an extracted claim is true or relevant. Its output keeps `semantic_claim_review` at `PENDING_MODEL` until semantic review occurs.
+
+The analytical adapter also carries `DERIVED`, `INTERPRETED`, and `HYPOTHESIS` into artifact evidence/findings. Hypotheses remain visibly qualified; they are not promoted to observed or calculated evidence.
 
 The local helper inventories hashes and metadata without returning source bodies. Extraction is performed on one explicitly named source, supports bounded line ranges for line-addressable text, and records its locator and full-source SHA-256. Directory traversal is one level by default; recursive traversal is opt-in and bounded. Symlinks are not followed. Raw documents, query results, findings, and measurements are not written to Anvil memory or a source registry.
 

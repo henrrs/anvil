@@ -1,0 +1,6 @@
+ticket_id,queue,wait_minutes,resolved
+T-001,access,12,true
+T-002,access,18,false
+T-003,billing,25,true
+T-004,billing,30,true
+T-005,access,8,true

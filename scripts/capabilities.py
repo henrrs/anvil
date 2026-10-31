@@ -17,6 +17,28 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import runtime  # noqa: E402
 from public_errors import run_public  # noqa: E402
 from communication import inputs as communication_inputs  # noqa: E402
+from analysis.profiling import MAX_PROFILE_CELLS, MAX_ROWS, MAX_SOURCE_BYTES  # noqa: E402
+
+
+def analysis_state() -> dict:
+    return {
+        "status": "AVAILABLE",
+        "interface": "lazy anvil-communication skill and local analyze.py helper",
+        "capabilities": ["scope_preserving_task_briefs", "bounded_tabular_profiling", "semantic_model_contract",
+                         "question_and_plan_contracts", "deterministic_generic_primitives", "cohort_comparison",
+                         "evidence_linked_findings", "explainable_materiality_tiers", "artifact_independent_results",
+                         "communication_artifact_adapter"],
+        "inputs": {"supported": ["csv", "tsv", "flat-json-row-array", "jsonl"],
+                   "max_source_bytes": MAX_SOURCE_BYTES, "max_complete_rows": MAX_ROWS,
+                   "max_profile_cells": MAX_PROFILE_CELLS,
+                   "nested_json_cells": False},
+        "depths": {"FAST": {"max_questions": 4, "max_operations": 4},
+                   "STANDARD": {"max_questions": 12, "max_operations": 12},
+                   "DEEP": {"max_questions": 20, "max_operations": 20}},
+        "dependencies": {"required": [], "network": False, "persistent_state": False},
+        "limitations": ["Semantic interpretation, question generation, materiality judgment, and narrative require model reasoning.",
+                        "Offline deterministic fixtures do not measure real-model claim fidelity, latency, or token use."],
+    }
 
 
 def communication_state() -> dict:
@@ -78,6 +100,7 @@ def main() -> int:
     databricks_state = adapter.local_status()
     databricks_capabilities = adapter.capabilities(databricks_state)
     communication = communication_state()
+    analysis = analysis_state()
     engineering = engineering_state()
     if args.format == "json":
         print(json.dumps({
@@ -87,6 +110,7 @@ def main() -> int:
             "databricks": databricks_state,
             "databricks_capabilities": databricks_capabilities,
             "communication": communication,
+            "analysis": analysis,
             "engineering": engineering,
         }, indent=2))
         return 0
@@ -114,6 +138,12 @@ def main() -> int:
     print("  Outputs                Markdown, slide outline, accessible SVG")
     print("  Editorial planning     Six audience lenses, materiality, appendix selection, semantic visual intent")
     print("  Critic                 Optional deterministic candidate signals; semantic review remains pending")
+    print()
+    print("Intent & analytical intelligence")
+    print("  Status                 AVAILABLE (lazy skill; standard-library local helper)")
+    print("  Inputs                 CSV, TSV, flat JSON rows, JSON Lines; bounded local sources")
+    print("  Depth                  FAST 4, STANDARD 12, DEEP 20 planned questions/operations")
+    print("  State                  None; task-local results only")
     print("  Unavailable renderers  PPTX, DOCX, PDF, quantitative charts, OCR, animation")
     print()
     print("Engineering & system design")
