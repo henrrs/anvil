@@ -9,20 +9,22 @@ import sys
 import tempfile
 import time
 from copy import deepcopy
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "scripts"))
-from analysis.adapter import artifact_components
 from analysis.contracts import select_depth, validate_analysis_plan, validate_semantic_model, validate_task_brief
 from analysis.errors import AnalysisError
 from analysis.findings import rank_materiality, validate_result
+from analysis.investigation import validate_claims
 from analysis.primitives import execute_plan
 from analysis.profiling import profile_file
 from communication.errors import CommunicationError
 from communication.contracts import validate_artifact
+from communication.analysis_adapter import artifact_components
 from analyze import main as analyze_main
 
 
@@ -126,10 +128,13 @@ def run() -> None:
             "stop_conditions": ["Stop when the primary comparison and cohort are calculated."],
             "budgets": {"max_rows": 100, "max_groups": 20}}
     validated_plan = validate_analysis_plan(plan)
-    result = execute_plan(str(data), validated_plan)
+    result = execute_plan(str(data), validated_plan, profile=profile)
     operations = {item["id"]: item["results"] for item in result["operations"]}
     check(result["profile"]["complete"] and operations["row-count"][0]["value"] == "6",
           "deterministic execution is complete and counts rows")
+    check(result["semantic_context"]["observations"]["count"] == 6
+          and result["execution_metadata"]["semantic_profile_reused"] is True,
+          "execution reuses the bounded semantic profile and keeps row count explicit")
     check(operations["volume-change"][0]["delta"] == "18" and operations["volume-relative-change"][0]["relative_change"] == "60",
           "period volume and percent change are computed from source rows")
     check(operations["success-point-change"][0]["delta"] == "1" and operations["success-point-change"][0]["delta_unit"] == "percentage_points",
@@ -159,15 +164,174 @@ def run() -> None:
         two_period = root / "two-period.csv"
         two_period.write_text("period,value\n2026-01,10\n2026-02,12\n", encoding="utf-8")
         two_profile = profile_file(two_period)
-        two_point = execute_plan(str(two_period), {"schema_version": 1, "source_sha256": two_profile["source"]["sha256"],
+        two_plan = {"schema_version": 1, "source_sha256": two_profile["source"]["sha256"],
             "depth": "FAST", "primary_question": "What changed?", "questions": ["How did the value change?"],
             "operations": [{"id": "two-point", "operation": "trend", "column": "value", "period_column": "period"}],
-            "budgets": {"max_rows": 100, "max_groups": 10}})
+            "budgets": {"max_rows": 100, "max_groups": 10}}
+        two_point = execute_plan(str(two_period), two_plan, profile=two_profile)
         check(len(two_point["operations"][0]["results"]) == 1
               and two_point["operations"][0]["results"][0]["trend_supported"] is False,
               "two observations are explicitly not classified as a trend")
         check(two_point["operations"][0]["results"][0]["endpoint_change"] == "2",
               "two temporal observations still expose a comparison change")
+        two_trend_claim = validate_claims([{"id": "C-two-point", "statement": "This is a trend.", "classification": "DERIVED",
+                                            "claim_type": "trend", "confidence": "HIGH", "evidence_ids": ["E-two"],
+                                            "operation_id": "two-point"}], evidence_ids={"E-two"},
+                                          plan=validate_analysis_plan(two_plan), execution=two_point)
+        check(two_trend_claim[0]["validation"]["status"] == "REJECTED",
+              "claim validation rejects trend language based on two periods")
+
+        composite = root / "composite-grain.csv"
+        with composite.open("w", encoding="utf-8", newline="") as stream:
+            stream.write("entity_id,period,product_id,value\n")
+            for entity_index in range(8):
+                for period_index in range(10):
+                    for product_index in range(2):
+                        stream.write(f"entity-{entity_index},2026-{period_index + 1:02d},product-{product_index},{entity_index + period_index}\n")
+        composite_profile = profile_file(composite)
+        composite_context = composite_profile["semantic_context"]
+        check(composite_context["observations"]["count"] == 160
+              and composite_context["grain"]["confidence"] == "MEDIUM"
+              and set(composite_context["grain"]["fields"]) == {"entity_id", "period", "product_id"}
+              and {item["fields"][0] for item in composite_context["entities"]} >= {"entity_id", "product_id"},
+              "semantic profiling distinguishes 160 observations, repeated entities and a composite entity-period-product grain")
+
+        repeated = root / "repeated-cohort.csv"
+        repeated.write_text(
+            "entity_id,period,product_id,value\n"
+            "entity-a,2026-01,product-1,0\n"
+            "entity-b,2026-01,product-1,100\n"
+            "entity-b,2026-01,product-2,100\n"
+            "entity-d,2026-01,product-1,20\n"
+            "entity-a,2026-02,product-1,10\n"
+            "entity-a,2026-02,product-2,10\n"
+            "entity-b,2026-02,product-1,90\n"
+            "entity-c,2026-02,product-1,50\n"
+            "entity-c,2026-02,product-2,50\n", encoding="utf-8")
+        repeated_profile = profile_file(repeated)
+        repeated_plan = {"schema_version": 1, "source_sha256": repeated_profile["source"]["sha256"],
+                         "depth": "STANDARD", "primary_question": "Did the retained population change?",
+                         "operations": [
+                             {"id": "rows", "operation": "count"},
+                             {"id": "unique-entities", "operation": "distinct_count", "column": "entity_id"},
+                             {"id": "composite-keys", "operation": "distinct_count", "columns": ["entity_id", "period", "product_id"]},
+                             {"id": "cohort", "operation": "cohort", "column": "value", "period_column": "period",
+                              "baseline": "2026-01-01", "current": "2026-02-01", "entity_columns": ["entity_id"],
+                              "aggregate": "mean", "improvement_direction": "increase"}],
+                         "budgets": {"max_rows": 100, "max_groups": 20}}
+        repeated_result = execute_plan(str(repeated), repeated_plan, profile=repeated_profile)
+        repeated_ops = {item["id"]: item["results"] for item in repeated_result["operations"]}
+        repeated_cohort = repeated_ops["cohort"][0]
+        check(repeated_ops["rows"][0]["value"] == "9" and repeated_ops["unique-entities"][0]["value"] == "4"
+              and repeated_ops["composite-keys"][0]["value"] == "9",
+              "row, entity and composite-key cardinalities remain separate")
+        check(repeated_cohort["common_entities"] == 2 and repeated_cohort["added_entities"] == 1
+              and repeated_cohort["removed_entities"] == 1 and repeated_cohort["like_for_like_delta"] == "0"
+              and repeated_cohort["improved_entities"] == 1 and repeated_cohort["improved_share"] == "0.5",
+              "cohort aggregates repeated observations within each entity-period before like-for-like comparison")
+        breadth_claims = validate_claims([
+            {"id": "C-broad-75", "statement": "Change was broad-based.", "classification": "DERIVED",
+             "claim_type": "broad_based_change", "confidence": "HIGH", "evidence_ids": ["E-cohort"],
+             "operation_id": "cohort", "direction": "increase", "threshold": 0.75},
+            {"id": "C-broad-50", "statement": "At least half of retained entities increased.", "classification": "DERIVED",
+             "claim_type": "broad_based_change", "confidence": "HIGH", "evidence_ids": ["E-cohort"],
+             "operation_id": "cohort", "direction": "increase", "threshold": 0.5},
+        ], evidence_ids={"E-cohort"}, plan=validate_analysis_plan(repeated_plan), execution=repeated_result)
+        check([item["validation"]["status"] for item in breadth_claims] == ["REJECTED", "VALIDATED"],
+              "breadth conclusions are tested against the explicit retained-entity share threshold")
+
+        stable_distribution = root / "stable-average-shifting-distribution.csv"
+        stable_distribution.write_text("period,value,eligible,evaluated\n"
+                                       "2026-01,0,10,8\n2026-01,10,10,8\n"
+                                       "2026-02,5,10,6\n2026-02,5,10,6\n", encoding="utf-8")
+        distribution_profile = profile_file(stable_distribution)
+        distribution_plan = {"schema_version": 1, "source_sha256": distribution_profile["source"]["sha256"],
+                             "depth": "STANDARD", "primary_question": "Did the distribution or coverage change?",
+                             "operations": [
+                                 {"id": "mean-by-period", "operation": "mean", "column": "value", "group_by": ["period"]},
+                                 {"id": "period-change", "operation": "delta", "column": "value", "period_column": "period",
+                                  "baseline": "2026-01-01", "current": "2026-02-01"},
+                                 {"id": "distribution-by-period", "operation": "distribution", "column": "value", "group_by": ["period"]},
+                                 {"id": "coverage-by-period", "operation": "coverage", "column": "evaluated", "denominator": "eligible", "group_by": ["period"]}],
+                             "budgets": {"max_rows": 100, "max_groups": 10}}
+        distribution_result = execute_plan(str(stable_distribution), distribution_plan, profile=distribution_profile)
+        distribution_ops = {item["id"]: item["results"] for item in distribution_result["operations"]}
+        means = {item["group"]["period"]: item["value"] for item in distribution_ops["mean-by-period"]}
+        ranges = {item["group"]["period"]: str(Decimal(item["statistics"]["max"]) - Decimal(item["statistics"]["min"]))
+                  for item in distribution_ops["distribution-by-period"]}
+        coverages = {item["group"]["period"]: item["coverage_ratio"] for item in distribution_ops["coverage-by-period"]}
+        check(means == {"2026-01-01": "5", "2026-02-01": "5"} and ranges == {"2026-01-01": "10", "2026-02-01": "0"},
+              "a stable mean does not conceal material distribution movement")
+        check(coverages == {"2026-01-01": "0.8", "2026-02-01": "0.6"},
+              "coverage is calculated against its explicit changing denominator")
+        coverage_claims = validate_claims([
+            {"id": "C-period-change", "statement": "The measured value changed.", "classification": "DERIVED",
+             "claim_type": "period_comparison", "confidence": "HIGH", "evidence_ids": ["E-period"], "operation_id": "period-change"},
+            {"id": "C-coverage", "statement": "Coverage fell from 80% to 60%.", "classification": "DERIVED",
+             "claim_type": "coverage", "confidence": "HIGH", "evidence_ids": ["E-period"], "operation_id": "coverage-by-period"},
+        ], evidence_ids={"E-period"}, plan=validate_analysis_plan(distribution_plan), execution=distribution_result)
+        check(coverage_claims[0]["validation"]["status"] == "QUALIFIED"
+              and coverage_claims[0]["confidence"] == "LOW"
+              and "Coverage changed" in coverage_claims[0]["limitations"][-1]
+              and coverage_claims[1]["validation"]["status"] == "VALIDATED",
+              "claim confidence is reduced when coverage shifts alongside a period comparison")
+
+        broad_source = root / "broad-change.csv"
+        broad_rows = [f"segment-{index},2026-01,10\nsegment-{index},2026-02,12\n" for index in range(4)]
+        broad_source.write_text("segment,period,amount\n" + "".join(broad_rows), encoding="utf-8")
+        concentrated_source = root / "concentrated-change.csv"
+        concentrated_source.write_text("segment,period,amount\n"
+                                       "segment-a,2026-01,80\nsegment-b,2026-01,10\nsegment-c,2026-01,10\n"
+                                       "segment-a,2026-02,170\nsegment-b,2026-02,11\nsegment-c,2026-02,10\n", encoding="utf-8")
+        contribution_results = []
+        for source in (broad_source, concentrated_source):
+            source_profile = profile_file(source)
+            contribution_plan = {"schema_version": 1, "source_sha256": source_profile["source"]["sha256"],
+                                 "depth": "FAST", "primary_question": "Which segments contributed to the movement?",
+                                 "operations": [{"id": "contribution", "operation": "contribution", "column": "amount",
+                                                 "period_column": "period", "baseline": "2026-01-01", "current": "2026-02-01",
+                                                 "group_by": ["segment"], "aggregate": "sum", "unit": "items"}],
+                                 "budgets": {"max_rows": 100, "max_groups": 10}}
+            contribution = execute_plan(str(source), contribution_plan, profile=source_profile)
+            contribution_results.append(contribution["operations"][0]["results"][0])
+        broad_shares = [Decimal(item["share_of_absolute_change"]) for item in contribution_results[0]["groups"]]
+        concentrated_shares = [Decimal(item["share_of_absolute_change"]) for item in contribution_results[1]["groups"]]
+        check(all(share == Decimal("0.25") for share in broad_shares)
+              and max(concentrated_shares) > Decimal("0.98"),
+              "contribution distinguishes a broad shift from one segment explaining nearly all absolute movement")
+
+        composition_source = root / "composition-shift.csv"
+        composition_source.write_text("period,segment,metric\n"
+                                      "2026-01,a,10\n2026-01,a,10\n2026-01,a,10\n2026-01,b,20\n"
+                                      "2026-02,a,10\n2026-02,b,20\n2026-02,b,20\n2026-02,b,20\n", encoding="utf-8")
+        composition_profile = profile_file(composition_source)
+        composition_plan = {"schema_version": 1, "source_sha256": composition_profile["source"]["sha256"],
+                            "depth": "FAST", "primary_question": "Did the category mix shift?",
+                            "operations": [{"id": "mix", "operation": "composition", "column": "metric",
+                                            "period_column": "period", "baseline": "2026-01-01", "current": "2026-02-01",
+                                            "group_by": ["segment"], "aggregate": "mean", "unit": "points"}],
+                            "budgets": {"max_rows": 20, "max_groups": 10}}
+        composition_execution = execute_plan(str(composition_source), composition_plan, profile=composition_profile)
+        composition = composition_execution["operations"][0]["results"][0]
+        composition_groups = {item["group"]["segment"]: item for item in composition["groups"]}
+        check(composition["composition_shift"] == "0.5" and composition["overall_metric_delta"] == "5"
+              and composition_groups["a"]["share_delta"] == "-0.5"
+              and composition_groups["b"]["share_delta"] == "0.5"
+              and composition_groups["a"]["metric_delta"] == "0"
+              and composition_groups["b"]["metric_delta"] == "0",
+              "composition exposes changing category shares alongside stable segment metrics without claiming causality")
+        composition_claims = validate_claims([
+            {"id": "C-mix-shift", "statement": "Category mix changed materially.", "classification": "DERIVED",
+             "claim_type": "composition", "confidence": "HIGH", "evidence_ids": ["E-mix"],
+             "operation_id": "mix", "threshold": 0.25},
+            {"id": "C-mix-overstated", "statement": "Category mix shifted by at least 75%.", "classification": "DERIVED",
+             "claim_type": "composition", "confidence": "HIGH", "evidence_ids": ["E-mix"],
+             "operation_id": "mix", "threshold": 0.75}], evidence_ids={"E-mix"},
+            plan=validate_analysis_plan(composition_plan), execution=composition_execution)
+        check([item["validation"]["status"] for item in composition_claims] == ["VALIDATED", "REJECTED"]
+              and composition_claims[1]["confidence"] == "LOW",
+              "composition claim checks respect measured category-share movement and lower rejected confidence")
+
         short = root / "short.csv"
         short.write_text("a,b\n1,x\n2,y\n3,z\n", encoding="utf-8")
         sampled = profile_file(short, max_rows=2)
@@ -221,8 +385,43 @@ def run() -> None:
         with contextlib.redirect_stdout(captured):
             check(analyze_main(["profile", str(short), "--max-rows", "2"]) == 0, "profile CLI returns success")
         check(json.loads(captured.getvalue())["profiled_rows"] == 2 and set(root.iterdir()) == {two_period, short, stale, json_file,
-              trailing_json, duplicate_json, nested_jsonl, jsonl_file, tsv_file, na_file, wide, link},
+              trailing_json, duplicate_json, nested_jsonl, jsonl_file, tsv_file, na_file, wide, link, composite, repeated,
+              stable_distribution, broad_source, concentrated_source, composition_source},
               "local CLI emits JSON to stdout and creates no result/state files")
+        profile_contract = root / "profile.json"
+        plan_contract = root / "plan.json"
+        profile_contract.write_text(json.dumps(profile), encoding="utf-8")
+        plan_contract.write_text(json.dumps(validated_plan), encoding="utf-8")
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            check(analyze_main(["execute", str(data), str(plan_contract), "--profile", str(profile_contract)]) == 0,
+                  "execution CLI accepts the optional reusable profile")
+        cli_execution = json.loads(captured.getvalue())
+        check(cli_execution["execution_metadata"]["semantic_profile_reused"] is True
+              and cli_execution["semantic_context"]["observations"]["count"] == profile["row_count"],
+              "CLI profile reuse carries validated semantic context into the deterministic result")
+
+    with tempfile.TemporaryDirectory(prefix="anvil-coverage-scope-") as temporary:
+        scoped_source = Path(temporary) / "grouped-coverage.csv"
+        scoped_source.write_text("period,segment,metric,eligible,evaluated\n"
+                                 "2026-01,a,10,100,90\n2026-01,b,20,100,50\n"
+                                 "2026-02,a,11,100,90\n2026-02,b,21,100,50\n", encoding="utf-8")
+        scoped_profile = profile_file(scoped_source)
+        scoped_plan = validate_analysis_plan({"schema_version": 1, "source_sha256": scoped_profile["source"]["sha256"],
+            "depth": "FAST", "primary_question": "Are segment comparisons coverage-aligned?", "questions": [],
+            "operations": [
+                {"id": "segment-delta", "operation": "delta", "column": "metric", "period_column": "period",
+                 "baseline": "2026-01-01", "current": "2026-02-01", "group_by": ["segment"]},
+                {"id": "overall-coverage", "operation": "coverage", "column": "evaluated", "denominator": "eligible",
+                 "group_by": ["period"]}],
+            "budgets": {"max_rows": 20, "max_groups": 10}})
+        scoped_execution = execute_plan(str(scoped_source), scoped_plan, profile=scoped_profile)
+        scoped_claim = validate_claims([{"id": "C-scoped", "statement": "Segment metrics have stable coverage.",
+            "classification": "DERIVED", "claim_type": "period_comparison", "confidence": "HIGH",
+            "evidence_ids": ["E-scoped"], "operation_id": "segment-delta"}], evidence_ids={"E-scoped"},
+            plan=scoped_plan, execution=scoped_execution)[0]
+        check(scoped_claim["validation"]["status"] == "UNKNOWN" and scoped_claim["confidence"] == "UNKNOWN",
+              "overall coverage is not incorrectly used to validate segment-level comparisons")
 
     levels = {key: "HIGH" for key in ("magnitude", "breadth", "persistence", "decision_relevance", "confidence", "exception_severity", "novelty")}
     medium = {key: "MEDIUM" for key in levels}
@@ -242,7 +441,26 @@ def run() -> None:
         "open_questions": []}
     analysis_result = {"schema_version": 1, "task_brief": brief("Analyze the operation data."), "profile": profile,
                        "semantic_model": semantics, "questions": ["How did volume change?"], "plan": plan,
+                       "analysis_context": profile["semantic_context"], "execution": result,
+                       "execution_metadata": result["execution_metadata"],
                        "evidence": ev, "findings": findings[:1],
+                       "claims": [
+                           {"id": "C-rows", "statement": "The source contains six observations.", "classification": "DERIVED",
+                            "claim_type": "observation_count", "confidence": "HIGH", "evidence_ids": ["E-data"],
+                            "operation_id": "row-count", "population": {"basis": "rows", "count": 6}},
+                           {"id": "C-owners", "statement": "Three distinct owners are represented.", "classification": "DERIVED",
+                            "claim_type": "entity_count", "confidence": "MEDIUM", "evidence_ids": ["E-data"],
+                            "operation_id": "owners", "population": {"basis": "distinct_key", "count": 3, "key_fields": ["owner"]}},
+                           {"id": "C-wrong-grain", "statement": "There are six entities.", "classification": "DERIVED",
+                            "claim_type": "entity_count", "confidence": "HIGH", "evidence_ids": ["E-data"],
+                            "operation_id": "row-count", "population": {"basis": "rows", "count": 6, "key_fields": ["entity"]}},
+                           {"id": "C-trend", "statement": "Latency has a three-period trend.", "classification": "DERIVED",
+                            "claim_type": "trend", "confidence": "MEDIUM", "evidence_ids": ["E-data"], "operation_id": "latency-trend"},
+                           {"id": "C-cause", "statement": "Volume caused latency to improve.", "classification": "DERIVED",
+                            "claim_type": "causal", "confidence": "LOW", "evidence_ids": ["E-data"], "operation_id": "volume-latency-correlation"}],
+                       "hypotheses": [{"id": "H-coverage", "question": "Did coverage affect the observed movement?",
+                                       "explanation": "Coverage remains an unresolved alternative.", "status": "UNKNOWN",
+                                       "confidence": "UNKNOWN", "evidence_ids": [], "limitations": ["No verified coverage measure."]}],
                        "narrative": {"main_conclusion": "The result is evidence linked and includes a hypothesis only as a hypothesis.",
                                      "what_changed": ["Volume rose in the selected periods."], "explanation": [],
                                      "unresolved": ["The hypothesis needs additional evidence."], "risks_opportunities": [],
@@ -251,7 +469,13 @@ def run() -> None:
     components = artifact_components(analysis_result)
     check(components["evidence"][0]["data"] == operations["volume-change"]
           and components["findings"][0]["epistemic"] == "HYPOTHESIS"
-          and checked["materiality_tiers"] == [["F-a"]],
+          and checked["materiality_tiers"] == [["F-a"]]
+          and {claim["id"]: claim["validation"]["status"] for claim in checked["claims"]} == {
+              "C-rows": "VALIDATED", "C-owners": "QUALIFIED", "C-wrong-grain": "REJECTED",
+              "C-trend": "VALIDATED", "C-cause": "REJECTED"}
+          and next(claim for claim in checked["claims"] if claim["id"] == "C-owners")["confidence"] == "LOW"
+          and next(claim for claim in checked["claims"] if claim["id"] == "C-wrong-grain")["confidence"] == "LOW"
+          and checked["hypotheses"][0]["status"] == "UNKNOWN",
           "artifact adapter preserves source, calculation result, hypothesis type and materiality ordering")
     artifact = {"schema_version": 1, "request": {"artifact": "summary", "audience": "technical", "purpose": "Test analytical adapter."},
                 "title": "Analytical adapter", "thesis": "One grounded finding.", "evidence": components["evidence"],
@@ -301,7 +525,7 @@ def run() -> None:
             {"id": "stable-availability", "operation": "mean", "column": "availability_percent", "group_by": ["period"]}],
         "stop_conditions": ["Stop after period, segment, cohort, coverage and exception comparisons."],
         "budgets": {"max_rows": 100, "max_groups": 20}}
-    benchmark_result = execute_plan(str(benchmark_data), benchmark_plan)
+    benchmark_result = execute_plan(str(benchmark_data), benchmark_plan, profile=benchmark_profile)
     benchmark_ops = {item["id"]: item["results"] for item in benchmark_result["operations"]}
     period_means = {item["group"]["period"]: item["value"] for item in benchmark_ops["latency-by-period"]}
     edge_means = [item for item in benchmark_ops["latency-by-period-segment"] if item["group"]["segment"] == "edge"]
@@ -340,7 +564,7 @@ def run() -> None:
                 "operations": [{"id": f"sum-{index + 1}", "operation": "sum", "column": "value"}
                                for index in range(operation_count)],
                 "budgets": {"max_rows": 10_000, "max_groups": 20}}
-            benchmark_result = execute_plan(str(benchmark_source), benchmark_plan)
+            benchmark_result = execute_plan(str(benchmark_source), benchmark_plan, profile=benchmark_profile)
             depth_benchmarks[depth] = (time.perf_counter() - benchmark_started) * 1000
             check(benchmark_result["profile"]["analyzed_rows"] == 10_000
                   and len(benchmark_result["operations"]) == operation_count,

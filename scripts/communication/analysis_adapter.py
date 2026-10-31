@@ -1,14 +1,13 @@
-"""Explicit bridge from artifact-independent findings to communication contracts."""
+"""Communication-side adapter for renderer-independent analytical findings."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from communication.contracts import validate_evidence as validate_artifact_evidence
-from communication.contracts import validate_finding as validate_artifact_finding
+from .contracts import validate_evidence as validate_artifact_evidence
+from .contracts import validate_finding as validate_artifact_finding
 
-from .errors import AnalysisError
-from .findings import validate_result
+from analysis.findings import validate_result
 
 
 def artifact_components(raw_result: Any) -> dict[str, Any]:

@@ -4,7 +4,7 @@
 >
 > **Better harness. Better execution.**
 
-Anvil 2.13.0 adds lazy intent compilation and bounded, model-agnostic analytical intelligence while preserving existing artifact, runtime, memory, Databricks, and local configuration behavior. This release is a candidate; live-model analytical quality and responsiveness have not been evaluated.
+Anvil 2.15.0 hardens analytical semantics: it separates observations, entities, events, keys, dimensions and measures; supports bounded composite grain inference; and adds an adversarial semantic certification suite. Deterministic semantic certification is **READY_FOR_MODEL_EVALUATION**. Model-backed L3–L5 quality and release approval remain pending.
 
 ```bash
 # First installation
@@ -16,6 +16,11 @@ git pull
 make test
 make upgrade DRY_RUN=1
 make upgrade
+
+# Offline analytical evaluation; model-backed evaluation is optional
+make eval-analytical
+make eval-analytical-semantic
+make eval-analytical-model MODEL=provider/model RUNS=3
 
 # Configure Databricks; default output guides setup in plain language
 make databricks-setup
@@ -65,7 +70,9 @@ Luna / Terra / Sol / Astra / Sonnet / other models
 
 Prerequisites: Linux or macOS, Bash, Python 3.11+, and `tar`. A fresh install may need access to the official OpenCode release source. Existing supported runtimes can be reused without downloading OpenCode. Windows users can run Anvil under WSL. Databricks is optional and does not affect the rest of Anvil.
 
-`make inspect` reads local runtime and provider state without changing it, including whether Anvil is not installed, partially installed, ready, degraded, or corrupted. `make test` validates both runtime profiles, memory behavior, lifecycle, rollback, failure recovery, Databricks providers, and fresh HOME/XDG command journeys with local fixtures. The suite isolates all user/XDG roots, constrains `PATH`, and blocks external network connections in lifecycle checks while allowing loopback for isolated runtime fixtures.
+`make inspect` reads local runtime and provider state without changing it, including whether Anvil is not installed, partially installed, ready, degraded, or corrupted. `make test` validates both runtime profiles, memory behavior, lifecycle, rollback, failure recovery, Databricks providers, the offline analytical evaluation harness, and fresh HOME/XDG command journeys with local fixtures. The suite isolates all user/XDG roots, constrains `PATH`, and blocks external network connections in lifecycle checks while allowing loopback for isolated runtime fixtures.
+
+`make eval-analytical` runs versioned synthetic fixtures, deterministic L1/L2 scoring, communication trap tests, FAST/STANDARD/DEEP performance measurements, and an isolated 2.13 comparison when available. `make eval-analytical-semantic` adds the 24-case adversarial semantic certification and compares candidate performance with the immutable 2.14 baseline. `make eval-analytical-model MODEL=provider/model RUNS=3` uses the installed Anvil agent through OpenCode for blind repeated runs; it may use a configured model provider. Artifacts are stored privately under `${XDG_STATE_HOME:-~/.local/state}/anvil/evaluations/`. Read the [analytical evaluation guide](docs/analytical-intelligence-evaluation.md) for human review, baseline freezing and private-case support.
 
 For a first installation, run `make inspect` to review the environment, then `make reforge` and `make doctor`. Before reforge, inventory commands remain useful; commands that require an installed Anvil report that prerequisite and point to reforge. Rollback reports when no verified snapshot exists. If a healthy supported OpenCode runtime is already installed, reforge rebuilds Anvil around that exact executable without contacting a release service. If no runtime exists, reforge provisions the version selected by `config/runtime-policy.json` and may need network access.
 
@@ -129,4 +136,4 @@ Numerical values remain tied to evidence IDs. The deterministic core separates a
 
 ## Version history
 
-See the [Anvil 2.13.0 candidate notes](docs/versions/v2.13.0.md), [2.12-to-2.13 migration guide](docs/migrations/v2.12.0-to-v2.13.0.md), [analytical intelligence guide](docs/analytical-intelligence.md), [system map](docs/system-map.md), [full-system quality audit](docs/quality-audit.md), [communication and artifact architecture](docs/communication-artifact-intelligence.md), [public command contracts](docs/command-contracts.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).
+See the [Anvil 2.15.0 candidate notes](docs/versions/v2.15.0.md), [2.14-to-2.15 migration guide](docs/migrations/v2.14.0-to-v2.15.0.md), [Anvil 2.14.0 candidate notes](docs/versions/v2.14.0.md), [2.13-to-2.14 migration guide](docs/migrations/v2.13.0-to-v2.14.0.md), [analytical intelligence guide](docs/analytical-intelligence.md), [analytical evaluation guide](docs/analytical-intelligence-evaluation.md), [architecture realignment assessment](docs/analytical-intelligence-realignment-v2.14.0.md), [engineering report](docs/analytical-intelligence-report-v2.14.0.md), [system map](docs/system-map.md), [full-system quality audit](docs/quality-audit.md), [communication and artifact architecture](docs/communication-artifact-intelligence.md), [public command contracts](docs/command-contracts.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).

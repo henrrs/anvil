@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from decimal import Decimal, ROUND_HALF_UP, localcontext
 from typing import Any
+
+from analysis.statistics import compare_values, distribution_statistics
 
 from .contracts import EPISTEMIC_TYPES, IDENTIFIER, decimal_value
 from .errors import CommunicationError
@@ -78,15 +79,6 @@ def _interpretation(direction: str, semantics: str) -> str:
     return "favorable" if favorable else "unfavorable"
 
 
-def _relative_change(baseline: Decimal | None, change: Decimal | None, threshold: Decimal) -> Decimal | None:
-    # A signed or zero baseline does not have an unambiguous relative-change denominator.
-    if baseline is None or change is None or baseline <= threshold:
-        return None
-    with localcontext() as context:
-        context.prec = 28
-        return change / baseline * Decimal(100)
-
-
 def analyze_metric(metric: Any) -> dict[str, Any]:
     if not isinstance(metric, dict):
         raise CommunicationError("CONTRACT_INVALID", "Each metric must be an object.")
@@ -122,8 +114,9 @@ def analyze_metric(metric: Any) -> dict[str, Any]:
             raise CommunicationError("UNIT_MISMATCH", f"Metric {identifier} {label} unit does not match {unit}.")
     base_value = decimal_value(baseline["value"], field=f"{identifier}.baseline.value") if baseline and baseline["value"] is not None else None
     current_value = decimal_value(current["value"], field=f"{identifier}.current.value") if current and current["value"] is not None else None
-    change = current_value - base_value if current_value is not None and base_value is not None else None
-    relative = _relative_change(base_value, change, threshold)
+    comparison = compare_values(base_value, current_value, near_zero=threshold)
+    change = Decimal(comparison["absolute_change"]) if comparison["absolute_change"] is not None else None
+    relative = Decimal(comparison["relative_change"]) if comparison["relative_change"] is not None else None
     rate_unit = unit.casefold() in {"%", "percent", "percentage"}
     pp_change = change if kind == "rate" and rate_unit else None
     direction = _direction(change)
@@ -214,8 +207,9 @@ def _normalize(identifier: str, unit: str, baseline: dict[str, Any] | None,
         numerator = decimal_value(amount["value"], field=f"{identifier}.{label}.value")
         values[label] = numerator / divisor
     baseline_value, current_value = values["baseline"], values["current"]
-    change = current_value - baseline_value if current_value is not None and baseline_value is not None else None
-    relative = _relative_change(baseline_value, change, threshold)
+    comparison = compare_values(baseline_value, current_value, near_zero=threshold)
+    change = Decimal(comparison["absolute_change"]) if comparison["absolute_change"] is not None else None
+    relative = Decimal(comparison["relative_change"]) if comparison["relative_change"] is not None else None
     return {
         "name": name.strip(), "unit": result_unit.strip(), "numerator_unit": unit,
         "denominator_unit": denominator_unit.strip(),
@@ -227,16 +221,6 @@ def _normalize(identifier: str, unit: str, baseline: dict[str, Any] | None,
         "absolute_change": _decimal_text(change), "relative_change": _decimal_text(relative),
         "epistemic": _derived_epistemic(baseline, current) if change is not None else "UNKNOWN",
     }
-
-
-def _quantile(values: list[Decimal], probability: Decimal) -> Decimal:
-    if len(values) == 1:
-        return values[0]
-    position = Decimal(len(values) - 1) * probability
-    lower = int(position)
-    upper = min(lower + 1, len(values) - 1)
-    fraction = position - lower
-    return values[lower] * (Decimal(1) - fraction) + values[upper] * fraction
 
 
 def distribution_summary(values: Any, *, unit: str, exclusions: Any = None,
@@ -259,7 +243,6 @@ def distribution_summary(values: Any, *, unit: str, exclusions: Any = None,
             exclusion_map[item["index"]] = item["reason"].strip()
     included: list[Decimal] = []
     excluded: list[dict[str, Any]] = []
-    counts: Counter[Decimal] = Counter()
     missing = 0
     for index, raw in enumerate(values):
         if raw is None:
@@ -272,8 +255,6 @@ def distribution_summary(values: Any, *, unit: str, exclusions: Any = None,
             excluded.append({"index": index, "value": _decimal_text(parsed), "reason": exclusion_map[index]})
         else:
             included.append(parsed)
-            counts[parsed] += 1
-    included.sort()
     result: dict[str, Any] = {
         "unit": unit.strip(), "count_total": len(values), "count": len(included),
         "missing_count": missing, "excluded_count": len(excluded), "excluded": excluded,
@@ -284,30 +265,17 @@ def distribution_summary(values: Any, *, unit: str, exclusions: Any = None,
         result["statistics"] = None
         result["outliers"] = []
         return result
-    with localcontext() as context:
-        context.prec = 28
-        mean = sum(included, Decimal(0)) / Decimal(len(included))
-        variance = sum(((item - mean) ** 2 for item in included), Decimal(0)) / Decimal(len(included))
-        stddev = variance.sqrt()
-    q1 = _quantile(included, Decimal("0.25"))
-    q3 = _quantile(included, Decimal("0.75"))
-    iqr = q3 - q1
-    low_fence = q1 - Decimal("1.5") * iqr
-    high_fence = q3 + Decimal("1.5") * iqr
+    statistics = distribution_statistics(included)
+    assert statistics is not None
     result["statistics"] = {
-        "mean": _decimal_text(mean), "median": _decimal_text(_quantile(included, Decimal("0.5"))),
-        "p50": _decimal_text(_quantile(included, Decimal("0.5"))),
-        "p90": _decimal_text(_quantile(included, Decimal("0.9"))),
-        "p95": _decimal_text(_quantile(included, Decimal("0.95"))),
-        "p99": _decimal_text(_quantile(included, Decimal("0.99"))),
-        "variance": _decimal_text(variance), "standard_deviation": _decimal_text(stddev),
-        "min": _decimal_text(included[0]), "max": _decimal_text(included[-1]),
-        "q1": _decimal_text(q1), "q3": _decimal_text(q3),
+        key: statistics[key] for key in (
+            "mean", "median", "p50", "p90", "p95", "p99", "variance", "standard_deviation",
+            "min", "max", "q1", "q3",
+        )
     }
-    result["outlier_method"] = "1.5_iqr_fence"
-    result["outliers"] = [{"value": _decimal_text(item), "count": counts[item]}
-                          for item in sorted(counts) if item < low_fence or item > high_fence]
-    result["outlier_values_retained"] = True
+    result["outlier_method"] = statistics["outlier_method"]
+    result["outliers"] = statistics["outliers"]
+    result["outlier_values_retained"] = statistics["outlier_values_retained"]
     return result
 
 

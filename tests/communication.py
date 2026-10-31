@@ -18,6 +18,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+from analysis.statistics import compare_values, distribution_statistics
 from communication import inputs
 from communication.contracts import validate_artifact
 from communication.cli import main as communication_main
@@ -108,6 +109,8 @@ def run() -> None:
     amounts = analyze_payload(fixture)["quantitative_insights"]
     spend, rate = amounts
     check(spend["absolute_change"] == "-330000" and spend["relative_change"] == "-27.5", "1.2m to 870k arithmetic")
+    check(compare_values("1200000", "870000") == {"absolute_change": "-330000", "relative_change": "-27.5", "unknown_reason": None},
+          "communication and analytical consumers share deterministic period-change arithmetic")
     check(rate["absolute_change"] == "-2" and rate["percentage_point_change"] == "-2" and rate["relative_change"] == "-50", "rate points and relative percent remain distinct")
     check(rate["interpretation"] == "unfavorable", "direction is interpreted using metric semantics")
 
@@ -146,7 +149,10 @@ def run() -> None:
 
     dist = distribution_summary([1, 2, 3, 4, 100, None], unit="ms")
     stats = dist["statistics"]
+    shared_distribution = distribution_statistics([1, 2, 3, 4, 100])
     check(stats["mean"] == "22" and stats["median"] == "3" and stats["p95"] == "80.8", "mean, median and percentile preserve different distribution facts")
+    check(stats["mean"] == shared_distribution["mean"] and dist["outliers"] == shared_distribution["outliers"],
+          "communication formatting reuses the analytical distribution calculation")
     check(dist["missing_count"] == 1 and dist["outliers"] == [{"value": "100", "count": 1}], "missing and outlier remain visible")
     excluded = distribution_summary([1, 2, 3, 4, 100], unit="ms", exclusions=[{"index": 4, "reason": "known instrumentation defect"}])
     check(excluded["count"] == 4 and excluded["excluded"][0]["reason"] == "known instrumentation defect", "exclusions require and preserve a reason")

@@ -1,0 +1,263 @@
+{
+  "fixture": {
+    "id": "services-v1",
+    "version": "1.0.0",
+    "seed": 21415
+  },
+  "semantics": {
+    "observation_grain": [
+      "event_id"
+    ],
+    "entity_fields": [
+      "service_id"
+    ],
+    "composite_entity_fields": [
+      "service_id",
+      "zone"
+    ],
+    "time_field": "period",
+    "dimensions": [
+      "zone",
+      "event_kind"
+    ],
+    "measures": [
+      "response_minutes",
+      "work_units",
+      "covered"
+    ]
+  },
+  "expected_facts": [
+    {
+      "id": "observations",
+      "metric": "event observations",
+      "value": 290,
+      "unit": "events",
+      "material": true
+    },
+    {
+      "id": "services",
+      "metric": "unique services",
+      "value": 18,
+      "unit": "services",
+      "material": true
+    },
+    {
+      "id": "service_zones",
+      "metric": "service zone combinations",
+      "value": 54,
+      "unit": "combinations",
+      "material": true
+    },
+    {
+      "id": "event_ids",
+      "metric": "unique event identifiers",
+      "value": 290,
+      "unit": "events",
+      "material": true
+    },
+    {
+      "id": "time_periods",
+      "metric": "observed periods",
+      "value": 6,
+      "unit": "periods",
+      "material": true
+    }
+  ],
+  "material_findings": [
+    {
+      "id": "event-vs-service",
+      "description": "Event rows substantially exceed the number of represented services.",
+      "importance": "HIGH",
+      "supporting_facts": [
+        "observations",
+        "services"
+      ]
+    },
+    {
+      "id": "composite-service",
+      "description": "Services appear across multiple zones; service-zone pairs are distinct from service count.",
+      "importance": "MEDIUM",
+      "supporting_facts": [
+        "service_zones",
+        "services"
+      ]
+    }
+  ],
+  "acceptable_interpretations": [
+    "Event count and service count answer different questions.",
+    "A service-zone pair may be a useful composite entity for location-specific comparisons."
+  ],
+  "forbidden_claims": [
+    "Every event is a different service.",
+    "Ambient load caused response time.",
+    "A two-period comparison establishes a sustained trend."
+  ],
+  "known_ambiguities": [
+    "Synthetic event distributions do not imply real service reliability semantics."
+  ],
+  "evaluation_plan": {
+    "schema_version": 1,
+    "source_sha256": "8a409b476532228ce72c0fad9b8820593f5d251dc8f88c82006b870692fca291",
+    "depth": "DEEP",
+    "primary_question": "What are the most important changes across the observed periods?",
+    "questions": [
+      "How did the measures change?",
+      "Did the represented population or its composition change?",
+      "Did the distribution move beyond its average?"
+    ],
+    "operations": [
+      {
+        "id": "observation-count",
+        "operation": "count"
+      },
+      {
+        "id": "service-count",
+        "operation": "distinct_count",
+        "column": "service_id"
+      },
+      {
+        "id": "service-zone-count",
+        "operation": "distinct_count",
+        "columns": [
+          "service_id",
+          "zone"
+        ]
+      },
+      {
+        "id": "event-count",
+        "operation": "distinct_count",
+        "column": "event_id"
+      },
+      {
+        "id": "period-count",
+        "operation": "distinct_count",
+        "column": "period"
+      },
+      {
+        "id": "response-period",
+        "operation": "mean",
+        "column": "response_minutes",
+        "group_by": [
+          "period"
+        ]
+      },
+      {
+        "id": "response-delta",
+        "operation": "delta",
+        "column": "response_minutes",
+        "period_column": "period",
+        "baseline": "2025-01-01",
+        "current": "2025-06-01",
+        "aggregate": "mean"
+      },
+      {
+        "id": "service-cohort",
+        "operation": "cohort",
+        "column": "response_minutes",
+        "period_column": "period",
+        "baseline": "2025-01-01",
+        "current": "2025-06-01",
+        "entity_column": "service_id",
+        "aggregate": "mean"
+      },
+      {
+        "id": "coverage-period",
+        "operation": "coverage",
+        "column": "covered",
+        "denominator": "eligible",
+        "group_by": [
+          "period"
+        ]
+      },
+      {
+        "id": "response-distribution",
+        "operation": "distribution",
+        "column": "response_minutes",
+        "group_by": [
+          "period"
+        ]
+      },
+      {
+        "id": "zone-composition",
+        "operation": "composition",
+        "column": "response_minutes",
+        "period_column": "period",
+        "baseline": "2025-01-01",
+        "current": "2025-06-01",
+        "group_by": [
+          "zone"
+        ],
+        "aggregate": "mean"
+      },
+      {
+        "id": "work-contribution",
+        "operation": "contribution",
+        "column": "work_units",
+        "period_column": "period",
+        "baseline": "2025-01-01",
+        "current": "2025-06-01",
+        "group_by": [
+          "service_id"
+        ],
+        "aggregate": "sum"
+      },
+      {
+        "id": "load-response-correlation",
+        "operation": "correlation",
+        "x_column": "ambient_load",
+        "y_column": "response_minutes"
+      },
+      {
+        "id": "response-trend",
+        "operation": "trend",
+        "column": "response_minutes",
+        "period_column": "period",
+        "aggregate": "mean"
+      }
+    ],
+    "stop_conditions": [
+      "Stop after the declared comparison, cohort, coverage, composition and distribution calculations."
+    ],
+    "budgets": {
+      "max_rows": 50000,
+      "max_groups": 100
+    }
+  },
+  "fact_bindings": {
+    "observations": {
+      "operation": "observation-count",
+      "path": [
+        0,
+        "value"
+      ]
+    },
+    "services": {
+      "operation": "service-count",
+      "path": [
+        0,
+        "value"
+      ]
+    },
+    "service_zones": {
+      "operation": "service-zone-count",
+      "path": [
+        0,
+        "value"
+      ]
+    },
+    "event_ids": {
+      "operation": "event-count",
+      "path": [
+        0,
+        "value"
+      ]
+    },
+    "time_periods": {
+      "operation": "period-count",
+      "path": [
+        0,
+        "value"
+      ]
+    }
+  }
+}

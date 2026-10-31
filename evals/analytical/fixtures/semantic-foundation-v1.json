@@ -1,0 +1,2520 @@
+{
+  "schema_version": 1,
+  "fixture_version": "semantic-foundation-v1",
+  "cases": [
+    {
+      "id": "A-repeated-entity",
+      "columns": [
+        "entity_id",
+        "period",
+        "metric"
+      ],
+      "rows": [
+        {
+          "entity_id": "E01",
+          "period": "2025-01",
+          "metric": 11
+        },
+        {
+          "entity_id": "E01",
+          "period": "2025-02",
+          "metric": 12
+        },
+        {
+          "entity_id": "E01",
+          "period": "2025-03",
+          "metric": 13
+        },
+        {
+          "entity_id": "E01",
+          "period": "2025-04",
+          "metric": 14
+        },
+        {
+          "entity_id": "E02",
+          "period": "2025-01",
+          "metric": 21
+        },
+        {
+          "entity_id": "E02",
+          "period": "2025-02",
+          "metric": 22
+        },
+        {
+          "entity_id": "E02",
+          "period": "2025-03",
+          "metric": 23
+        },
+        {
+          "entity_id": "E02",
+          "period": "2025-04",
+          "metric": 24
+        },
+        {
+          "entity_id": "E03",
+          "period": "2025-01",
+          "metric": 31
+        },
+        {
+          "entity_id": "E03",
+          "period": "2025-02",
+          "metric": 32
+        },
+        {
+          "entity_id": "E03",
+          "period": "2025-03",
+          "metric": 33
+        },
+        {
+          "entity_id": "E03",
+          "period": "2025-04",
+          "metric": 34
+        },
+        {
+          "entity_id": "E04",
+          "period": "2025-01",
+          "metric": 41
+        },
+        {
+          "entity_id": "E04",
+          "period": "2025-02",
+          "metric": 42
+        },
+        {
+          "entity_id": "E04",
+          "period": "2025-03",
+          "metric": 43
+        },
+        {
+          "entity_id": "E04",
+          "period": "2025-04",
+          "metric": 44
+        },
+        {
+          "entity_id": "E05",
+          "period": "2025-01",
+          "metric": 51
+        },
+        {
+          "entity_id": "E05",
+          "period": "2025-02",
+          "metric": 52
+        },
+        {
+          "entity_id": "E05",
+          "period": "2025-03",
+          "metric": 53
+        },
+        {
+          "entity_id": "E05",
+          "period": "2025-04",
+          "metric": 54
+        }
+      ]
+    },
+    {
+      "id": "B-event-identifier",
+      "columns": [
+        "user_id",
+        "event_id",
+        "timestamp",
+        "event_type",
+        "value"
+      ],
+      "rows": [
+        {
+          "user_id": "U01",
+          "event_id": "EV01-01",
+          "timestamp": "2025-01-01T10:00:00",
+          "event_type": "read",
+          "value": 2
+        },
+        {
+          "user_id": "U01",
+          "event_id": "EV01-02",
+          "timestamp": "2025-01-02T10:00:00",
+          "event_type": "write",
+          "value": 3
+        },
+        {
+          "user_id": "U01",
+          "event_id": "EV01-03",
+          "timestamp": "2025-01-03T10:00:00",
+          "event_type": "read",
+          "value": 4
+        },
+        {
+          "user_id": "U01",
+          "event_id": "EV01-04",
+          "timestamp": "2025-01-04T10:00:00",
+          "event_type": "write",
+          "value": 5
+        },
+        {
+          "user_id": "U02",
+          "event_id": "EV02-01",
+          "timestamp": "2025-01-01T10:00:00",
+          "event_type": "read",
+          "value": 3
+        },
+        {
+          "user_id": "U02",
+          "event_id": "EV02-02",
+          "timestamp": "2025-01-02T10:00:00",
+          "event_type": "write",
+          "value": 4
+        },
+        {
+          "user_id": "U02",
+          "event_id": "EV02-03",
+          "timestamp": "2025-01-03T10:00:00",
+          "event_type": "read",
+          "value": 5
+        },
+        {
+          "user_id": "U02",
+          "event_id": "EV02-04",
+          "timestamp": "2025-01-04T10:00:00",
+          "event_type": "write",
+          "value": 6
+        },
+        {
+          "user_id": "U03",
+          "event_id": "EV03-01",
+          "timestamp": "2025-01-01T10:00:00",
+          "event_type": "read",
+          "value": 4
+        },
+        {
+          "user_id": "U03",
+          "event_id": "EV03-02",
+          "timestamp": "2025-01-02T10:00:00",
+          "event_type": "write",
+          "value": 5
+        },
+        {
+          "user_id": "U03",
+          "event_id": "EV03-03",
+          "timestamp": "2025-01-03T10:00:00",
+          "event_type": "read",
+          "value": 6
+        },
+        {
+          "user_id": "U03",
+          "event_id": "EV03-04",
+          "timestamp": "2025-01-04T10:00:00",
+          "event_type": "write",
+          "value": 7
+        },
+        {
+          "user_id": "U04",
+          "event_id": "EV04-01",
+          "timestamp": "2025-01-01T10:00:00",
+          "event_type": "read",
+          "value": 5
+        },
+        {
+          "user_id": "U04",
+          "event_id": "EV04-02",
+          "timestamp": "2025-01-02T10:00:00",
+          "event_type": "write",
+          "value": 6
+        },
+        {
+          "user_id": "U04",
+          "event_id": "EV04-03",
+          "timestamp": "2025-01-03T10:00:00",
+          "event_type": "read",
+          "value": 7
+        },
+        {
+          "user_id": "U04",
+          "event_id": "EV04-04",
+          "timestamp": "2025-01-04T10:00:00",
+          "event_type": "write",
+          "value": 8
+        }
+      ]
+    },
+    {
+      "id": "C-composite-observation-grain",
+      "columns": [
+        "customer_id",
+        "period",
+        "product",
+        "amount"
+      ],
+      "rows": [
+        {
+          "customer_id": "C01",
+          "period": "2025-01",
+          "product": "alpha",
+          "amount": 110
+        },
+        {
+          "customer_id": "C01",
+          "period": "2025-01",
+          "product": "beta",
+          "amount": 111
+        },
+        {
+          "customer_id": "C01",
+          "period": "2025-02",
+          "product": "alpha",
+          "amount": 120
+        },
+        {
+          "customer_id": "C01",
+          "period": "2025-02",
+          "product": "beta",
+          "amount": 121
+        },
+        {
+          "customer_id": "C01",
+          "period": "2025-03",
+          "product": "alpha",
+          "amount": 130
+        },
+        {
+          "customer_id": "C01",
+          "period": "2025-03",
+          "product": "beta",
+          "amount": 131
+        },
+        {
+          "customer_id": "C02",
+          "period": "2025-01",
+          "product": "alpha",
+          "amount": 210
+        },
+        {
+          "customer_id": "C02",
+          "period": "2025-01",
+          "product": "beta",
+          "amount": 211
+        },
+        {
+          "customer_id": "C02",
+          "period": "2025-02",
+          "product": "alpha",
+          "amount": 220
+        },
+        {
+          "customer_id": "C02",
+          "period": "2025-02",
+          "product": "beta",
+          "amount": 221
+        },
+        {
+          "customer_id": "C02",
+          "period": "2025-03",
+          "product": "alpha",
+          "amount": 230
+        },
+        {
+          "customer_id": "C02",
+          "period": "2025-03",
+          "product": "beta",
+          "amount": 231
+        },
+        {
+          "customer_id": "C03",
+          "period": "2025-01",
+          "product": "alpha",
+          "amount": 310
+        },
+        {
+          "customer_id": "C03",
+          "period": "2025-01",
+          "product": "beta",
+          "amount": 311
+        },
+        {
+          "customer_id": "C03",
+          "period": "2025-02",
+          "product": "alpha",
+          "amount": 320
+        },
+        {
+          "customer_id": "C03",
+          "period": "2025-02",
+          "product": "beta",
+          "amount": 321
+        },
+        {
+          "customer_id": "C03",
+          "period": "2025-03",
+          "product": "alpha",
+          "amount": 330
+        },
+        {
+          "customer_id": "C03",
+          "period": "2025-03",
+          "product": "beta",
+          "amount": 331
+        },
+        {
+          "customer_id": "C04",
+          "period": "2025-01",
+          "product": "alpha",
+          "amount": 410
+        },
+        {
+          "customer_id": "C04",
+          "period": "2025-01",
+          "product": "beta",
+          "amount": 411
+        },
+        {
+          "customer_id": "C04",
+          "period": "2025-02",
+          "product": "alpha",
+          "amount": 420
+        },
+        {
+          "customer_id": "C04",
+          "period": "2025-02",
+          "product": "beta",
+          "amount": 421
+        },
+        {
+          "customer_id": "C04",
+          "period": "2025-03",
+          "product": "alpha",
+          "amount": 430
+        },
+        {
+          "customer_id": "C04",
+          "period": "2025-03",
+          "product": "beta",
+          "amount": 431
+        }
+      ]
+    },
+    {
+      "id": "D-composite-entity-key",
+      "columns": [
+        "account_number",
+        "country",
+        "period",
+        "balance"
+      ],
+      "rows": [
+        {
+          "account_number": "A01",
+          "country": "north",
+          "period": "2025-01",
+          "balance": 101
+        },
+        {
+          "account_number": "A01",
+          "country": "north",
+          "period": "2025-02",
+          "balance": 102
+        },
+        {
+          "account_number": "A01",
+          "country": "north",
+          "period": "2025-03",
+          "balance": 103
+        },
+        {
+          "account_number": "A01",
+          "country": "south",
+          "period": "2025-01",
+          "balance": 101
+        },
+        {
+          "account_number": "A01",
+          "country": "south",
+          "period": "2025-02",
+          "balance": 102
+        },
+        {
+          "account_number": "A01",
+          "country": "south",
+          "period": "2025-03",
+          "balance": 103
+        },
+        {
+          "account_number": "A02",
+          "country": "north",
+          "period": "2025-01",
+          "balance": 201
+        },
+        {
+          "account_number": "A02",
+          "country": "north",
+          "period": "2025-02",
+          "balance": 202
+        },
+        {
+          "account_number": "A02",
+          "country": "north",
+          "period": "2025-03",
+          "balance": 203
+        },
+        {
+          "account_number": "A02",
+          "country": "south",
+          "period": "2025-01",
+          "balance": 201
+        },
+        {
+          "account_number": "A02",
+          "country": "south",
+          "period": "2025-02",
+          "balance": 202
+        },
+        {
+          "account_number": "A02",
+          "country": "south",
+          "period": "2025-03",
+          "balance": 203
+        },
+        {
+          "account_number": "A03",
+          "country": "north",
+          "period": "2025-01",
+          "balance": 301
+        },
+        {
+          "account_number": "A03",
+          "country": "north",
+          "period": "2025-02",
+          "balance": 302
+        },
+        {
+          "account_number": "A03",
+          "country": "north",
+          "period": "2025-03",
+          "balance": 303
+        },
+        {
+          "account_number": "A03",
+          "country": "south",
+          "period": "2025-01",
+          "balance": 301
+        },
+        {
+          "account_number": "A03",
+          "country": "south",
+          "period": "2025-02",
+          "balance": 302
+        },
+        {
+          "account_number": "A03",
+          "country": "south",
+          "period": "2025-03",
+          "balance": 303
+        },
+        {
+          "account_number": "A04",
+          "country": "north",
+          "period": "2025-01",
+          "balance": 401
+        },
+        {
+          "account_number": "A04",
+          "country": "north",
+          "period": "2025-02",
+          "balance": 402
+        },
+        {
+          "account_number": "A04",
+          "country": "north",
+          "period": "2025-03",
+          "balance": 403
+        },
+        {
+          "account_number": "A04",
+          "country": "south",
+          "period": "2025-01",
+          "balance": 401
+        },
+        {
+          "account_number": "A04",
+          "country": "south",
+          "period": "2025-02",
+          "balance": 402
+        },
+        {
+          "account_number": "A04",
+          "country": "south",
+          "period": "2025-03",
+          "balance": 403
+        }
+      ]
+    },
+    {
+      "id": "E-technical-row-id",
+      "columns": [
+        "row_uuid",
+        "customer_id",
+        "period",
+        "metric"
+      ],
+      "rows": [
+        {
+          "row_uuid": "R-01-01",
+          "customer_id": "C01",
+          "period": "2025-01",
+          "metric": 2
+        },
+        {
+          "row_uuid": "R-01-02",
+          "customer_id": "C01",
+          "period": "2025-02",
+          "metric": 3
+        },
+        {
+          "row_uuid": "R-01-03",
+          "customer_id": "C01",
+          "period": "2025-03",
+          "metric": 4
+        },
+        {
+          "row_uuid": "R-02-01",
+          "customer_id": "C02",
+          "period": "2025-01",
+          "metric": 3
+        },
+        {
+          "row_uuid": "R-02-02",
+          "customer_id": "C02",
+          "period": "2025-02",
+          "metric": 4
+        },
+        {
+          "row_uuid": "R-02-03",
+          "customer_id": "C02",
+          "period": "2025-03",
+          "metric": 5
+        },
+        {
+          "row_uuid": "R-03-01",
+          "customer_id": "C03",
+          "period": "2025-01",
+          "metric": 4
+        },
+        {
+          "row_uuid": "R-03-02",
+          "customer_id": "C03",
+          "period": "2025-02",
+          "metric": 5
+        },
+        {
+          "row_uuid": "R-03-03",
+          "customer_id": "C03",
+          "period": "2025-03",
+          "metric": 6
+        },
+        {
+          "row_uuid": "R-04-01",
+          "customer_id": "C04",
+          "period": "2025-01",
+          "metric": 5
+        },
+        {
+          "row_uuid": "R-04-02",
+          "customer_id": "C04",
+          "period": "2025-02",
+          "metric": 6
+        },
+        {
+          "row_uuid": "R-04-03",
+          "customer_id": "C04",
+          "period": "2025-03",
+          "metric": 7
+        },
+        {
+          "row_uuid": "R-05-01",
+          "customer_id": "C05",
+          "period": "2025-01",
+          "metric": 6
+        },
+        {
+          "row_uuid": "R-05-02",
+          "customer_id": "C05",
+          "period": "2025-02",
+          "metric": 7
+        },
+        {
+          "row_uuid": "R-05-03",
+          "customer_id": "C05",
+          "period": "2025-03",
+          "metric": 8
+        }
+      ]
+    },
+    {
+      "id": "F-snapshot",
+      "columns": [
+        "customer_id",
+        "region",
+        "tier",
+        "balance"
+      ],
+      "rows": [
+        {
+          "customer_id": "C01",
+          "region": "west",
+          "tier": "plus",
+          "balance": 100
+        },
+        {
+          "customer_id": "C02",
+          "region": "north",
+          "tier": "basic",
+          "balance": 200
+        },
+        {
+          "customer_id": "C03",
+          "region": "east",
+          "tier": "plus",
+          "balance": 300
+        },
+        {
+          "customer_id": "C04",
+          "region": "west",
+          "tier": "basic",
+          "balance": 400
+        },
+        {
+          "customer_id": "C05",
+          "region": "north",
+          "tier": "plus",
+          "balance": 500
+        },
+        {
+          "customer_id": "C06",
+          "region": "east",
+          "tier": "basic",
+          "balance": 600
+        }
+      ]
+    },
+    {
+      "id": "G-event-stream",
+      "columns": [
+        "user_id",
+        "event_id",
+        "event_time",
+        "event_type",
+        "amount"
+      ],
+      "rows": [
+        {
+          "user_id": "U01",
+          "event_id": "X01-01",
+          "event_time": "2025-02-01T09:30:00",
+          "event_type": "save",
+          "amount": 2
+        },
+        {
+          "user_id": "U01",
+          "event_id": "X01-02",
+          "event_time": "2025-02-02T09:30:00",
+          "event_type": "share",
+          "amount": 3
+        },
+        {
+          "user_id": "U01",
+          "event_id": "X01-03",
+          "event_time": "2025-02-03T09:30:00",
+          "event_type": "view",
+          "amount": 4
+        },
+        {
+          "user_id": "U01",
+          "event_id": "X01-04",
+          "event_time": "2025-02-04T09:30:00",
+          "event_type": "save",
+          "amount": 5
+        },
+        {
+          "user_id": "U02",
+          "event_id": "X02-01",
+          "event_time": "2025-02-01T09:30:00",
+          "event_type": "save",
+          "amount": 3
+        },
+        {
+          "user_id": "U02",
+          "event_id": "X02-02",
+          "event_time": "2025-02-02T09:30:00",
+          "event_type": "share",
+          "amount": 4
+        },
+        {
+          "user_id": "U02",
+          "event_id": "X02-03",
+          "event_time": "2025-02-03T09:30:00",
+          "event_type": "view",
+          "amount": 5
+        },
+        {
+          "user_id": "U02",
+          "event_id": "X02-04",
+          "event_time": "2025-02-04T09:30:00",
+          "event_type": "save",
+          "amount": 6
+        },
+        {
+          "user_id": "U03",
+          "event_id": "X03-01",
+          "event_time": "2025-02-01T09:30:00",
+          "event_type": "save",
+          "amount": 4
+        },
+        {
+          "user_id": "U03",
+          "event_id": "X03-02",
+          "event_time": "2025-02-02T09:30:00",
+          "event_type": "share",
+          "amount": 5
+        },
+        {
+          "user_id": "U03",
+          "event_id": "X03-03",
+          "event_time": "2025-02-03T09:30:00",
+          "event_type": "view",
+          "amount": 6
+        },
+        {
+          "user_id": "U03",
+          "event_id": "X03-04",
+          "event_time": "2025-02-04T09:30:00",
+          "event_type": "save",
+          "amount": 7
+        },
+        {
+          "user_id": "U04",
+          "event_id": "X04-01",
+          "event_time": "2025-02-01T09:30:00",
+          "event_type": "save",
+          "amount": 5
+        },
+        {
+          "user_id": "U04",
+          "event_id": "X04-02",
+          "event_time": "2025-02-02T09:30:00",
+          "event_type": "share",
+          "amount": 6
+        },
+        {
+          "user_id": "U04",
+          "event_id": "X04-03",
+          "event_time": "2025-02-03T09:30:00",
+          "event_type": "view",
+          "amount": 7
+        },
+        {
+          "user_id": "U04",
+          "event_id": "X04-04",
+          "event_time": "2025-02-04T09:30:00",
+          "event_type": "save",
+          "amount": 8
+        },
+        {
+          "user_id": "U05",
+          "event_id": "X05-01",
+          "event_time": "2025-02-01T09:30:00",
+          "event_type": "save",
+          "amount": 6
+        },
+        {
+          "user_id": "U05",
+          "event_id": "X05-02",
+          "event_time": "2025-02-02T09:30:00",
+          "event_type": "share",
+          "amount": 7
+        },
+        {
+          "user_id": "U05",
+          "event_id": "X05-03",
+          "event_time": "2025-02-03T09:30:00",
+          "event_type": "view",
+          "amount": 8
+        },
+        {
+          "user_id": "U05",
+          "event_id": "X05-04",
+          "event_time": "2025-02-04T09:30:00",
+          "event_type": "save",
+          "amount": 9
+        }
+      ]
+    },
+    {
+      "id": "H-aggregated",
+      "columns": [
+        "region",
+        "month",
+        "total_sales",
+        "order_count"
+      ],
+      "rows": [
+        {
+          "region": "east",
+          "month": "2025-01",
+          "total_sales": 100,
+          "order_count": 2
+        },
+        {
+          "region": "east",
+          "month": "2025-02",
+          "total_sales": 200,
+          "order_count": 4
+        },
+        {
+          "region": "east",
+          "month": "2025-03",
+          "total_sales": 300,
+          "order_count": 6
+        },
+        {
+          "region": "west",
+          "month": "2025-01",
+          "total_sales": 200,
+          "order_count": 3
+        },
+        {
+          "region": "west",
+          "month": "2025-02",
+          "total_sales": 400,
+          "order_count": 6
+        },
+        {
+          "region": "west",
+          "month": "2025-03",
+          "total_sales": 600,
+          "order_count": 9
+        },
+        {
+          "region": "north",
+          "month": "2025-01",
+          "total_sales": 300,
+          "order_count": 4
+        },
+        {
+          "region": "north",
+          "month": "2025-02",
+          "total_sales": 600,
+          "order_count": 8
+        },
+        {
+          "region": "north",
+          "month": "2025-03",
+          "total_sales": 900,
+          "order_count": 12
+        },
+        {
+          "region": "south",
+          "month": "2025-01",
+          "total_sales": 400,
+          "order_count": 5
+        },
+        {
+          "region": "south",
+          "month": "2025-02",
+          "total_sales": 800,
+          "order_count": 10
+        },
+        {
+          "region": "south",
+          "month": "2025-03",
+          "total_sales": 1200,
+          "order_count": 15
+        }
+      ]
+    },
+    {
+      "id": "I-pure-time-series",
+      "columns": [
+        "timestamp",
+        "cpu_usage",
+        "memory_usage"
+      ],
+      "rows": [
+        {
+          "timestamp": "2025-03-01T12:00:00",
+          "cpu_usage": 2,
+          "memory_usage": 3
+        },
+        {
+          "timestamp": "2025-03-02T12:00:00",
+          "cpu_usage": 4,
+          "memory_usage": 6
+        },
+        {
+          "timestamp": "2025-03-03T12:00:00",
+          "cpu_usage": 6,
+          "memory_usage": 9
+        },
+        {
+          "timestamp": "2025-03-04T12:00:00",
+          "cpu_usage": 8,
+          "memory_usage": 12
+        },
+        {
+          "timestamp": "2025-03-05T12:00:00",
+          "cpu_usage": 10,
+          "memory_usage": 15
+        },
+        {
+          "timestamp": "2025-03-06T12:00:00",
+          "cpu_usage": 12,
+          "memory_usage": 18
+        },
+        {
+          "timestamp": "2025-03-07T12:00:00",
+          "cpu_usage": 14,
+          "memory_usage": 21
+        },
+        {
+          "timestamp": "2025-03-08T12:00:00",
+          "cpu_usage": 16,
+          "memory_usage": 24
+        },
+        {
+          "timestamp": "2025-03-09T12:00:00",
+          "cpu_usage": 18,
+          "memory_usage": 27
+        },
+        {
+          "timestamp": "2025-03-10T12:00:00",
+          "cpu_usage": 20,
+          "memory_usage": 30
+        },
+        {
+          "timestamp": "2025-03-11T12:00:00",
+          "cpu_usage": 22,
+          "memory_usage": 33
+        },
+        {
+          "timestamp": "2025-03-12T12:00:00",
+          "cpu_usage": 24,
+          "memory_usage": 36
+        }
+      ]
+    },
+    {
+      "id": "J-multiple-entities",
+      "columns": [
+        "customer_id",
+        "product_id",
+        "date",
+        "quantity"
+      ],
+      "rows": [
+        {
+          "customer_id": "C01",
+          "product_id": "P01",
+          "date": "2025-01-01",
+          "quantity": 3
+        },
+        {
+          "customer_id": "C01",
+          "product_id": "P01",
+          "date": "2025-02-01",
+          "quantity": 4
+        },
+        {
+          "customer_id": "C01",
+          "product_id": "P02",
+          "date": "2025-01-01",
+          "quantity": 4
+        },
+        {
+          "customer_id": "C01",
+          "product_id": "P02",
+          "date": "2025-02-01",
+          "quantity": 5
+        },
+        {
+          "customer_id": "C01",
+          "product_id": "P03",
+          "date": "2025-01-01",
+          "quantity": 5
+        },
+        {
+          "customer_id": "C01",
+          "product_id": "P03",
+          "date": "2025-02-01",
+          "quantity": 6
+        },
+        {
+          "customer_id": "C02",
+          "product_id": "P01",
+          "date": "2025-01-01",
+          "quantity": 4
+        },
+        {
+          "customer_id": "C02",
+          "product_id": "P01",
+          "date": "2025-02-01",
+          "quantity": 5
+        },
+        {
+          "customer_id": "C02",
+          "product_id": "P02",
+          "date": "2025-01-01",
+          "quantity": 5
+        },
+        {
+          "customer_id": "C02",
+          "product_id": "P02",
+          "date": "2025-02-01",
+          "quantity": 6
+        },
+        {
+          "customer_id": "C02",
+          "product_id": "P03",
+          "date": "2025-01-01",
+          "quantity": 6
+        },
+        {
+          "customer_id": "C02",
+          "product_id": "P03",
+          "date": "2025-02-01",
+          "quantity": 7
+        },
+        {
+          "customer_id": "C03",
+          "product_id": "P01",
+          "date": "2025-01-01",
+          "quantity": 5
+        },
+        {
+          "customer_id": "C03",
+          "product_id": "P01",
+          "date": "2025-02-01",
+          "quantity": 6
+        },
+        {
+          "customer_id": "C03",
+          "product_id": "P02",
+          "date": "2025-01-01",
+          "quantity": 6
+        },
+        {
+          "customer_id": "C03",
+          "product_id": "P02",
+          "date": "2025-02-01",
+          "quantity": 7
+        },
+        {
+          "customer_id": "C03",
+          "product_id": "P03",
+          "date": "2025-01-01",
+          "quantity": 7
+        },
+        {
+          "customer_id": "C03",
+          "product_id": "P03",
+          "date": "2025-02-01",
+          "quantity": 8
+        },
+        {
+          "customer_id": "C04",
+          "product_id": "P01",
+          "date": "2025-01-01",
+          "quantity": 6
+        },
+        {
+          "customer_id": "C04",
+          "product_id": "P01",
+          "date": "2025-02-01",
+          "quantity": 7
+        },
+        {
+          "customer_id": "C04",
+          "product_id": "P02",
+          "date": "2025-01-01",
+          "quantity": 7
+        },
+        {
+          "customer_id": "C04",
+          "product_id": "P02",
+          "date": "2025-02-01",
+          "quantity": 8
+        },
+        {
+          "customer_id": "C04",
+          "product_id": "P03",
+          "date": "2025-01-01",
+          "quantity": 8
+        },
+        {
+          "customer_id": "C04",
+          "product_id": "P03",
+          "date": "2025-02-01",
+          "quantity": 9
+        }
+      ]
+    },
+    {
+      "id": "K-dimensional-categories",
+      "columns": [
+        "customer_id",
+        "region",
+        "status",
+        "segment",
+        "period",
+        "metric"
+      ],
+      "rows": [
+        {
+          "customer_id": "C01",
+          "region": "west",
+          "status": "closed",
+          "segment": "large",
+          "period": "2025-01",
+          "metric": 1
+        },
+        {
+          "customer_id": "C01",
+          "region": "west",
+          "status": "open",
+          "segment": "large",
+          "period": "2025-02",
+          "metric": 2
+        },
+        {
+          "customer_id": "C01",
+          "region": "west",
+          "status": "closed",
+          "segment": "large",
+          "period": "2025-03",
+          "metric": 3
+        },
+        {
+          "customer_id": "C02",
+          "region": "east",
+          "status": "closed",
+          "segment": "small",
+          "period": "2025-01",
+          "metric": 2
+        },
+        {
+          "customer_id": "C02",
+          "region": "east",
+          "status": "open",
+          "segment": "small",
+          "period": "2025-02",
+          "metric": 4
+        },
+        {
+          "customer_id": "C02",
+          "region": "east",
+          "status": "closed",
+          "segment": "small",
+          "period": "2025-03",
+          "metric": 6
+        },
+        {
+          "customer_id": "C03",
+          "region": "west",
+          "status": "closed",
+          "segment": "large",
+          "period": "2025-01",
+          "metric": 3
+        },
+        {
+          "customer_id": "C03",
+          "region": "west",
+          "status": "open",
+          "segment": "large",
+          "period": "2025-02",
+          "metric": 6
+        },
+        {
+          "customer_id": "C03",
+          "region": "west",
+          "status": "closed",
+          "segment": "large",
+          "period": "2025-03",
+          "metric": 9
+        },
+        {
+          "customer_id": "C04",
+          "region": "east",
+          "status": "closed",
+          "segment": "small",
+          "period": "2025-01",
+          "metric": 4
+        },
+        {
+          "customer_id": "C04",
+          "region": "east",
+          "status": "open",
+          "segment": "small",
+          "period": "2025-02",
+          "metric": 8
+        },
+        {
+          "customer_id": "C04",
+          "region": "east",
+          "status": "closed",
+          "segment": "small",
+          "period": "2025-03",
+          "metric": 12
+        },
+        {
+          "customer_id": "C05",
+          "region": "west",
+          "status": "closed",
+          "segment": "large",
+          "period": "2025-01",
+          "metric": 5
+        },
+        {
+          "customer_id": "C05",
+          "region": "west",
+          "status": "open",
+          "segment": "large",
+          "period": "2025-02",
+          "metric": 10
+        },
+        {
+          "customer_id": "C05",
+          "region": "west",
+          "status": "closed",
+          "segment": "large",
+          "period": "2025-03",
+          "metric": 15
+        }
+      ]
+    },
+    {
+      "id": "L-numeric-identifier",
+      "columns": [
+        "device_id",
+        "period",
+        "reading"
+      ],
+      "rows": [
+        {
+          "device_id": 101,
+          "period": "2025-01",
+          "reading": 101
+        },
+        {
+          "device_id": 101,
+          "period": "2025-02",
+          "reading": 202
+        },
+        {
+          "device_id": 101,
+          "period": "2025-03",
+          "reading": 303
+        },
+        {
+          "device_id": 101,
+          "period": "2025-04",
+          "reading": 404
+        },
+        {
+          "device_id": 202,
+          "period": "2025-01",
+          "reading": 202
+        },
+        {
+          "device_id": 202,
+          "period": "2025-02",
+          "reading": 404
+        },
+        {
+          "device_id": 202,
+          "period": "2025-03",
+          "reading": 606
+        },
+        {
+          "device_id": 202,
+          "period": "2025-04",
+          "reading": 808
+        },
+        {
+          "device_id": 303,
+          "period": "2025-01",
+          "reading": 303
+        },
+        {
+          "device_id": 303,
+          "period": "2025-02",
+          "reading": 606
+        },
+        {
+          "device_id": 303,
+          "period": "2025-03",
+          "reading": 909
+        },
+        {
+          "device_id": 303,
+          "period": "2025-04",
+          "reading": 1212
+        }
+      ]
+    },
+    {
+      "id": "M-string-measure",
+      "columns": [
+        "month",
+        "monthly_amount",
+        "category"
+      ],
+      "rows": [
+        {
+          "month": "2025-01",
+          "monthly_amount": "10.5",
+          "category": "a"
+        },
+        {
+          "month": "2025-02",
+          "monthly_amount": "12.0",
+          "category": "b"
+        },
+        {
+          "month": "2025-03",
+          "monthly_amount": "13.5",
+          "category": "a"
+        },
+        {
+          "month": "2025-04",
+          "monthly_amount": "11.0",
+          "category": "b"
+        }
+      ]
+    },
+    {
+      "id": "N-nullable-identifier",
+      "columns": [
+        "customer_id",
+        "period",
+        "metric"
+      ],
+      "rows": [
+        {
+          "customer_id": "C01",
+          "period": "2025-01",
+          "metric": 11
+        },
+        {
+          "customer_id": "C01",
+          "period": "2025-02",
+          "metric": 12
+        },
+        {
+          "customer_id": "C01",
+          "period": "2025-03",
+          "metric": 13
+        },
+        {
+          "customer_id": "C02",
+          "period": "2025-01",
+          "metric": 21
+        },
+        {
+          "customer_id": "C02",
+          "period": "2025-02",
+          "metric": 22
+        },
+        {
+          "customer_id": "C02",
+          "period": "2025-03",
+          "metric": 23
+        },
+        {
+          "customer_id": "C03",
+          "period": "2025-01",
+          "metric": 31
+        },
+        {
+          "customer_id": "C03",
+          "period": "2025-02",
+          "metric": 32
+        },
+        {
+          "customer_id": "C03",
+          "period": "2025-03",
+          "metric": 33
+        },
+        {
+          "customer_id": "C04",
+          "period": "2025-01",
+          "metric": 41
+        },
+        {
+          "customer_id": "C04",
+          "period": "2025-02",
+          "metric": 42
+        },
+        {
+          "customer_id": null,
+          "period": "2025-03",
+          "metric": 43
+        }
+      ]
+    },
+    {
+      "id": "O-duplicated-observations",
+      "columns": [
+        "entity_id",
+        "period",
+        "metric"
+      ],
+      "rows": [
+        {
+          "entity_id": "E1",
+          "period": "2025-01",
+          "metric": 11
+        },
+        {
+          "entity_id": "E1",
+          "period": "2025-02",
+          "metric": 12
+        },
+        {
+          "entity_id": "E2",
+          "period": "2025-01",
+          "metric": 21
+        },
+        {
+          "entity_id": "E2",
+          "period": "2025-02",
+          "metric": 22
+        },
+        {
+          "entity_id": "E3",
+          "period": "2025-01",
+          "metric": 31
+        },
+        {
+          "entity_id": "E3",
+          "period": "2025-02",
+          "metric": 32
+        },
+        {
+          "entity_id": "E1",
+          "period": "2025-01",
+          "metric": 11
+        },
+        {
+          "entity_id": "E1",
+          "period": "2025-02",
+          "metric": 12
+        },
+        {
+          "entity_id": "E2",
+          "period": "2025-01",
+          "metric": 21
+        },
+        {
+          "entity_id": "E2",
+          "period": "2025-02",
+          "metric": 22
+        },
+        {
+          "entity_id": "E3",
+          "period": "2025-01",
+          "metric": 31
+        },
+        {
+          "entity_id": "E3",
+          "period": "2025-02",
+          "metric": 32
+        }
+      ]
+    },
+    {
+      "id": "P-nonunique-request-key",
+      "columns": [
+        "request_id",
+        "period",
+        "latency"
+      ],
+      "rows": [
+        {
+          "request_id": "Q0",
+          "period": "2025-01",
+          "latency": 1
+        },
+        {
+          "request_id": "Q1",
+          "period": "2025-01",
+          "latency": 2
+        },
+        {
+          "request_id": "Q0",
+          "period": "2025-01",
+          "latency": 3
+        },
+        {
+          "request_id": "Q1",
+          "period": "2025-01",
+          "latency": 4
+        },
+        {
+          "request_id": "Q0",
+          "period": "2025-02",
+          "latency": 5
+        },
+        {
+          "request_id": "Q1",
+          "period": "2025-02",
+          "latency": 6
+        },
+        {
+          "request_id": "Q0",
+          "period": "2025-02",
+          "latency": 7
+        },
+        {
+          "request_id": "Q1",
+          "period": "2025-02",
+          "latency": 8
+        }
+      ]
+    },
+    {
+      "id": "Q-multiple-time-fields",
+      "columns": [
+        "customer_id",
+        "event_time",
+        "ingested_at",
+        "processed_at",
+        "metric"
+      ],
+      "rows": [
+        {
+          "customer_id": "C01",
+          "event_time": "2025-04-01T08:00:00",
+          "ingested_at": "2025-04-01T08:05:01",
+          "processed_at": "2025-04-01T08:10:01",
+          "metric": 2
+        },
+        {
+          "customer_id": "C01",
+          "event_time": "2025-04-02T08:00:00",
+          "ingested_at": "2025-04-02T08:05:01",
+          "processed_at": "2025-04-02T08:10:01",
+          "metric": 3
+        },
+        {
+          "customer_id": "C01",
+          "event_time": "2025-04-03T08:00:00",
+          "ingested_at": "2025-04-03T08:05:01",
+          "processed_at": "2025-04-03T08:10:01",
+          "metric": 4
+        },
+        {
+          "customer_id": "C02",
+          "event_time": "2025-04-01T08:00:00",
+          "ingested_at": "2025-04-01T08:05:02",
+          "processed_at": "2025-04-01T08:10:02",
+          "metric": 3
+        },
+        {
+          "customer_id": "C02",
+          "event_time": "2025-04-02T08:00:00",
+          "ingested_at": "2025-04-02T08:05:02",
+          "processed_at": "2025-04-02T08:10:02",
+          "metric": 4
+        },
+        {
+          "customer_id": "C02",
+          "event_time": "2025-04-03T08:00:00",
+          "ingested_at": "2025-04-03T08:05:02",
+          "processed_at": "2025-04-03T08:10:02",
+          "metric": 5
+        },
+        {
+          "customer_id": "C03",
+          "event_time": "2025-04-01T08:00:00",
+          "ingested_at": "2025-04-01T08:05:03",
+          "processed_at": "2025-04-01T08:10:03",
+          "metric": 4
+        },
+        {
+          "customer_id": "C03",
+          "event_time": "2025-04-02T08:00:00",
+          "ingested_at": "2025-04-02T08:05:03",
+          "processed_at": "2025-04-02T08:10:03",
+          "metric": 5
+        },
+        {
+          "customer_id": "C03",
+          "event_time": "2025-04-03T08:00:00",
+          "ingested_at": "2025-04-03T08:05:03",
+          "processed_at": "2025-04-03T08:10:03",
+          "metric": 6
+        },
+        {
+          "customer_id": "C04",
+          "event_time": "2025-04-01T08:00:00",
+          "ingested_at": "2025-04-01T08:05:04",
+          "processed_at": "2025-04-01T08:10:04",
+          "metric": 5
+        },
+        {
+          "customer_id": "C04",
+          "event_time": "2025-04-02T08:00:00",
+          "ingested_at": "2025-04-02T08:05:04",
+          "processed_at": "2025-04-02T08:10:04",
+          "metric": 6
+        },
+        {
+          "customer_id": "C04",
+          "event_time": "2025-04-03T08:00:00",
+          "ingested_at": "2025-04-03T08:05:04",
+          "processed_at": "2025-04-03T08:10:04",
+          "metric": 7
+        }
+      ]
+    },
+    {
+      "id": "R-stable-functional-dependency",
+      "columns": [
+        "customer_id",
+        "region",
+        "period",
+        "metric"
+      ],
+      "rows": [
+        {
+          "customer_id": "C01",
+          "region": "west",
+          "period": "2025-01",
+          "metric": 1
+        },
+        {
+          "customer_id": "C01",
+          "region": "west",
+          "period": "2025-02",
+          "metric": 2
+        },
+        {
+          "customer_id": "C01",
+          "region": "west",
+          "period": "2025-03",
+          "metric": 3
+        },
+        {
+          "customer_id": "C02",
+          "region": "north",
+          "period": "2025-01",
+          "metric": 2
+        },
+        {
+          "customer_id": "C02",
+          "region": "north",
+          "period": "2025-02",
+          "metric": 4
+        },
+        {
+          "customer_id": "C02",
+          "region": "north",
+          "period": "2025-03",
+          "metric": 6
+        },
+        {
+          "customer_id": "C03",
+          "region": "east",
+          "period": "2025-01",
+          "metric": 3
+        },
+        {
+          "customer_id": "C03",
+          "region": "east",
+          "period": "2025-02",
+          "metric": 6
+        },
+        {
+          "customer_id": "C03",
+          "region": "east",
+          "period": "2025-03",
+          "metric": 9
+        },
+        {
+          "customer_id": "C04",
+          "region": "west",
+          "period": "2025-01",
+          "metric": 4
+        },
+        {
+          "customer_id": "C04",
+          "region": "west",
+          "period": "2025-02",
+          "metric": 8
+        },
+        {
+          "customer_id": "C04",
+          "region": "west",
+          "period": "2025-03",
+          "metric": 12
+        },
+        {
+          "customer_id": "C05",
+          "region": "north",
+          "period": "2025-01",
+          "metric": 5
+        },
+        {
+          "customer_id": "C05",
+          "region": "north",
+          "period": "2025-02",
+          "metric": 10
+        },
+        {
+          "customer_id": "C05",
+          "region": "north",
+          "period": "2025-03",
+          "metric": 15
+        },
+        {
+          "customer_id": "C06",
+          "region": "east",
+          "period": "2025-01",
+          "metric": 6
+        },
+        {
+          "customer_id": "C06",
+          "region": "east",
+          "period": "2025-02",
+          "metric": 12
+        },
+        {
+          "customer_id": "C06",
+          "region": "east",
+          "period": "2025-03",
+          "metric": 18
+        }
+      ]
+    },
+    {
+      "id": "S-changing-dimension",
+      "columns": [
+        "customer_id",
+        "region",
+        "period",
+        "metric"
+      ],
+      "rows": [
+        {
+          "customer_id": "C01",
+          "region": "north",
+          "period": "2025-01",
+          "metric": 1
+        },
+        {
+          "customer_id": "C01",
+          "region": "east",
+          "period": "2025-02",
+          "metric": 2
+        },
+        {
+          "customer_id": "C01",
+          "region": "west",
+          "period": "2025-03",
+          "metric": 3
+        },
+        {
+          "customer_id": "C02",
+          "region": "east",
+          "period": "2025-01",
+          "metric": 2
+        },
+        {
+          "customer_id": "C02",
+          "region": "west",
+          "period": "2025-02",
+          "metric": 4
+        },
+        {
+          "customer_id": "C02",
+          "region": "north",
+          "period": "2025-03",
+          "metric": 6
+        },
+        {
+          "customer_id": "C03",
+          "region": "west",
+          "period": "2025-01",
+          "metric": 3
+        },
+        {
+          "customer_id": "C03",
+          "region": "north",
+          "period": "2025-02",
+          "metric": 6
+        },
+        {
+          "customer_id": "C03",
+          "region": "east",
+          "period": "2025-03",
+          "metric": 9
+        },
+        {
+          "customer_id": "C04",
+          "region": "north",
+          "period": "2025-01",
+          "metric": 4
+        },
+        {
+          "customer_id": "C04",
+          "region": "east",
+          "period": "2025-02",
+          "metric": 8
+        },
+        {
+          "customer_id": "C04",
+          "region": "west",
+          "period": "2025-03",
+          "metric": 12
+        },
+        {
+          "customer_id": "C05",
+          "region": "east",
+          "period": "2025-01",
+          "metric": 5
+        },
+        {
+          "customer_id": "C05",
+          "region": "west",
+          "period": "2025-02",
+          "metric": 10
+        },
+        {
+          "customer_id": "C05",
+          "region": "north",
+          "period": "2025-03",
+          "metric": 15
+        },
+        {
+          "customer_id": "C06",
+          "region": "west",
+          "period": "2025-01",
+          "metric": 6
+        },
+        {
+          "customer_id": "C06",
+          "region": "north",
+          "period": "2025-02",
+          "metric": 12
+        },
+        {
+          "customer_id": "C06",
+          "region": "east",
+          "period": "2025-03",
+          "metric": 18
+        }
+      ]
+    },
+    {
+      "id": "T-high-cardinality-category",
+      "columns": [
+        "referrer",
+        "period",
+        "visits"
+      ],
+      "rows": [
+        {
+          "referrer": "source-01",
+          "period": "2025-01",
+          "visits": 2
+        },
+        {
+          "referrer": "source-01",
+          "period": "2025-02",
+          "visits": 3
+        },
+        {
+          "referrer": "source-01",
+          "period": "2025-03",
+          "visits": 4
+        },
+        {
+          "referrer": "source-02",
+          "period": "2025-01",
+          "visits": 3
+        },
+        {
+          "referrer": "source-02",
+          "period": "2025-02",
+          "visits": 4
+        },
+        {
+          "referrer": "source-02",
+          "period": "2025-03",
+          "visits": 5
+        },
+        {
+          "referrer": "source-03",
+          "period": "2025-01",
+          "visits": 4
+        },
+        {
+          "referrer": "source-03",
+          "period": "2025-02",
+          "visits": 5
+        },
+        {
+          "referrer": "source-03",
+          "period": "2025-03",
+          "visits": 6
+        },
+        {
+          "referrer": "source-04",
+          "period": "2025-01",
+          "visits": 5
+        },
+        {
+          "referrer": "source-04",
+          "period": "2025-02",
+          "visits": 6
+        },
+        {
+          "referrer": "source-04",
+          "period": "2025-03",
+          "visits": 7
+        },
+        {
+          "referrer": "source-05",
+          "period": "2025-01",
+          "visits": 6
+        },
+        {
+          "referrer": "source-05",
+          "period": "2025-02",
+          "visits": 7
+        },
+        {
+          "referrer": "source-05",
+          "period": "2025-03",
+          "visits": 8
+        },
+        {
+          "referrer": "source-06",
+          "period": "2025-01",
+          "visits": 7
+        },
+        {
+          "referrer": "source-06",
+          "period": "2025-02",
+          "visits": 8
+        },
+        {
+          "referrer": "source-06",
+          "period": "2025-03",
+          "visits": 9
+        },
+        {
+          "referrer": "source-07",
+          "period": "2025-01",
+          "visits": 8
+        },
+        {
+          "referrer": "source-07",
+          "period": "2025-02",
+          "visits": 9
+        },
+        {
+          "referrer": "source-07",
+          "period": "2025-03",
+          "visits": 10
+        },
+        {
+          "referrer": "source-08",
+          "period": "2025-01",
+          "visits": 9
+        },
+        {
+          "referrer": "source-08",
+          "period": "2025-02",
+          "visits": 10
+        },
+        {
+          "referrer": "source-08",
+          "period": "2025-03",
+          "visits": 11
+        },
+        {
+          "referrer": "source-09",
+          "period": "2025-01",
+          "visits": 10
+        },
+        {
+          "referrer": "source-09",
+          "period": "2025-02",
+          "visits": 11
+        },
+        {
+          "referrer": "source-09",
+          "period": "2025-03",
+          "visits": 12
+        },
+        {
+          "referrer": "source-10",
+          "period": "2025-01",
+          "visits": 11
+        },
+        {
+          "referrer": "source-10",
+          "period": "2025-02",
+          "visits": 12
+        },
+        {
+          "referrer": "source-10",
+          "period": "2025-03",
+          "visits": 13
+        },
+        {
+          "referrer": "source-11",
+          "period": "2025-01",
+          "visits": 12
+        },
+        {
+          "referrer": "source-11",
+          "period": "2025-02",
+          "visits": 13
+        },
+        {
+          "referrer": "source-11",
+          "period": "2025-03",
+          "visits": 14
+        },
+        {
+          "referrer": "source-12",
+          "period": "2025-01",
+          "visits": 13
+        },
+        {
+          "referrer": "source-12",
+          "period": "2025-02",
+          "visits": 14
+        },
+        {
+          "referrer": "source-12",
+          "period": "2025-03",
+          "visits": 15
+        },
+        {
+          "referrer": "source-13",
+          "period": "2025-01",
+          "visits": 14
+        },
+        {
+          "referrer": "source-13",
+          "period": "2025-02",
+          "visits": 15
+        },
+        {
+          "referrer": "source-13",
+          "period": "2025-03",
+          "visits": 16
+        },
+        {
+          "referrer": "source-14",
+          "period": "2025-01",
+          "visits": 15
+        },
+        {
+          "referrer": "source-14",
+          "period": "2025-02",
+          "visits": 16
+        },
+        {
+          "referrer": "source-14",
+          "period": "2025-03",
+          "visits": 17
+        },
+        {
+          "referrer": "source-15",
+          "period": "2025-01",
+          "visits": 16
+        },
+        {
+          "referrer": "source-15",
+          "period": "2025-02",
+          "visits": 17
+        },
+        {
+          "referrer": "source-15",
+          "period": "2025-03",
+          "visits": 18
+        },
+        {
+          "referrer": "source-16",
+          "period": "2025-01",
+          "visits": 17
+        },
+        {
+          "referrer": "source-16",
+          "period": "2025-02",
+          "visits": 18
+        },
+        {
+          "referrer": "source-16",
+          "period": "2025-03",
+          "visits": 19
+        },
+        {
+          "referrer": "source-17",
+          "period": "2025-01",
+          "visits": 18
+        },
+        {
+          "referrer": "source-17",
+          "period": "2025-02",
+          "visits": 19
+        },
+        {
+          "referrer": "source-17",
+          "period": "2025-03",
+          "visits": 20
+        },
+        {
+          "referrer": "source-18",
+          "period": "2025-01",
+          "visits": 19
+        },
+        {
+          "referrer": "source-18",
+          "period": "2025-02",
+          "visits": 20
+        },
+        {
+          "referrer": "source-18",
+          "period": "2025-03",
+          "visits": 21
+        },
+        {
+          "referrer": "source-19",
+          "period": "2025-01",
+          "visits": 20
+        },
+        {
+          "referrer": "source-19",
+          "period": "2025-02",
+          "visits": 21
+        },
+        {
+          "referrer": "source-19",
+          "period": "2025-03",
+          "visits": 22
+        },
+        {
+          "referrer": "source-20",
+          "period": "2025-01",
+          "visits": 21
+        },
+        {
+          "referrer": "source-20",
+          "period": "2025-02",
+          "visits": 22
+        },
+        {
+          "referrer": "source-20",
+          "period": "2025-03",
+          "visits": 23
+        }
+      ]
+    },
+    {
+      "id": "U-low-cardinality-entity",
+      "columns": [
+        "device_id",
+        "period",
+        "measurement"
+      ],
+      "rows": [
+        {
+          "device_id": "D1",
+          "period": "2025-01",
+          "measurement": 2
+        },
+        {
+          "device_id": "D1",
+          "period": "2025-02",
+          "measurement": 3
+        },
+        {
+          "device_id": "D1",
+          "period": "2025-03",
+          "measurement": 4
+        },
+        {
+          "device_id": "D2",
+          "period": "2025-01",
+          "measurement": 3
+        },
+        {
+          "device_id": "D2",
+          "period": "2025-02",
+          "measurement": 4
+        },
+        {
+          "device_id": "D2",
+          "period": "2025-03",
+          "measurement": 5
+        },
+        {
+          "device_id": "D3",
+          "period": "2025-01",
+          "measurement": 4
+        },
+        {
+          "device_id": "D3",
+          "period": "2025-02",
+          "measurement": 5
+        },
+        {
+          "device_id": "D3",
+          "period": "2025-03",
+          "measurement": 6
+        }
+      ]
+    },
+    {
+      "id": "V-no-semantic-signal",
+      "columns": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "rows": [
+        {
+          "a": "x",
+          "b": "m",
+          "c": "p",
+          "d": "u"
+        },
+        {
+          "a": "y",
+          "b": "m",
+          "c": "q",
+          "d": "u"
+        },
+        {
+          "a": "x",
+          "b": "n",
+          "c": "p",
+          "d": "v"
+        },
+        {
+          "a": "y",
+          "b": "n",
+          "c": "q",
+          "d": "v"
+        },
+        {
+          "a": "x",
+          "b": "m",
+          "c": "p",
+          "d": "u"
+        },
+        {
+          "a": "y",
+          "b": "m",
+          "c": "q",
+          "d": "u"
+        },
+        {
+          "a": "x",
+          "b": "n",
+          "c": "p",
+          "d": "v"
+        },
+        {
+          "a": "y",
+          "b": "n",
+          "c": "q",
+          "d": "v"
+        }
+      ]
+    },
+    {
+      "id": "W-authoritative-metadata",
+      "columns": [
+        "a",
+        "t",
+        "x"
+      ],
+      "rows": [
+        {
+          "a": "K1",
+          "t": "2025-01",
+          "x": 1
+        },
+        {
+          "a": "K1",
+          "t": "2025-02",
+          "x": 2
+        },
+        {
+          "a": "K1",
+          "t": "2025-03",
+          "x": 3
+        },
+        {
+          "a": "K2",
+          "t": "2025-01",
+          "x": 2
+        },
+        {
+          "a": "K2",
+          "t": "2025-02",
+          "x": 4
+        },
+        {
+          "a": "K2",
+          "t": "2025-03",
+          "x": 6
+        },
+        {
+          "a": "K3",
+          "t": "2025-01",
+          "x": 3
+        },
+        {
+          "a": "K3",
+          "t": "2025-02",
+          "x": 6
+        },
+        {
+          "a": "K3",
+          "t": "2025-03",
+          "x": 9
+        }
+      ],
+      "semantic_metadata": {
+        "schema_version": 1,
+        "columns": {
+          "a": "entity_key",
+          "t": "time",
+          "x": "measure"
+        },
+        "entity_keys": [
+          [
+            "a"
+          ]
+        ],
+        "observation_grain": [
+          "a",
+          "t"
+        ]
+      }
+    },
+    {
+      "id": "X-misleading-name",
+      "columns": [
+        "customer_id",
+        "event_id",
+        "user_id",
+        "event_time",
+        "event_type",
+        "amount"
+      ],
+      "rows": [
+        {
+          "customer_id": "MISLEADING-01",
+          "event_id": "EV01",
+          "user_id": "U01",
+          "event_time": "2025-05-01T10:00:00",
+          "event_type": "click",
+          "amount": 2
+        },
+        {
+          "customer_id": "MISLEADING-02",
+          "event_id": "EV02",
+          "user_id": "U02",
+          "event_time": "2025-05-02T10:00:00",
+          "event_type": "view",
+          "amount": 3
+        },
+        {
+          "customer_id": "MISLEADING-03",
+          "event_id": "EV03",
+          "user_id": "U03",
+          "event_time": "2025-05-03T10:00:00",
+          "event_type": "click",
+          "amount": 4
+        },
+        {
+          "customer_id": "MISLEADING-04",
+          "event_id": "EV04",
+          "user_id": "U00",
+          "event_time": "2025-05-04T10:00:00",
+          "event_type": "view",
+          "amount": 5
+        },
+        {
+          "customer_id": "MISLEADING-05",
+          "event_id": "EV05",
+          "user_id": "U01",
+          "event_time": "2025-05-05T10:00:00",
+          "event_type": "click",
+          "amount": 6
+        },
+        {
+          "customer_id": "MISLEADING-06",
+          "event_id": "EV06",
+          "user_id": "U02",
+          "event_time": "2025-05-06T10:00:00",
+          "event_type": "view",
+          "amount": 7
+        },
+        {
+          "customer_id": "MISLEADING-07",
+          "event_id": "EV07",
+          "user_id": "U03",
+          "event_time": "2025-05-07T10:00:00",
+          "event_type": "click",
+          "amount": 8
+        },
+        {
+          "customer_id": "MISLEADING-08",
+          "event_id": "EV08",
+          "user_id": "U00",
+          "event_time": "2025-05-08T10:00:00",
+          "event_type": "view",
+          "amount": 9
+        },
+        {
+          "customer_id": "MISLEADING-09",
+          "event_id": "EV09",
+          "user_id": "U01",
+          "event_time": "2025-05-09T10:00:00",
+          "event_type": "click",
+          "amount": 10
+        },
+        {
+          "customer_id": "MISLEADING-10",
+          "event_id": "EV10",
+          "user_id": "U02",
+          "event_time": "2025-05-10T10:00:00",
+          "event_type": "view",
+          "amount": 11
+        },
+        {
+          "customer_id": "MISLEADING-11",
+          "event_id": "EV11",
+          "user_id": "U03",
+          "event_time": "2025-05-11T10:00:00",
+          "event_type": "click",
+          "amount": 12
+        },
+        {
+          "customer_id": "MISLEADING-12",
+          "event_id": "EV12",
+          "user_id": "U00",
+          "event_time": "2025-05-12T10:00:00",
+          "event_type": "view",
+          "amount": 13
+        }
+      ]
+    }
+  ]
+}

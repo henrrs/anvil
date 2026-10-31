@@ -791,6 +791,12 @@ def test_ready_survives_a_clean_new_process(temp: Path) -> None:
                                   capture_output=True, text=True, env=clean_env, timeout=30, check=False)
     check(capabilities.returncode == 0, f"public make capabilities failed: {capabilities.stderr}")
     capability_value = json.loads(capabilities.stdout)
+    check({"candidate_grain_and_entity_semantics", "category_composition_comparison",
+           "evidence_based_semantic_roles_v2", "entity_event_key_separation", "confidence_and_abstention",
+           "bounded_composite_grain", "additive_contribution_analysis", "executed_claim_validation",
+           "reusable_semantic_profiles"}
+          <= set(capability_value["analysis"]["capabilities"]),
+          "public local capabilities omitted Anvil 2.15 semantic foundation features")
     check(capability_value["databricks_capabilities"]["overall"] == "READY"
           and capability_value["databricks_capabilities"]["capabilities"]["compute.list"]["verified"],
           "public local capabilities did not report the persisted recent evidence")

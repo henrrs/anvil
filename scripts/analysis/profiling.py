@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import AnalysisError
+from .semantic import infer_semantic_context
 
 
 MAX_SOURCE_BYTES = 32 * 1024 * 1024
@@ -284,7 +285,9 @@ def _type_name(values: list[Any]) -> str:
     return "mixed"
 
 
-def profile_file(path: str | Path, *, max_rows: int = MAX_ROWS) -> dict[str, Any]:
+def profile_file(path: str | Path, *, max_rows: int = MAX_ROWS,
+                 semantic_depth: str = "STANDARD", semantic_focus: str = "general",
+                 semantic_metadata: Any = None) -> dict[str, Any]:
     rows, metadata = _read(path, max_rows=max_rows)
     columns = []
     for name in metadata["columns"]:
@@ -322,9 +325,10 @@ def profile_file(path: str | Path, *, max_rows: int = MAX_ROWS) -> dict[str, Any
             item["temporal"] = {"min": temporal_text[0], "max": temporal_text[-1],
                                 "observed_count": len(temporal)}
         item["candidate_roles"] = _candidate_roles(name, kind, len(present), len(distinct) if exact else None,
-                                                  metadata["row_count"], null_count)
+                                                  len(values), null_count)
         columns.append(item)
-    return {
+    complete = not metadata["truncated"]
+    profile = {
         "schema_version": 1, "profile_id": "PROFILE-" + metadata["source"]["sha256"][:12],
         "source": metadata["source"], "row_count": metadata["row_count"],
         "profiled_rows": len(rows), "column_count": len(columns), "columns": columns,
@@ -335,6 +339,10 @@ def profile_file(path: str | Path, *, max_rows: int = MAX_ROWS) -> dict[str, Any
                    "max_profile_cells": MAX_PROFILE_CELLS,
                    "max_columns": MAX_COLUMNS, "max_distinct_values_tracked": MAX_DISTINCT_TRACKED},
     }
+    profile["semantic_context"] = infer_semantic_context(
+        rows, metadata["columns"], total_rows=metadata["row_count"], complete=complete,
+        depth=semantic_depth, focus=semantic_focus, semantic_metadata=semantic_metadata)
+    return profile
 
 
 def load_rows(path: str | Path, *, max_rows: int = 50_000) -> tuple[list[dict[str, Any]], dict[str, Any]]:

@@ -245,6 +245,8 @@ pass 'V1 memory reads without rewrites; Python search works with ripgrep unavail
 
 python3 "$ROOT/tests/distill.py" || fail '/distill fixture, provenance, drift and idempotency checks'
 python3 "$ROOT/tests/analysis.py" || fail 'intent and analytical intelligence offline contracts and regressions'
+python3 "$ROOT/evals/analytical/test_harness.py" --scope all || fail 'analytical evaluation fixtures, scoring, isolation and metric regressions'
+pass 'Analytical evaluation harness remains separate, deterministic and offline-testable'
 python3 "$ROOT/tests/communication.py" || fail 'communication/artifact intelligence offline contracts and regressions'
 pass 'Communication and artifact intelligence runs deterministic offline regressions'
 python3 "$ROOT/tests/engineering.py" || fail 'engineering state, interruption, stale evidence and direct-path regressions'

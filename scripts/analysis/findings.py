@@ -8,6 +8,8 @@ from typing import Any
 
 from .contracts import EPISTEMIC_TYPES, CONFIDENCE, MATERIALITY_LEVELS, validate_analysis_plan, validate_semantic_model, validate_task_brief
 from .errors import AnalysisError
+from .investigation import validate_claims, validate_hypotheses
+from .semantic import validate_semantic_context
 
 
 _DIMENSIONS = ("magnitude", "breadth", "persistence", "decision_relevance", "confidence",
@@ -164,12 +166,23 @@ def validate_narrative(raw: Any, finding_ids: set[str]) -> dict[str, Any]:
 
 def validate_result(raw: Any) -> dict[str, Any]:
     fields = {"schema_version", "task_brief", "profile", "semantic_model", "questions", "plan",
-              "evidence", "findings", "narrative", "limitations"}
+              "evidence", "findings", "narrative", "limitations", "analysis_context", "execution",
+              "claims", "hypotheses", "warnings", "execution_metadata"}
     if not isinstance(raw, dict) or raw.get("schema_version") != 1 or set(raw) - fields:
         raise AnalysisError("CONTRACT_INVALID", "Analytical result must be schema_version 1 with supported fields.")
     brief = validate_task_brief(raw.get("task_brief"))
     profile = validate_profile(raw.get("profile"))
     known_columns = {item["name"] for item in profile["columns"]}
+    profile_context = profile.get("semantic_context")
+    if profile_context is not None:
+        profile_context = validate_semantic_context(profile_context, known_columns=known_columns)
+        if (profile_context["observations"]["count"] != profile["row_count"]
+                or profile_context["observations"]["profiled_count"] != profile["profiled_rows"]
+                or profile_context["observations"]["complete"] != (profile["statistics_scope"] == "complete")):
+            raise AnalysisError("CONTRACT_INVALID", "Semantic context observation counts conflict with the deterministic profile.")
+    analysis_context = raw.get("analysis_context", profile_context)
+    if analysis_context is not None:
+        analysis_context = validate_semantic_context(analysis_context, known_columns=known_columns)
     semantics = validate_semantic_model(raw.get("semantic_model"), known_columns=known_columns)
     questions = raw.get("questions", [])
     if not isinstance(questions, list) or len(questions) > 12 or any(not isinstance(value, str) or not value.strip() for value in questions):
@@ -177,6 +190,28 @@ def validate_result(raw: Any) -> dict[str, Any]:
     plan = validate_analysis_plan(raw.get("plan"))
     if plan["source_sha256"] != profile["source"]["sha256"]:
         raise AnalysisError("INPUT_SOURCE_CHANGED", "Analytical plan and profile refer to different source snapshots.")
+    execution = raw.get("execution")
+    if execution is not None:
+        source = execution.get("source") if isinstance(execution, dict) else None
+        if not isinstance(execution, dict) or not isinstance(source, dict) or source.get("sha256") != profile["source"]["sha256"]:
+            raise AnalysisError("EVIDENCE_PROVENANCE_INVALID", "Execution results must refer to the profiled source snapshot.")
+        records = execution.get("operations")
+        if not isinstance(records, list) or len(records) != len(plan["operations"]):
+            raise AnalysisError("CONTRACT_INVALID", "Execution operation results must match the validated plan.")
+        expected_ids = [operation["id"] for operation in plan["operations"]]
+        actual_ids = [record.get("id") if isinstance(record, dict) else None for record in records]
+        if actual_ids != expected_ids:
+            raise AnalysisError("EVIDENCE_PROVENANCE_INVALID", "Execution operation IDs or order do not match the validated plan.")
+        if any(not isinstance(record.get("results"), list) for record in records):
+            raise AnalysisError("CONTRACT_INVALID", "Each execution operation must contain a bounded result list.")
+    execution_metadata = raw.get("execution_metadata")
+    if execution_metadata is not None and (not isinstance(execution_metadata, dict)
+            or execution_metadata.get("analysis_mode") not in {"FAST", "STANDARD", "DEEP"}
+            or any(not isinstance(execution_metadata.get(field), int) or isinstance(execution_metadata.get(field), bool) or execution_metadata[field] < 0
+                   for field in ("datasets_inspected", "rows_scanned", "operations_evaluated"))):
+        raise AnalysisError("CONTRACT_INVALID", "Execution metadata has invalid mode or work counts.")
+    if execution_metadata is not None and execution_metadata["operations_evaluated"] != len(plan["operations"]):
+        raise AnalysisError("CONTRACT_INVALID", "Execution operation count does not match the validated plan.")
     semantic_columns = {item["name"]: item for item in semantics["columns"]}
     for operation in plan["operations"]:
         column = operation.get("column")
@@ -205,14 +240,31 @@ def validate_result(raw: Any) -> dict[str, Any]:
         missing = set(finding["evidence_ids"]) - evidence_ids
         if missing:
             raise AnalysisError("EVIDENCE_PROVENANCE_INVALID", f"Finding {finding['id']} references unknown evidence IDs: {', '.join(sorted(missing))}.")
+        if finding.get("operation_id") is not None and finding["operation_id"] not in {item["id"] for item in plan["operations"]}:
+            raise AnalysisError("EVIDENCE_PROVENANCE_INVALID", f"Finding {finding['id']} references an operation outside the validated plan.")
+    hypotheses = validate_hypotheses(raw.get("hypotheses", []), evidence_ids)
+    claims = validate_claims(raw.get("claims", []), evidence_ids=evidence_ids, plan=plan,
+                             execution=execution, semantic_context=analysis_context)
+    warnings = raw.get("warnings", [])
+    if not isinstance(warnings, list) or len(warnings) > 30 or any(not isinstance(value, str) or not value.strip() or len(value) > 1000 for value in warnings):
+        raise AnalysisError("CONTRACT_INVALID", "Result warnings must be a bounded text list.")
     narrative = validate_narrative(raw.get("narrative"), finding_ids)
     limitations = raw.get("limitations", [])
     if not isinstance(limitations, list) or len(limitations) > 30 or any(not isinstance(value, str) or not value.strip() for value in limitations):
         raise AnalysisError("CONTRACT_INVALID", "Result limitations must be a bounded text list.")
+    metrics = execution.get("operations", []) if isinstance(execution, dict) else []
+    canonical = {"schema_version": 1, "context": analysis_context, "metrics": metrics,
+                "findings": findings, "claims": claims, "hypotheses": hypotheses,
+                "warnings": warnings, "limitations": limitations,
+                "provenance": {"source": profile["source"], "plan_source_sha256": plan["source_sha256"]},
+                "execution_metadata": execution_metadata}
     return {"schema_version": 1, "task_brief": brief, "profile": profile, "semantic_model": semantics,
             "questions": questions, "plan": plan, "evidence": evidence, "findings": findings,
             "materiality_tiers": rank_materiality(findings), "narrative": narrative,
-            "limitations": limitations}
+            "limitations": limitations, "analysis_context": analysis_context,
+            "execution": execution, "execution_metadata": execution_metadata,
+            "claims": claims, "hypotheses": hypotheses, "warnings": warnings,
+            "analysis_result": canonical}
 
 
 def validate_profile(raw: Any) -> dict[str, Any]:

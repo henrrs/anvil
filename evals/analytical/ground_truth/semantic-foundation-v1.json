@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "evaluation_protocol": "semantic-certification-v1",
+  "fixture_version": "semantic-foundation-v1",
+  "cases": [
+    {"id":"A-repeated-entity","entity_keys":[["entity_id"]],"grain":["entity_id","period"],"roles":{"entity_id":"ENTITY_KEY_CANDIDATE","period":"TIME_DIMENSION","metric":"MEASURE_CANDIDATE"}},
+    {"id":"B-event-identifier","entity_keys":[["user_id"]],"event_keys":[["event_id"]],"grain":["event_id"],"roles":{"user_id":"ENTITY_KEY_CANDIDATE","event_id":"EVENT_KEY_CANDIDATE","timestamp":"TIME_DIMENSION","event_type":"DIMENSION_CANDIDATE","value":"MEASURE_CANDIDATE"}},
+    {"id":"C-composite-observation-grain","entity_keys":[["customer_id"]],"grain":["customer_id","period","product"],"roles":{"customer_id":"ENTITY_KEY_CANDIDATE","period":"TIME_DIMENSION","product":"DIMENSION_CANDIDATE","amount":"MEASURE_CANDIDATE"}},
+    {"id":"D-composite-entity-key","entity_keys":[["account_number","country"]],"grain":["account_number","country","period"],"roles":{"account_number":"ENTITY_KEY_CANDIDATE","country":"ENTITY_KEY_CANDIDATE","period":"TIME_DIMENSION","balance":"MEASURE_CANDIDATE"}},
+    {"id":"E-technical-row-id","entity_keys":[["customer_id"]],"grain":["customer_id","period"],"technical_keys":["row_uuid"],"roles":{"customer_id":"ENTITY_KEY_CANDIDATE","row_uuid":"TECHNICAL_KEY_CANDIDATE","period":"TIME_DIMENSION","metric":"MEASURE_CANDIDATE"}},
+    {"id":"F-snapshot","entity_keys":[["customer_id"]],"grain":["customer_id"],"roles":{"customer_id":"ENTITY_KEY_CANDIDATE","region":"DIMENSION_CANDIDATE","tier":"DIMENSION_CANDIDATE","balance":"MEASURE_CANDIDATE"}},
+    {"id":"G-event-stream","entity_keys":[["user_id"]],"event_keys":[["event_id"]],"grain":["event_id"],"roles":{"user_id":"ENTITY_KEY_CANDIDATE","event_id":"EVENT_KEY_CANDIDATE","event_time":"TIME_DIMENSION","event_type":"DIMENSION_CANDIDATE","amount":"MEASURE_CANDIDATE"}},
+    {"id":"H-aggregated","entity_keys":[],"grain":["region","month"],"roles":{"region":"DIMENSION_CANDIDATE","month":"TIME_DIMENSION","total_sales":"MEASURE_CANDIDATE","order_count":"MEASURE_CANDIDATE"}},
+    {"id":"I-pure-time-series","entity_keys":[],"grain":["timestamp"],"roles":{"timestamp":"TIME_DIMENSION","cpu_usage":"MEASURE_CANDIDATE","memory_usage":"MEASURE_CANDIDATE"}},
+    {"id":"J-multiple-entities","entity_keys":[["customer_id"],["product_id"]],"grain":["customer_id","product_id","date"],"roles":{"customer_id":"ENTITY_KEY_CANDIDATE","product_id":"ENTITY_KEY_CANDIDATE","date":"TIME_DIMENSION","quantity":"MEASURE_CANDIDATE"}},
+    {"id":"K-dimensional-categories","entity_keys":[["customer_id"]],"grain":["customer_id","period"],"roles":{"customer_id":"ENTITY_KEY_CANDIDATE","region":"DIMENSION_CANDIDATE","status":"DIMENSION_CANDIDATE","segment":"DIMENSION_CANDIDATE","period":"TIME_DIMENSION","metric":"MEASURE_CANDIDATE"}},
+    {"id":"L-numeric-identifier","entity_keys":[["device_id"]],"grain":["device_id","period"],"roles":{"device_id":"ENTITY_KEY_CANDIDATE","period":"TIME_DIMENSION","reading":"MEASURE_CANDIDATE"}},
+    {"id":"M-string-measure","entity_keys":[],"grain":["month"],"roles":{"month":"TIME_DIMENSION","monthly_amount":"MEASURE_CANDIDATE","category":"DIMENSION_CANDIDATE"}},
+    {"id":"N-nullable-identifier","entity_keys":[["customer_id"]],"grain":[],"abstain_grain":true,"roles":{"customer_id":"ENTITY_KEY_CANDIDATE","period":"TIME_DIMENSION","metric":"MEASURE_CANDIDATE"}},
+    {"id":"O-duplicated-observations","entity_keys":[["entity_id"]],"grain":[],"abstain_grain":true,"duplicate_risk":true,"roles":{"entity_id":"ENTITY_KEY_CANDIDATE","period":"TIME_DIMENSION","metric":"MEASURE_CANDIDATE"}},
+    {"id":"P-nonunique-request-key","entity_keys":[],"event_keys":[],"grain":[],"abstain_entity":true,"abstain_grain":true,"roles":{"request_id":"CANDIDATE_KEY","period":"TIME_DIMENSION","latency":"MEASURE_CANDIDATE"}},
+    {"id":"Q-multiple-time-fields","entity_keys":[["customer_id"]],"grain":["customer_id","event_time"],"technical_times":{"ingested_at":"INGESTION_TIMESTAMP","processed_at":"PROCESSING_TIMESTAMP"},"roles":{"customer_id":"ENTITY_KEY_CANDIDATE","event_time":"TIME_DIMENSION","ingested_at":"TIME_DIMENSION","processed_at":"TIME_DIMENSION","metric":"MEASURE_CANDIDATE"}},
+    {"id":"R-stable-functional-dependency","entity_keys":[["customer_id"]],"grain":["customer_id","period"],"functional_dependencies":[{"determinant":"customer_id","dependent":"region"}],"roles":{"customer_id":"ENTITY_KEY_CANDIDATE","region":"DIMENSION_CANDIDATE","period":"TIME_DIMENSION","metric":"MEASURE_CANDIDATE"}},
+    {"id":"S-changing-dimension","entity_keys":[["customer_id"]],"grain":["customer_id","period"],"forbidden_functional_dependencies":[{"determinant":"customer_id","dependent":"region"}],"roles":{"customer_id":"ENTITY_KEY_CANDIDATE","region":"DIMENSION_CANDIDATE","period":"TIME_DIMENSION","metric":"MEASURE_CANDIDATE"}},
+    {"id":"T-high-cardinality-category","entity_keys":[],"grain":["period","referrer"],"roles":{"referrer":"DIMENSION_CANDIDATE","period":"TIME_DIMENSION","visits":"MEASURE_CANDIDATE"}},
+    {"id":"U-low-cardinality-entity","entity_keys":[["device_id"]],"grain":["device_id","period"],"roles":{"device_id":"ENTITY_KEY_CANDIDATE","period":"TIME_DIMENSION","measurement":"MEASURE_CANDIDATE"}},
+    {"id":"V-no-semantic-signal","entity_keys":[],"grain":[],"abstain_entity":true,"abstain_grain":true},
+    {"id":"W-authoritative-metadata","entity_keys":[["a"]],"grain":["a","t"],"metadata_expected":true,"roles":{"a":"ENTITY_KEY_CANDIDATE","t":"TIME_DIMENSION","x":"MEASURE_CANDIDATE"}},
+    {"id":"X-misleading-name","entity_keys":[["user_id"]],"event_keys":[["event_id"]],"grain":["event_id"],"forbidden_entities":[["customer_id"]],"roles":{"customer_id":"CANDIDATE_KEY","event_id":"EVENT_KEY_CANDIDATE","user_id":"ENTITY_KEY_CANDIDATE","event_time":"TIME_DIMENSION","event_type":"DIMENSION_CANDIDATE","amount":"MEASURE_CANDIDATE"}}
+  ]
+}

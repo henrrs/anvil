@@ -11,19 +11,21 @@ from .errors import AnalysisError
 IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,63}$")
 DEPTHS = {"FAST", "STANDARD", "DEEP"}
 CONFIDENCE = {"HIGH", "MEDIUM", "LOW", "UNKNOWN"}
-ROLES = {"identifier", "temporal_dimension", "dimension", "measure", "rate", "status", "unknown"}
-EPISTEMIC_TYPES = {"OBSERVED", "DERIVED", "INTERPRETED", "HYPOTHESIS", "UNKNOWN"}
+ROLES = {"identifier", "entity", "entity_key", "event", "event_key", "candidate_key",
+         "observation_grain", "relationship", "temporal_dimension", "dimension", "measure",
+         "rate", "status", "unknown"}
+EPISTEMIC_TYPES = {"OBSERVED", "DERIVED", "SUPPORTED", "INTERPRETED", "INFERRED", "HYPOTHESIS", "UNKNOWN"}
 MATERIALITY_LEVELS = {"HIGH", "MEDIUM", "LOW", "UNKNOWN"}
 OPERATIONS = {
     "count", "distinct_count", "sum", "mean", "median", "percentile", "min", "max",
     "ratio", "share", "delta", "delta_percent", "delta_percentage_points", "rank",
     "top_n", "bottom_n", "distribution", "trend", "volatility", "coverage", "cohort",
-    "concentration", "correlation",
+    "concentration", "correlation", "contribution", "composition",
 }
 _AGGREGATES = {"count", "sum", "mean", "median", "min", "max"}
 _PLAN_FIELDS = {
-    "id", "operation", "column", "group_by", "percentile", "limit", "period_column",
-    "baseline", "current", "aggregate", "entity_column", "numerator", "denominator",
+    "id", "operation", "column", "columns", "group_by", "percentile", "limit", "period_column",
+    "baseline", "current", "aggregate", "entity_column", "entity_columns", "improvement_direction", "numerator", "denominator",
     "x_column", "y_column", "unit", "numerator_unit", "denominator_unit", "result_unit",
 }
 
@@ -166,6 +168,17 @@ def validate_analysis_plan(raw: Any) -> dict[str, Any]:
         for field in ("column", "period_column", "entity_column", "numerator", "denominator", "x_column", "y_column"):
             if field in item:
                 result[field] = _text(item[field], f"operations[{index}].{field}", maximum=240)
+        for field in ("columns", "entity_columns"):
+            if field in item:
+                values = _text_list(item[field], f"operations[{index}].{field}", maximum=3, item_maximum=240)
+                if not values or len(values) != len(set(values)):
+                    raise AnalysisError("CONTRACT_INVALID", f"operations[{index}].{field} must contain unique column names.")
+                result[field] = values
+        if "improvement_direction" in item:
+            direction = item["improvement_direction"]
+            if direction not in {"increase", "decrease"}:
+                raise AnalysisError("CONTRACT_INVALID", "improvement_direction must be increase or decrease.")
+            result["improvement_direction"] = direction
         for field in ("unit", "numerator_unit", "denominator_unit", "result_unit"):
             if field in item:
                 result[field] = _text(item[field], f"operations[{index}].{field}", maximum=80)
@@ -189,23 +202,28 @@ def validate_analysis_plan(raw: Any) -> dict[str, Any]:
             if item["aggregate"] not in _AGGREGATES:
                 raise AnalysisError("CONTRACT_INVALID", "aggregate must be count, sum, mean, median, min, or max.")
             result["aggregate"] = item["aggregate"]
+        if operation == "contribution" and result.get("aggregate", "sum") not in {"sum", "count"}:
+            raise AnalysisError("CONTRACT_INVALID", "contribution requires an additive sum or non-null count aggregation.")
         if operation == "percentile" and "percentile" not in result:
             raise AnalysisError("CONTRACT_INVALID", "percentile operation requires percentile.")
         if operation in {"top_n", "bottom_n", "rank", "concentration"} and "limit" not in result:
             result["limit"] = 10
-        if operation in {"delta", "delta_percent", "delta_percentage_points", "trend", "cohort"}:
+        if operation in {"delta", "delta_percent", "delta_percentage_points", "trend", "cohort", "contribution", "composition"}:
             for field in ("period_column",):
                 if field not in result:
                     raise AnalysisError("CONTRACT_INVALID", f"{operation} requires {field}.")
-        if operation in {"delta", "delta_percent", "delta_percentage_points", "cohort"}:
+        if operation in {"delta", "delta_percent", "delta_percentage_points", "cohort", "contribution", "composition"}:
             if "baseline" not in item or "current" not in item:
                 raise AnalysisError("CONTRACT_INVALID", f"{operation} requires baseline and current period values.")
             if isinstance(item["baseline"], (dict, list)) or isinstance(item["current"], (dict, list)):
                 raise AnalysisError("CONTRACT_INVALID", f"{operation} period values must be scalar.")
             result["baseline"] = item["baseline"]
             result["current"] = item["current"]
-        if operation == "cohort" and "entity_column" not in result:
-            raise AnalysisError("CONTRACT_INVALID", "cohort requires entity_column.")
+        if operation == "cohort":
+            if ("entity_column" in result) == ("entity_columns" in result):
+                raise AnalysisError("CONTRACT_INVALID", "cohort requires exactly one of entity_column or entity_columns.")
+        elif "entity_column" in result or "entity_columns" in result or "improvement_direction" in result:
+            raise AnalysisError("CONTRACT_INVALID", "entity columns and improvement_direction are supported only by cohort.")
         if operation == "ratio" and not {"numerator", "denominator"} <= result.keys():
             raise AnalysisError("CONTRACT_INVALID", "ratio requires numerator and denominator columns.")
         if operation == "ratio":
@@ -222,9 +240,12 @@ def validate_analysis_plan(raw: Any) -> dict[str, Any]:
             raise AnalysisError("CONTRACT_INVALID", "coverage with an eligible denominator requires an observed count column.")
         if operation == "correlation" and not {"x_column", "y_column"} <= result.keys():
             raise AnalysisError("CONTRACT_INVALID", "correlation requires x_column and y_column.")
-        if operation not in {"count", "ratio", "correlation", "cohort"} and "column" not in result:
+        if operation == "distinct_count":
+            if ("column" in result) == ("columns" in result):
+                raise AnalysisError("CONTRACT_INVALID", "distinct_count requires exactly one of column or columns.")
+        elif operation not in {"count", "ratio", "correlation", "cohort", "composition"} and "column" not in result:
             raise AnalysisError("CONTRACT_INVALID", f"{operation} requires column.")
-        if operation in {"share", "top_n", "bottom_n", "rank", "concentration"} and not result["group_by"]:
+        if operation in {"share", "top_n", "bottom_n", "rank", "concentration", "contribution", "composition"} and not result["group_by"]:
             raise AnalysisError("CONTRACT_INVALID", f"{operation} requires at least one group_by dimension.")
         operations.append(result)
     budgets = raw.get("budgets", {})

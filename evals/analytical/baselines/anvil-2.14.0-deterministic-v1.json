@@ -1,0 +1,977 @@
+{
+  "baseline_id": "anvil-2.14.0-deterministic-v1",
+  "candidate": {
+    "anvil_version": "2.14.0",
+    "git_revision": "59d5b0af52c3649ac515bbdbbea2b1f1c2b1b8c3",
+    "source_fingerprint": {
+      "VERSION": "36f3b0aa0b0b23b4fd1023df32f7f243ad1e83d1970b435b5bb3a431379ecbd6",
+      "config/AGENTS.md": "0b9f9df58dd4425194dcf347a843003bcf89236a8e1f3d469682ae0789752ad5",
+      "config/opencode.jsonc": "b0288d1ef41208ce6c5d14854e80f756c386491dccdbef796660f0e485a0d03c",
+      "config/runtimes/opencode-v1.jsonc": "4a09493a258ca31535a458f5659c7ad741a9623e4cb7f8b71f50a3a7af628c03",
+      "config/skills/anvil-communication/SKILL.md": "5f93b6231ee7d4bb91b4bdf87c092dfc696289043b582b85dc0d2898c3f436ee",
+      "evals/analytical/__init__.py": "9fc33ccbac8492464f400993edb49398e1a866deff39b9a6a3543ea324d2ebed",
+      "evals/analytical/aggregation.py": "a67daf61c0055a9a8b39c8eae91806d3d7aacdac78ecd641b58ce17368733e2f",
+      "evals/analytical/cli.py": "43287b84ef625f08045994ceedacc2bb6b9c2b741b14428b5b32dac6052a006f",
+      "evals/analytical/contracts.py": "b3f7dc23de67c1e3a485072c0b3fdcc57911d6aab2f4011a832d5dacb22f480f",
+      "evals/analytical/evaluator.py": "43bfa0d59d41c5cb9a453c624a341c5d68c1b162452265b5ec73aabb1b717bda",
+      "evals/analytical/fixtures.py": "ba55a86be55c1a8a7a4ca8344b872b4ba9bc40594a2770dbbb4883bce28caee6",
+      "evals/analytical/fixtures/operations-v1.csv": "16783547d2608134f2634a1a7397ac7ac198257800302add17264d9cf1c1dc69",
+      "evals/analytical/fixtures/services-v1.csv": "8a409b476532228ce72c0fad9b8820593f5d251dc8f88c82006b870692fca291",
+      "evals/analytical/fixtures/traps/changing-cohort.csv": "97bba508abd6e3db5bb5b1b3a667a01addda5cea308e500e9ef248bff2c149f1",
+      "evals/analytical/fixtures/traps/composite-entity.csv": "ee26b72e8f268b4a07c74ae6a785ad13a4d83bd2118c89b9180c8350432ea43b",
+      "evals/analytical/fixtures/traps/correlation-no-causality.csv": "6c83f2962129efd75e2b04141c4d61474097bd27e7bcb2af1197657dabbd0bdd",
+      "evals/analytical/fixtures/traps/events-users.csv": "ad33f35083fe17729eeb6fd2cd943fcadfed2fe2ef6ffa20daf00f1ca82f6f6d",
+      "evals/analytical/fixtures/traps/rows-entities.csv": "4531888aedf0f05ca875a9e7a69e5f47ef13a15a72d7e360cdd5b6db78e26af8",
+      "evals/analytical/fixtures/traps/stable-average-tails.csv": "724bf8517fe61b371e8060ca35ab2813c8229e250912b3ce87541d64a456dc07",
+      "evals/analytical/fixtures/traps/two-periods.csv": "eaa8eb35cefe62a607f45b4c64728299e7668ce561030e2477a22b91cb8f51b3",
+      "evals/analytical/ground_truth/operations-v1.json": "647e09c52838214c60dc5c1c979432762338d98a14268ad4d23c2c1556c46365",
+      "evals/analytical/ground_truth/services-v1.json": "aa007314b91da2ee80dcc457dd9e299bd91edbd69f9626de5f7e02af17b4c31f",
+      "evals/analytical/model_runner.py": "1f4d288b39dd874c121d13fadfeb0089f5eb911d1324b4c7957c0fed9b3ff887",
+      "evals/analytical/parity.py": "208e04e01c595d6762721e77ccd62def6e501e1cfce737d7acdf45ac377140f4",
+      "evals/analytical/performance.py": "47d84612ab84689de5b392b01a0c69c99b5b02b6ba5de0d9ae9fc02b81003d22",
+      "evals/analytical/prompts/blind-analysis-v1.0.md": "ed3e4e877bf6b290bc21904c1d12378118aefa87f899dcc08280a638a0b3646b",
+      "evals/analytical/review.py": "1d13ec9df6d1e14c15c0453280d58272a3950feb6118fb336ee95be7655e351a",
+      "evals/analytical/test_harness.py": "fd3e0ccfbb530476237631579d1ec6a9f39274b67f67fc72c7043264890a1d1d",
+      "scripts/analysis/__init__.py": "cadaaf2c9c5caad914e24dbc150fbd0845a207e5165d0384036f871345a16feb",
+      "scripts/analysis/contracts.py": "7b6e7a321482deeaa3973e76789fbf3077e235300188a3e59220c7afceba5cf9",
+      "scripts/analysis/errors.py": "acbe2e28bd7752454953b8326f550aa66e58b1e0f9c24ed27b58c67d2eb60da6",
+      "scripts/analysis/findings.py": "d1f4ac1b19d285489def72710f35055f314d0129f3b713d0f60e9211fd769d3f",
+      "scripts/analysis/investigation.py": "cc75c0f48cdade489df13c3492f1c94f1716ececcbbacb758de7074ac27c3b2c",
+      "scripts/analysis/primitives.py": "2802501dc7576d72a8a51917ca1ac5f7ed3b6c228463c0d618211864795db0c8",
+      "scripts/analysis/profiling.py": "3a1f38553599aff9f5f68ad1042b1ef0f9b05010a3c52e8b4e3c023a41571759",
+      "scripts/analysis/semantic.py": "f30b2d203b621e8e840de63db9d615d3619ca932a7b7b93f08f66116d161d392",
+      "scripts/analysis/statistics.py": "0f1e59eaea1b81210410c588443d89b3b8f370d023fc94234d7ef7eeada292b6",
+      "scripts/communication/__init__.py": "721301cc83960ac9b7e664a34069cc7cddfca2ddef64547af54d3e546f7bc8cd",
+      "scripts/communication/analysis_adapter.py": "a7a07a946a70f0e9ebdea33d4579cab322efa8c51633e46073401ed801930de2",
+      "scripts/communication/cli.py": "6acb465779ad9973e99d88e0fbddecd3252219fa90a86901fbb41a80163dbd77",
+      "scripts/communication/contracts.py": "5ec017f70b05ab1996b6245cbb8f3976d6c46d70b81c3a954e608797f29d11c2",
+      "scripts/communication/diagrams.py": "1ee3f16263cec4d7cd1f754b2152f20ebc283c2bb5c1fabf3db1ac2c75ff6808",
+      "scripts/communication/editorial.py": "8ac606d540d4ad37a180f43357f530dfd436e820475971dd0b6bbb195cccc7f6",
+      "scripts/communication/errors.py": "5d4f07bdea86abd8a483ba418a37da6f95847c084acbee0d39471b78c474578c",
+      "scripts/communication/inputs.py": "b2bf773b9f47be0391dbcd3ba8fd386a2a5c2d37b6facbc43af6d61cba7ff88e",
+      "scripts/communication/materialize.py": "4c85330c7a80e9b37d85e2712d9e4ee83beb3c8c1f9dda1af2c7deea27664286",
+      "scripts/communication/planning.py": "e3bd60e096841988d300006ef582a9982c12a9b7191caaf8c19a1c381fdf731f",
+      "scripts/communication/quantitative.py": "d7178163eb6839b3d973e8f22f8652a9a3b5b07183c0e58603df375ace6da5cd",
+      "scripts/communication/review.py": "d8d1f41de68ba0f2c0700d83f3a5ebf0e9c21f826a7e704597fa0e4b491c3aee"
+    }
+  },
+  "fixture_version": "1.0.0",
+  "frozen_at_utc": "2026-10-31T15:37:43.889412+00:00",
+  "historical_2_13": {
+    "depths": {
+      "DEEP": {
+        "execution_median_ms": 154.859,
+        "operations": 20,
+        "profile_median_ms": 70.789,
+        "samples_ms": [
+          221.865,
+          225.66,
+          223.798,
+          228.324,
+          228.539
+        ],
+        "total_median_ms": 225.66
+      },
+      "FAST": {
+        "execution_median_ms": 76.383,
+        "operations": 4,
+        "profile_median_ms": 70.818,
+        "samples_ms": [
+          157.385,
+          148.436,
+          144.838,
+          146.585,
+          147.667
+        ],
+        "total_median_ms": 147.667
+      },
+      "STANDARD": {
+        "execution_median_ms": 115.185,
+        "operations": 12,
+        "profile_median_ms": 71.097,
+        "samples_ms": [
+          186.128,
+          184.953,
+          186.239,
+          186.681,
+          188.073
+        ],
+        "total_median_ms": 186.239
+      }
+    },
+    "fixture": {
+      "columns": 2,
+      "rows": 10000
+    },
+    "repetitions": 5,
+    "revision": "59d5b0af52c3649ac515bbdbbea2b1f1c2b1b8c3",
+    "status": "COMPLETE",
+    "version": "2.13.0"
+  },
+  "immutable": true,
+  "performance": {
+    "depths": {
+      "DEEP": {
+        "cpu_ms": {
+          "execution_median": 155.142,
+          "profile_median": 107.478,
+          "total_median": 262.425
+        },
+        "execute_plan_including_second_scan": {
+          "max_ms": 157.781,
+          "median_ms": 155.175,
+          "min_ms": 153.001,
+          "p95_ms": 156.691,
+          "samples_ms": [
+            153.001,
+            154.947,
+            155.175,
+            156.691,
+            157.781
+          ]
+        },
+        "operations": 20,
+        "profile": {
+          "max_ms": 108.426,
+          "median_ms": 107.482,
+          "min_ms": 106.548,
+          "p95_ms": 107.674,
+          "samples_ms": [
+            106.548,
+            107.43,
+            107.482,
+            107.674,
+            108.426
+          ]
+        },
+        "total": {
+          "max_ms": 266.216,
+          "median_ms": 262.437,
+          "min_ms": 260.683,
+          "p95_ms": 264.129,
+          "samples_ms": [
+            260.683,
+            261.732,
+            262.437,
+            264.129,
+            266.216
+          ]
+        }
+      },
+      "FAST": {
+        "cpu_ms": {
+          "execution_median": 78.328,
+          "profile_median": 108.437,
+          "total_median": 186.523
+        },
+        "execute_plan_including_second_scan": {
+          "max_ms": 79.271,
+          "median_ms": 78.328,
+          "min_ms": 75.487,
+          "p95_ms": 78.524,
+          "samples_ms": [
+            75.487,
+            78.283,
+            78.328,
+            78.524,
+            79.271
+          ]
+        },
+        "operations": 4,
+        "profile": {
+          "max_ms": 113.961,
+          "median_ms": 108.457,
+          "min_ms": 107.272,
+          "p95_ms": 110.963,
+          "samples_ms": [
+            107.272,
+            108.02,
+            108.457,
+            110.963,
+            113.961
+          ]
+        },
+        "total": {
+          "max_ms": 192.304,
+          "median_ms": 186.552,
+          "min_ms": 186.459,
+          "p95_ms": 186.748,
+          "samples_ms": [
+            186.459,
+            186.551,
+            186.552,
+            186.748,
+            192.304
+          ]
+        }
+      },
+      "STANDARD": {
+        "cpu_ms": {
+          "execution_median": 115.872,
+          "profile_median": 107.311,
+          "total_median": 223.185
+        },
+        "execute_plan_including_second_scan": {
+          "max_ms": 117.863,
+          "median_ms": 115.886,
+          "min_ms": 115.166,
+          "p95_ms": 116.206,
+          "samples_ms": [
+            115.166,
+            115.255,
+            115.886,
+            116.206,
+            117.863
+          ]
+        },
+        "operations": 12,
+        "profile": {
+          "max_ms": 107.374,
+          "median_ms": 107.314,
+          "min_ms": 106.994,
+          "p95_ms": 107.352,
+          "samples_ms": [
+            106.994,
+            107.244,
+            107.314,
+            107.352,
+            107.374
+          ]
+        },
+        "total": {
+          "max_ms": 225.224,
+          "median_ms": 223.209,
+          "min_ms": 222.489,
+          "p95_ms": 223.269,
+          "samples_ms": [
+            222.489,
+            222.507,
+            223.209,
+            223.269,
+            225.224
+          ]
+        }
+      }
+    },
+    "fast_path_investigation": {
+      "action": "Retain safeguards; use the stage evidence for a controlled optimization experiment.",
+      "classification": "MIXED",
+      "evidence": {
+        "2_13_execute_median_ms": 76.383,
+        "2_13_profile_median_ms": 70.818,
+        "2_13_total_median_ms": 147.667,
+        "2_14_execute_median_ms": 78.328,
+        "2_14_profile_median_ms": 108.457,
+        "2_14_total_median_ms": 186.552,
+        "semantic_inference_median_ms": 36.58,
+        "semantic_inference_share_of_total_regression": 0.941,
+        "total_regression_ms": 38.885
+      },
+      "reasoning": "Measured stage changes do not isolate the FAST regression to semantic inference."
+    },
+    "fixture": {
+      "columns": 2,
+      "generator": "segment,value; i%10 and i%97",
+      "rows": 10000
+    },
+    "model_calls": 0,
+    "profile_stage_attribution": {
+      "note": "Attribution is measured inside profiling; it is not an ablation or proof all measured work is necessary.",
+      "semantic_inference_median_ms": 36.58,
+      "semantic_inference_median_ms_by_depth": {
+        "DEEP": 36.873,
+        "FAST": 36.58,
+        "STANDARD": 36.666
+      },
+      "semantic_inference_share_of_FAST_profile": 0.3373
+    },
+    "repetitions": 5,
+    "tokens": {
+      "input": 0,
+      "output": 0
+    },
+    "tool_calls": 0
+  },
+  "prompt_version": "blind-analysis-v1.0",
+  "results": [
+    {
+      "evaluation": {
+        "candidate": {
+          "anvil_version": "2.14.0",
+          "git_revision": "59d5b0af52c3649ac515bbdbbea2b1f1c2b1b8c3",
+          "source_fingerprint": {
+            "VERSION": "36f3b0aa0b0b23b4fd1023df32f7f243ad1e83d1970b435b5bb3a431379ecbd6",
+            "config/AGENTS.md": "0b9f9df58dd4425194dcf347a843003bcf89236a8e1f3d469682ae0789752ad5",
+            "config/opencode.jsonc": "b0288d1ef41208ce6c5d14854e80f756c386491dccdbef796660f0e485a0d03c",
+            "config/runtimes/opencode-v1.jsonc": "4a09493a258ca31535a458f5659c7ad741a9623e4cb7f8b71f50a3a7af628c03",
+            "config/skills/anvil-communication/SKILL.md": "5f93b6231ee7d4bb91b4bdf87c092dfc696289043b582b85dc0d2898c3f436ee",
+            "evals/analytical/__init__.py": "9fc33ccbac8492464f400993edb49398e1a866deff39b9a6a3543ea324d2ebed",
+            "evals/analytical/aggregation.py": "a67daf61c0055a9a8b39c8eae91806d3d7aacdac78ecd641b58ce17368733e2f",
+            "evals/analytical/cli.py": "43287b84ef625f08045994ceedacc2bb6b9c2b741b14428b5b32dac6052a006f",
+            "evals/analytical/contracts.py": "b3f7dc23de67c1e3a485072c0b3fdcc57911d6aab2f4011a832d5dacb22f480f",
+            "evals/analytical/evaluator.py": "43bfa0d59d41c5cb9a453c624a341c5d68c1b162452265b5ec73aabb1b717bda",
+            "evals/analytical/fixtures.py": "ba55a86be55c1a8a7a4ca8344b872b4ba9bc40594a2770dbbb4883bce28caee6",
+            "evals/analytical/fixtures/operations-v1.csv": "16783547d2608134f2634a1a7397ac7ac198257800302add17264d9cf1c1dc69",
+            "evals/analytical/fixtures/services-v1.csv": "8a409b476532228ce72c0fad9b8820593f5d251dc8f88c82006b870692fca291",
+            "evals/analytical/fixtures/traps/changing-cohort.csv": "97bba508abd6e3db5bb5b1b3a667a01addda5cea308e500e9ef248bff2c149f1",
+            "evals/analytical/fixtures/traps/composite-entity.csv": "ee26b72e8f268b4a07c74ae6a785ad13a4d83bd2118c89b9180c8350432ea43b",
+            "evals/analytical/fixtures/traps/correlation-no-causality.csv": "6c83f2962129efd75e2b04141c4d61474097bd27e7bcb2af1197657dabbd0bdd",
+            "evals/analytical/fixtures/traps/events-users.csv": "ad33f35083fe17729eeb6fd2cd943fcadfed2fe2ef6ffa20daf00f1ca82f6f6d",
+            "evals/analytical/fixtures/traps/rows-entities.csv": "4531888aedf0f05ca875a9e7a69e5f47ef13a15a72d7e360cdd5b6db78e26af8",
+            "evals/analytical/fixtures/traps/stable-average-tails.csv": "724bf8517fe61b371e8060ca35ab2813c8229e250912b3ce87541d64a456dc07",
+            "evals/analytical/fixtures/traps/two-periods.csv": "eaa8eb35cefe62a607f45b4c64728299e7668ce561030e2477a22b91cb8f51b3",
+            "evals/analytical/ground_truth/operations-v1.json": "647e09c52838214c60dc5c1c979432762338d98a14268ad4d23c2c1556c46365",
+            "evals/analytical/ground_truth/services-v1.json": "aa007314b91da2ee80dcc457dd9e299bd91edbd69f9626de5f7e02af17b4c31f",
+            "evals/analytical/model_runner.py": "1f4d288b39dd874c121d13fadfeb0089f5eb911d1324b4c7957c0fed9b3ff887",
+            "evals/analytical/parity.py": "208e04e01c595d6762721e77ccd62def6e501e1cfce737d7acdf45ac377140f4",
+            "evals/analytical/performance.py": "47d84612ab84689de5b392b01a0c69c99b5b02b6ba5de0d9ae9fc02b81003d22",
+            "evals/analytical/prompts/blind-analysis-v1.0.md": "ed3e4e877bf6b290bc21904c1d12378118aefa87f899dcc08280a638a0b3646b",
+            "evals/analytical/review.py": "1d13ec9df6d1e14c15c0453280d58272a3950feb6118fb336ee95be7655e351a",
+            "evals/analytical/test_harness.py": "fd3e0ccfbb530476237631579d1ec6a9f39274b67f67fc72c7043264890a1d1d",
+            "scripts/analysis/__init__.py": "cadaaf2c9c5caad914e24dbc150fbd0845a207e5165d0384036f871345a16feb",
+            "scripts/analysis/contracts.py": "7b6e7a321482deeaa3973e76789fbf3077e235300188a3e59220c7afceba5cf9",
+            "scripts/analysis/errors.py": "acbe2e28bd7752454953b8326f550aa66e58b1e0f9c24ed27b58c67d2eb60da6",
+            "scripts/analysis/findings.py": "d1f4ac1b19d285489def72710f35055f314d0129f3b713d0f60e9211fd769d3f",
+            "scripts/analysis/investigation.py": "cc75c0f48cdade489df13c3492f1c94f1716ececcbbacb758de7074ac27c3b2c",
+            "scripts/analysis/primitives.py": "2802501dc7576d72a8a51917ca1ac5f7ed3b6c228463c0d618211864795db0c8",
+            "scripts/analysis/profiling.py": "3a1f38553599aff9f5f68ad1042b1ef0f9b05010a3c52e8b4e3c023a41571759",
+            "scripts/analysis/semantic.py": "f30b2d203b621e8e840de63db9d615d3619ca932a7b7b93f08f66116d161d392",
+            "scripts/analysis/statistics.py": "0f1e59eaea1b81210410c588443d89b3b8f370d023fc94234d7ef7eeada292b6",
+            "scripts/communication/__init__.py": "721301cc83960ac9b7e664a34069cc7cddfca2ddef64547af54d3e546f7bc8cd",
+            "scripts/communication/analysis_adapter.py": "a7a07a946a70f0e9ebdea33d4579cab322efa8c51633e46073401ed801930de2",
+            "scripts/communication/cli.py": "6acb465779ad9973e99d88e0fbddecd3252219fa90a86901fbb41a80163dbd77",
+            "scripts/communication/contracts.py": "5ec017f70b05ab1996b6245cbb8f3976d6c46d70b81c3a954e608797f29d11c2",
+            "scripts/communication/diagrams.py": "1ee3f16263cec4d7cd1f754b2152f20ebc283c2bb5c1fabf3db1ac2c75ff6808",
+            "scripts/communication/editorial.py": "8ac606d540d4ad37a180f43357f530dfd436e820475971dd0b6bbb195cccc7f6",
+            "scripts/communication/errors.py": "5d4f07bdea86abd8a483ba418a37da6f95847c084acbee0d39471b78c474578c",
+            "scripts/communication/inputs.py": "b2bf773b9f47be0391dbcd3ba8fd386a2a5c2d37b6facbc43af6d61cba7ff88e",
+            "scripts/communication/materialize.py": "4c85330c7a80e9b37d85e2712d9e4ee83beb3c8c1f9dda1af2c7deea27664286",
+            "scripts/communication/planning.py": "e3bd60e096841988d300006ef582a9982c12a9b7191caaf8c19a1c381fdf731f",
+            "scripts/communication/quantitative.py": "d7178163eb6839b3d973e8f22f8652a9a3b5b07183c0e58603df375ace6da5cd",
+            "scripts/communication/review.py": "d8d1f41de68ba0f2c0700d83f3a5ebf0e9c21f826a7e704597fa0e4b491c3aee"
+          }
+        },
+        "created_at_utc": "2026-10-31T15:37:37.571428+00:00",
+        "evaluation_version": "1.0.0",
+        "fixture": {
+          "ground_truth_sha256": "647e09c52838214c60dc5c1c979432762338d98a14268ad4d23c2c1556c46365",
+          "id": "operations-v1",
+          "seed": 21414,
+          "sha256": "16783547d2608134f2634a1a7397ac7ac198257800302add17264d9cf1c1dc69",
+          "version": "1.0.0"
+        },
+        "mode": "DETERMINISTIC",
+        "model": null,
+        "prompt_version": "blind-analysis-v1.0",
+        "run_id": "20261031T153737Z-503d82c7-operations-v1-deterministic",
+        "runtime": null,
+        "status": "DETERMINISTIC_COMPLETE"
+      },
+      "failures": [
+        {
+          "class": "GRAIN",
+          "evidence": {
+            "candidate_grains": [
+              [
+                "event_id"
+              ]
+            ],
+            "expected": [
+              "entity_id",
+              "period",
+              "product"
+            ],
+            "fixture_id": "operations-v1"
+          },
+          "id": "observation-grain",
+          "summary": "The true observation grain is absent from the semantic grain candidates."
+        },
+        {
+          "class": "ENTITY_RESOLUTION",
+          "evidence": {
+            "actual": [
+              "entity_id",
+              "product"
+            ],
+            "expected": [
+              "entity_id"
+            ],
+            "false_positive_candidates": [
+              "product"
+            ],
+            "fixture_id": "operations-v1",
+            "missing": []
+          },
+          "id": "entity-resolution",
+          "summary": "Entity candidates omit a known entity field or promote non-entity dimensions."
+        }
+      ],
+      "levels": {
+        "L1": {
+          "correct": 24,
+          "facts": [
+            {
+              "actual": "320",
+              "correct": true,
+              "evidence_operation": "observation-count",
+              "expected": "320",
+              "fact_id": "observations",
+              "tolerance": "0.000001",
+              "unit": "rows"
+            },
+            {
+              "actual": "8",
+              "correct": true,
+              "evidence_operation": "period-count",
+              "expected": "8",
+              "fact_id": "time_periods",
+              "tolerance": "0.000001",
+              "unit": "periods"
+            },
+            {
+              "actual": "24",
+              "correct": true,
+              "evidence_operation": "entity-count",
+              "expected": "24",
+              "fact_id": "entities_total",
+              "tolerance": "0.000001",
+              "unit": "entities"
+            },
+            {
+              "actual": "320",
+              "correct": true,
+              "evidence_operation": "grain-count",
+              "expected": "320",
+              "fact_id": "composite_observations",
+              "tolerance": "0.000001",
+              "unit": "keys"
+            },
+            {
+              "actual": "20",
+              "correct": true,
+              "evidence_operation": "quality-cohort",
+              "expected": "20",
+              "fact_id": "baseline_population",
+              "tolerance": "0.000001",
+              "unit": "entities"
+            },
+            {
+              "actual": "20",
+              "correct": true,
+              "evidence_operation": "quality-cohort",
+              "expected": "20",
+              "fact_id": "current_population",
+              "tolerance": "0.000001",
+              "unit": "entities"
+            },
+            {
+              "actual": "16",
+              "correct": true,
+              "evidence_operation": "quality-cohort",
+              "expected": "16",
+              "fact_id": "retained_population",
+              "tolerance": "0.000001",
+              "unit": "entities"
+            },
+            {
+              "actual": "4",
+              "correct": true,
+              "evidence_operation": "quality-cohort",
+              "expected": "4",
+              "fact_id": "entrants",
+              "tolerance": "0.000001",
+              "unit": "entities"
+            },
+            {
+              "actual": "4",
+              "correct": true,
+              "evidence_operation": "quality-cohort",
+              "expected": "4",
+              "fact_id": "exits",
+              "tolerance": "0.000001",
+              "unit": "entities"
+            },
+            {
+              "actual": "65.013",
+              "correct": true,
+              "evidence_operation": "quality-period",
+              "expected": "65.013",
+              "fact_id": "quality_mean_base",
+              "tolerance": "0.000001",
+              "unit": "score"
+            },
+            {
+              "actual": "77.6355",
+              "correct": true,
+              "evidence_operation": "quality-period",
+              "expected": "77.6355",
+              "fact_id": "quality_mean_current",
+              "tolerance": "0.000001",
+              "unit": "score"
+            },
+            {
+              "actual": "12.6225",
+              "correct": true,
+              "evidence_operation": "quality-delta",
+              "expected": "12.6225",
+              "fact_id": "quality_delta_reported",
+              "tolerance": "0.000001",
+              "unit": "score"
+            },
+            {
+              "actual": "2.9",
+              "correct": true,
+              "evidence_operation": "quality-cohort",
+              "expected": "2.9",
+              "fact_id": "quality_delta_retained",
+              "tolerance": "0.000001",
+              "unit": "score"
+            },
+            {
+              "actual": "16",
+              "correct": true,
+              "evidence_operation": "quality-cohort",
+              "expected": "16",
+              "fact_id": "quality_breadth",
+              "tolerance": "0.000001",
+              "unit": "entities"
+            },
+            {
+              "actual": "200",
+              "correct": true,
+              "evidence_operation": "response-period",
+              "expected": "200",
+              "fact_id": "response_mean_base",
+              "tolerance": "0.000001",
+              "unit": "ms"
+            },
+            {
+              "actual": "200",
+              "correct": true,
+              "evidence_operation": "response-period",
+              "expected": "200",
+              "fact_id": "response_mean_current",
+              "tolerance": "0.000001",
+              "unit": "ms"
+            },
+            {
+              "actual": "300",
+              "correct": true,
+              "evidence_operation": "response-distribution",
+              "expected": "300",
+              "fact_id": "response_p95_base",
+              "tolerance": "0.000001",
+              "unit": "ms"
+            },
+            {
+              "actual": "850",
+              "correct": true,
+              "evidence_operation": "response-distribution",
+              "expected": "850",
+              "fact_id": "response_p95_current",
+              "tolerance": "0.000001",
+              "unit": "ms"
+            },
+            {
+              "actual": "1",
+              "correct": true,
+              "evidence_operation": "coverage-period",
+              "expected": "1",
+              "fact_id": "coverage_base",
+              "tolerance": "0.000001",
+              "unit": "ratio"
+            },
+            {
+              "actual": "0.4",
+              "correct": true,
+              "evidence_operation": "coverage-period",
+              "expected": "0.4",
+              "fact_id": "coverage_current",
+              "tolerance": "0.000001",
+              "unit": "ratio"
+            },
+            {
+              "actual": "1798",
+              "correct": true,
+              "evidence_operation": "output-period",
+              "expected": "1798",
+              "fact_id": "output_sum_base",
+              "tolerance": "0.000001",
+              "unit": "units"
+            },
+            {
+              "actual": "3872",
+              "correct": true,
+              "evidence_operation": "output-period",
+              "expected": "3872",
+              "fact_id": "output_sum_current",
+              "tolerance": "0.000001",
+              "unit": "units"
+            },
+            {
+              "actual": "0.6386255924170616113744075829",
+              "correct": true,
+              "evidence_operation": "output-contribution",
+              "expected": "0.6386255924170616113744075829",
+              "fact_id": "top_two_contribution",
+              "tolerance": "0.000001",
+              "unit": "ratio"
+            },
+            {
+              "actual": "0.66440010903716231396698103",
+              "correct": true,
+              "evidence_operation": "ambient-quality-correlation",
+              "expected": "0.66440010903716231396698103",
+              "fact_id": "ambient_association",
+              "tolerance": "0.000001",
+              "unit": "correlation"
+            }
+          ],
+          "level": "L1",
+          "score": 1.0,
+          "status": "SCORED",
+          "total": 24
+        },
+        "L2": {
+          "checks": [
+            {
+              "actual": 320,
+              "correct": true,
+              "expected": 320,
+              "id": "observation-cardinality"
+            },
+            {
+              "candidate_grains": [
+                [
+                  "event_id"
+                ]
+              ],
+              "correct": false,
+              "expected": [
+                "entity_id",
+                "period",
+                "product"
+              ],
+              "id": "observation-grain"
+            },
+            {
+              "actual": [
+                "entity_id",
+                "product"
+              ],
+              "correct": false,
+              "expected": [
+                "entity_id"
+              ],
+              "false_positive_candidates": [
+                "product"
+              ],
+              "id": "entity-resolution",
+              "missing": []
+            }
+          ],
+          "correct": 1,
+          "level": "L2",
+          "score": 0.3333333333333333,
+          "status": "SCORED",
+          "total": 3
+        },
+        "L3": {
+          "candidate_findings": 0,
+          "heuristic": {
+            "coverage": null,
+            "matched": [],
+            "missed": [
+              "population-composition",
+              "broad-retained-improvement",
+              "concentrated-output",
+              "stable-mean-worse-tail",
+              "coverage-decline"
+            ],
+            "status": "NOT_RUN"
+          },
+          "material_findings_expected": 5,
+          "material_insight_precision": null,
+          "material_insight_recall": null,
+          "status": "NOT_REVIEWED"
+        },
+        "L4": {
+          "candidate_claims": 0,
+          "claim_calibration": null,
+          "investigation_depth": null,
+          "status": "NOT_REVIEWED",
+          "unsupported_claim_rate": null
+        },
+        "L5": {
+          "communication_fidelity": null,
+          "parity_failures": [],
+          "status": "NOT_AVAILABLE",
+          "surfaces_checked": []
+        }
+      },
+      "metrics": {
+        "claim_calibration": null,
+        "communication_fidelity": null,
+        "material_insight_precision": null,
+        "material_insight_recall": null,
+        "materiality": null,
+        "numerical_correctness": 1.0,
+        "quality_cost_north_star": null,
+        "semantic_correctness": 0.3333333333333333,
+        "semantic_error_rate": 0.6666666666666666,
+        "unsupported_claim_rate": null
+      },
+      "observations": [
+        "Production AnalysisResult has deterministic metrics but no model-generated findings or claims.",
+        "L3-L5 are intentionally unscored until a blind model run and structured human review are available."
+      ],
+      "performance": {},
+      "schema_version": 1
+    },
+    {
+      "evaluation": {
+        "candidate": {
+          "anvil_version": "2.14.0",
+          "git_revision": "59d5b0af52c3649ac515bbdbbea2b1f1c2b1b8c3",
+          "source_fingerprint": {
+            "VERSION": "36f3b0aa0b0b23b4fd1023df32f7f243ad1e83d1970b435b5bb3a431379ecbd6",
+            "config/AGENTS.md": "0b9f9df58dd4425194dcf347a843003bcf89236a8e1f3d469682ae0789752ad5",
+            "config/opencode.jsonc": "b0288d1ef41208ce6c5d14854e80f756c386491dccdbef796660f0e485a0d03c",
+            "config/runtimes/opencode-v1.jsonc": "4a09493a258ca31535a458f5659c7ad741a9623e4cb7f8b71f50a3a7af628c03",
+            "config/skills/anvil-communication/SKILL.md": "5f93b6231ee7d4bb91b4bdf87c092dfc696289043b582b85dc0d2898c3f436ee",
+            "evals/analytical/__init__.py": "9fc33ccbac8492464f400993edb49398e1a866deff39b9a6a3543ea324d2ebed",
+            "evals/analytical/aggregation.py": "a67daf61c0055a9a8b39c8eae91806d3d7aacdac78ecd641b58ce17368733e2f",
+            "evals/analytical/cli.py": "43287b84ef625f08045994ceedacc2bb6b9c2b741b14428b5b32dac6052a006f",
+            "evals/analytical/contracts.py": "b3f7dc23de67c1e3a485072c0b3fdcc57911d6aab2f4011a832d5dacb22f480f",
+            "evals/analytical/evaluator.py": "43bfa0d59d41c5cb9a453c624a341c5d68c1b162452265b5ec73aabb1b717bda",
+            "evals/analytical/fixtures.py": "ba55a86be55c1a8a7a4ca8344b872b4ba9bc40594a2770dbbb4883bce28caee6",
+            "evals/analytical/fixtures/operations-v1.csv": "16783547d2608134f2634a1a7397ac7ac198257800302add17264d9cf1c1dc69",
+            "evals/analytical/fixtures/services-v1.csv": "8a409b476532228ce72c0fad9b8820593f5d251dc8f88c82006b870692fca291",
+            "evals/analytical/fixtures/traps/changing-cohort.csv": "97bba508abd6e3db5bb5b1b3a667a01addda5cea308e500e9ef248bff2c149f1",
+            "evals/analytical/fixtures/traps/composite-entity.csv": "ee26b72e8f268b4a07c74ae6a785ad13a4d83bd2118c89b9180c8350432ea43b",
+            "evals/analytical/fixtures/traps/correlation-no-causality.csv": "6c83f2962129efd75e2b04141c4d61474097bd27e7bcb2af1197657dabbd0bdd",
+            "evals/analytical/fixtures/traps/events-users.csv": "ad33f35083fe17729eeb6fd2cd943fcadfed2fe2ef6ffa20daf00f1ca82f6f6d",
+            "evals/analytical/fixtures/traps/rows-entities.csv": "4531888aedf0f05ca875a9e7a69e5f47ef13a15a72d7e360cdd5b6db78e26af8",
+            "evals/analytical/fixtures/traps/stable-average-tails.csv": "724bf8517fe61b371e8060ca35ab2813c8229e250912b3ce87541d64a456dc07",
+            "evals/analytical/fixtures/traps/two-periods.csv": "eaa8eb35cefe62a607f45b4c64728299e7668ce561030e2477a22b91cb8f51b3",
+            "evals/analytical/ground_truth/operations-v1.json": "647e09c52838214c60dc5c1c979432762338d98a14268ad4d23c2c1556c46365",
+            "evals/analytical/ground_truth/services-v1.json": "aa007314b91da2ee80dcc457dd9e299bd91edbd69f9626de5f7e02af17b4c31f",
+            "evals/analytical/model_runner.py": "1f4d288b39dd874c121d13fadfeb0089f5eb911d1324b4c7957c0fed9b3ff887",
+            "evals/analytical/parity.py": "208e04e01c595d6762721e77ccd62def6e501e1cfce737d7acdf45ac377140f4",
+            "evals/analytical/performance.py": "47d84612ab84689de5b392b01a0c69c99b5b02b6ba5de0d9ae9fc02b81003d22",
+            "evals/analytical/prompts/blind-analysis-v1.0.md": "ed3e4e877bf6b290bc21904c1d12378118aefa87f899dcc08280a638a0b3646b",
+            "evals/analytical/review.py": "1d13ec9df6d1e14c15c0453280d58272a3950feb6118fb336ee95be7655e351a",
+            "evals/analytical/test_harness.py": "fd3e0ccfbb530476237631579d1ec6a9f39274b67f67fc72c7043264890a1d1d",
+            "scripts/analysis/__init__.py": "cadaaf2c9c5caad914e24dbc150fbd0845a207e5165d0384036f871345a16feb",
+            "scripts/analysis/contracts.py": "7b6e7a321482deeaa3973e76789fbf3077e235300188a3e59220c7afceba5cf9",
+            "scripts/analysis/errors.py": "acbe2e28bd7752454953b8326f550aa66e58b1e0f9c24ed27b58c67d2eb60da6",
+            "scripts/analysis/findings.py": "d1f4ac1b19d285489def72710f35055f314d0129f3b713d0f60e9211fd769d3f",
+            "scripts/analysis/investigation.py": "cc75c0f48cdade489df13c3492f1c94f1716ececcbbacb758de7074ac27c3b2c",
+            "scripts/analysis/primitives.py": "2802501dc7576d72a8a51917ca1ac5f7ed3b6c228463c0d618211864795db0c8",
+            "scripts/analysis/profiling.py": "3a1f38553599aff9f5f68ad1042b1ef0f9b05010a3c52e8b4e3c023a41571759",
+            "scripts/analysis/semantic.py": "f30b2d203b621e8e840de63db9d615d3619ca932a7b7b93f08f66116d161d392",
+            "scripts/analysis/statistics.py": "0f1e59eaea1b81210410c588443d89b3b8f370d023fc94234d7ef7eeada292b6",
+            "scripts/communication/__init__.py": "721301cc83960ac9b7e664a34069cc7cddfca2ddef64547af54d3e546f7bc8cd",
+            "scripts/communication/analysis_adapter.py": "a7a07a946a70f0e9ebdea33d4579cab322efa8c51633e46073401ed801930de2",
+            "scripts/communication/cli.py": "6acb465779ad9973e99d88e0fbddecd3252219fa90a86901fbb41a80163dbd77",
+            "scripts/communication/contracts.py": "5ec017f70b05ab1996b6245cbb8f3976d6c46d70b81c3a954e608797f29d11c2",
+            "scripts/communication/diagrams.py": "1ee3f16263cec4d7cd1f754b2152f20ebc283c2bb5c1fabf3db1ac2c75ff6808",
+            "scripts/communication/editorial.py": "8ac606d540d4ad37a180f43357f530dfd436e820475971dd0b6bbb195cccc7f6",
+            "scripts/communication/errors.py": "5d4f07bdea86abd8a483ba418a37da6f95847c084acbee0d39471b78c474578c",
+            "scripts/communication/inputs.py": "b2bf773b9f47be0391dbcd3ba8fd386a2a5c2d37b6facbc43af6d61cba7ff88e",
+            "scripts/communication/materialize.py": "4c85330c7a80e9b37d85e2712d9e4ee83beb3c8c1f9dda1af2c7deea27664286",
+            "scripts/communication/planning.py": "e3bd60e096841988d300006ef582a9982c12a9b7191caaf8c19a1c381fdf731f",
+            "scripts/communication/quantitative.py": "d7178163eb6839b3d973e8f22f8652a9a3b5b07183c0e58603df375ace6da5cd",
+            "scripts/communication/review.py": "d8d1f41de68ba0f2c0700d83f3a5ebf0e9c21f826a7e704597fa0e4b491c3aee"
+          }
+        },
+        "created_at_utc": "2026-10-31T15:37:37.629644+00:00",
+        "evaluation_version": "1.0.0",
+        "fixture": {
+          "ground_truth_sha256": "aa007314b91da2ee80dcc457dd9e299bd91edbd69f9626de5f7e02af17b4c31f",
+          "id": "services-v1",
+          "seed": 21415,
+          "sha256": "8a409b476532228ce72c0fad9b8820593f5d251dc8f88c82006b870692fca291",
+          "version": "1.0.0"
+        },
+        "mode": "DETERMINISTIC",
+        "model": null,
+        "prompt_version": "blind-analysis-v1.0",
+        "run_id": "20261031T153737Z-503d82c7-services-v1-deterministic",
+        "runtime": null,
+        "status": "DETERMINISTIC_COMPLETE"
+      },
+      "failures": [
+        {
+          "class": "ENTITY_RESOLUTION",
+          "evidence": {
+            "actual": [
+              "event_kind",
+              "service_id",
+              "zone"
+            ],
+            "expected": [
+              "service_id"
+            ],
+            "false_positive_candidates": [
+              "event_kind",
+              "zone"
+            ],
+            "fixture_id": "services-v1",
+            "missing": []
+          },
+          "id": "entity-resolution",
+          "summary": "Entity candidates omit a known entity field or promote non-entity dimensions."
+        }
+      ],
+      "levels": {
+        "L1": {
+          "correct": 5,
+          "facts": [
+            {
+              "actual": "290",
+              "correct": true,
+              "evidence_operation": "observation-count",
+              "expected": "290",
+              "fact_id": "observations",
+              "tolerance": "0.000001",
+              "unit": "events"
+            },
+            {
+              "actual": "18",
+              "correct": true,
+              "evidence_operation": "service-count",
+              "expected": "18",
+              "fact_id": "services",
+              "tolerance": "0.000001",
+              "unit": "services"
+            },
+            {
+              "actual": "54",
+              "correct": true,
+              "evidence_operation": "service-zone-count",
+              "expected": "54",
+              "fact_id": "service_zones",
+              "tolerance": "0.000001",
+              "unit": "combinations"
+            },
+            {
+              "actual": "290",
+              "correct": true,
+              "evidence_operation": "event-count",
+              "expected": "290",
+              "fact_id": "event_ids",
+              "tolerance": "0.000001",
+              "unit": "events"
+            },
+            {
+              "actual": "6",
+              "correct": true,
+              "evidence_operation": "period-count",
+              "expected": "6",
+              "fact_id": "time_periods",
+              "tolerance": "0.000001",
+              "unit": "periods"
+            }
+          ],
+          "level": "L1",
+          "score": 1.0,
+          "status": "SCORED",
+          "total": 5
+        },
+        "L2": {
+          "checks": [
+            {
+              "actual": 290,
+              "correct": true,
+              "expected": 290,
+              "id": "observation-cardinality"
+            },
+            {
+              "candidate_grains": [
+                [
+                  "event_id"
+                ]
+              ],
+              "correct": true,
+              "expected": [
+                "event_id"
+              ],
+              "id": "observation-grain"
+            },
+            {
+              "actual": [
+                "event_kind",
+                "service_id",
+                "zone"
+              ],
+              "correct": false,
+              "expected": [
+                "service_id"
+              ],
+              "false_positive_candidates": [
+                "event_kind",
+                "zone"
+              ],
+              "id": "entity-resolution",
+              "missing": []
+            }
+          ],
+          "correct": 2,
+          "level": "L2",
+          "score": 0.6666666666666666,
+          "status": "SCORED",
+          "total": 3
+        },
+        "L3": {
+          "candidate_findings": 0,
+          "heuristic": {
+            "coverage": null,
+            "matched": [],
+            "missed": [
+              "event-vs-service",
+              "composite-service"
+            ],
+            "status": "NOT_RUN"
+          },
+          "material_findings_expected": 2,
+          "material_insight_precision": null,
+          "material_insight_recall": null,
+          "status": "NOT_REVIEWED"
+        },
+        "L4": {
+          "candidate_claims": 0,
+          "claim_calibration": null,
+          "investigation_depth": null,
+          "status": "NOT_REVIEWED",
+          "unsupported_claim_rate": null
+        },
+        "L5": {
+          "communication_fidelity": null,
+          "parity_failures": [],
+          "status": "NOT_AVAILABLE",
+          "surfaces_checked": []
+        }
+      },
+      "metrics": {
+        "claim_calibration": null,
+        "communication_fidelity": null,
+        "material_insight_precision": null,
+        "material_insight_recall": null,
+        "materiality": null,
+        "numerical_correctness": 1.0,
+        "quality_cost_north_star": null,
+        "semantic_correctness": 0.6666666666666666,
+        "semantic_error_rate": 0.3333333333333333,
+        "unsupported_claim_rate": null
+      },
+      "observations": [
+        "Production AnalysisResult has deterministic metrics but no model-generated findings or claims.",
+        "L3-L5 are intentionally unscored until a blind model run and structured human review are available."
+      ],
+      "performance": {},
+      "schema_version": 1
+    }
+  ],
+  "schema_version": 1
+}

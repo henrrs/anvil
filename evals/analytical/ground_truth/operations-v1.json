@@ -1,0 +1,619 @@
+{
+  "fixture": {
+    "id": "operations-v1",
+    "version": "1.0.0",
+    "seed": 21414
+  },
+  "semantics": {
+    "observation_grain": [
+      "entity_id",
+      "period",
+      "product"
+    ],
+    "entity_field": "entity_id",
+    "time_field": "period",
+    "dimensions": [
+      "region",
+      "segment",
+      "product"
+    ],
+    "measures": [
+      "quality_score",
+      "output_units",
+      "response_ms",
+      "covered"
+    ]
+  },
+  "expected_facts": [
+    {
+      "id": "observations",
+      "metric": "observation count",
+      "value": 320,
+      "unit": "rows",
+      "material": true
+    },
+    {
+      "id": "time_periods",
+      "metric": "observed periods",
+      "value": 8,
+      "unit": "periods",
+      "material": true
+    },
+    {
+      "id": "entities_total",
+      "metric": "unique entities represented",
+      "value": 24,
+      "unit": "entities",
+      "material": true
+    },
+    {
+      "id": "composite_observations",
+      "metric": "entity period product grain cardinality",
+      "value": 320,
+      "unit": "keys",
+      "material": true
+    },
+    {
+      "id": "baseline_population",
+      "metric": "baseline population",
+      "value": 20,
+      "unit": "entities",
+      "period": "2025-01",
+      "material": true
+    },
+    {
+      "id": "current_population",
+      "metric": "current population",
+      "value": 20,
+      "unit": "entities",
+      "period": "2025-08",
+      "material": true
+    },
+    {
+      "id": "retained_population",
+      "metric": "retained population",
+      "value": 16,
+      "unit": "entities",
+      "material": true
+    },
+    {
+      "id": "entrants",
+      "metric": "population entrants",
+      "value": 4,
+      "unit": "entities",
+      "material": true
+    },
+    {
+      "id": "exits",
+      "metric": "population exits",
+      "value": 4,
+      "unit": "entities",
+      "material": true
+    },
+    {
+      "id": "quality_mean_base",
+      "metric": "quality score mean baseline",
+      "value": "65.013",
+      "unit": "score",
+      "period": "2025-01",
+      "material": true
+    },
+    {
+      "id": "quality_mean_current",
+      "metric": "quality score mean current",
+      "value": "77.6355",
+      "unit": "score",
+      "period": "2025-08",
+      "material": true
+    },
+    {
+      "id": "quality_delta_reported",
+      "metric": "quality score reported mean change",
+      "value": "12.6225",
+      "unit": "score",
+      "material": true
+    },
+    {
+      "id": "quality_delta_retained",
+      "metric": "quality score retained cohort change",
+      "value": "2.9",
+      "unit": "score",
+      "material": true
+    },
+    {
+      "id": "quality_breadth",
+      "metric": "retained entities with quality improvement",
+      "value": 16,
+      "unit": "entities",
+      "material": true
+    },
+    {
+      "id": "response_mean_base",
+      "metric": "response mean baseline",
+      "value": "200",
+      "unit": "ms",
+      "period": "2025-01",
+      "material": true
+    },
+    {
+      "id": "response_mean_current",
+      "metric": "response mean current",
+      "value": "200",
+      "unit": "ms",
+      "period": "2025-08",
+      "material": true
+    },
+    {
+      "id": "response_p95_base",
+      "metric": "response p95 baseline",
+      "value": "300",
+      "unit": "ms",
+      "period": "2025-01",
+      "material": true
+    },
+    {
+      "id": "response_p95_current",
+      "metric": "response p95 current",
+      "value": "850",
+      "unit": "ms",
+      "period": "2025-08",
+      "material": true
+    },
+    {
+      "id": "coverage_base",
+      "metric": "measurement coverage baseline",
+      "value": "1",
+      "unit": "ratio",
+      "period": "2025-01",
+      "material": true
+    },
+    {
+      "id": "coverage_current",
+      "metric": "measurement coverage current",
+      "value": "0.4",
+      "unit": "ratio",
+      "period": "2025-08",
+      "material": true
+    },
+    {
+      "id": "output_sum_base",
+      "metric": "output units baseline total",
+      "value": "1798",
+      "unit": "units",
+      "period": "2025-01",
+      "material": true
+    },
+    {
+      "id": "output_sum_current",
+      "metric": "output units current total",
+      "value": "3872",
+      "unit": "units",
+      "period": "2025-08",
+      "material": true
+    },
+    {
+      "id": "top_two_contribution",
+      "metric": "top two entity output contribution share",
+      "value": "0.6386255924170616113744075829",
+      "unit": "ratio",
+      "material": true
+    },
+    {
+      "id": "ambient_association",
+      "metric": "ambient index quality score correlation",
+      "value": "0.66440010903716231396698103",
+      "unit": "correlation",
+      "material": false
+    }
+  ],
+  "material_findings": [
+    {
+      "id": "population-composition",
+      "description": "The population changed and the reported quality-score change is materially larger than the retained cohort movement.",
+      "importance": "HIGH",
+      "supporting_facts": [
+        "entrants",
+        "exits",
+        "quality_delta_reported",
+        "quality_delta_retained"
+      ]
+    },
+    {
+      "id": "broad-retained-improvement",
+      "description": "Quality score improves for nearly all retained entities.",
+      "importance": "HIGH",
+      "supporting_facts": [
+        "quality_breadth",
+        "retained_population"
+      ]
+    },
+    {
+      "id": "concentrated-output",
+      "description": "Most absolute output movement comes from a small number of entities.",
+      "importance": "HIGH",
+      "supporting_facts": [
+        "top_two_contribution",
+        "output_sum_base",
+        "output_sum_current"
+      ]
+    },
+    {
+      "id": "stable-mean-worse-tail",
+      "description": "Response mean is stable while its upper tail and median shift materially.",
+      "importance": "HIGH",
+      "supporting_facts": [
+        "response_mean_base",
+        "response_mean_current",
+        "response_p95_base",
+        "response_p95_current"
+      ]
+    },
+    {
+      "id": "coverage-decline",
+      "description": "Measurement coverage falls materially in the current period.",
+      "importance": "MEDIUM",
+      "supporting_facts": [
+        "coverage_base",
+        "coverage_current"
+      ]
+    }
+  ],
+  "acceptable_interpretations": [
+    "Period and population mix are associated with the reported score change; the retained-cohort movement is smaller.",
+    "A few entities dominate output movement, so the aggregate is not broad-based for that measure.",
+    "Response distribution worsened in the upper tail even though its mean is stable."
+  ],
+  "forbidden_claims": [
+    "Ambient index caused quality score change.",
+    "Every entity improved.",
+    "Population was unchanged.",
+    "The quality score change is entirely within-entity improvement."
+  ],
+  "known_ambiguities": [
+    "Field labels are generic synthetic labels and do not establish real business definitions or units.",
+    "Ambient index and quality score share a time pattern; the fixture provides no causal intervention.",
+    "Noise score differences are intentionally irrelevant to material conclusions."
+  ],
+  "evaluation_plan": {
+    "schema_version": 1,
+    "source_sha256": "16783547d2608134f2634a1a7397ac7ac198257800302add17264d9cf1c1dc69",
+    "depth": "DEEP",
+    "primary_question": "What are the most important changes across the observed periods?",
+    "questions": [
+      "How did the measures change?",
+      "Did the represented population or its composition change?",
+      "Did the distribution move beyond its average?"
+    ],
+    "operations": [
+      {
+        "id": "observation-count",
+        "operation": "count"
+      },
+      {
+        "id": "period-count",
+        "operation": "distinct_count",
+        "column": "period"
+      },
+      {
+        "id": "entity-count",
+        "operation": "distinct_count",
+        "column": "entity_id"
+      },
+      {
+        "id": "grain-count",
+        "operation": "distinct_count",
+        "columns": [
+          "entity_id",
+          "period",
+          "product"
+        ]
+      },
+      {
+        "id": "product-count",
+        "operation": "distinct_count",
+        "column": "product"
+      },
+      {
+        "id": "quality-period",
+        "operation": "mean",
+        "column": "quality_score",
+        "group_by": [
+          "period"
+        ]
+      },
+      {
+        "id": "quality-delta",
+        "operation": "delta",
+        "column": "quality_score",
+        "period_column": "period",
+        "baseline": "2025-01-01",
+        "current": "2025-08-01",
+        "aggregate": "mean"
+      },
+      {
+        "id": "quality-cohort",
+        "operation": "cohort",
+        "column": "quality_score",
+        "period_column": "period",
+        "baseline": "2025-01-01",
+        "current": "2025-08-01",
+        "entity_column": "entity_id",
+        "aggregate": "mean"
+      },
+      {
+        "id": "response-period",
+        "operation": "mean",
+        "column": "response_ms",
+        "group_by": [
+          "period"
+        ]
+      },
+      {
+        "id": "response-distribution",
+        "operation": "distribution",
+        "column": "response_ms",
+        "group_by": [
+          "period"
+        ]
+      },
+      {
+        "id": "coverage-period",
+        "operation": "coverage",
+        "column": "covered",
+        "denominator": "eligible",
+        "group_by": [
+          "period"
+        ]
+      },
+      {
+        "id": "output-period",
+        "operation": "sum",
+        "column": "output_units",
+        "group_by": [
+          "period"
+        ]
+      },
+      {
+        "id": "output-contribution",
+        "operation": "contribution",
+        "column": "output_units",
+        "period_column": "period",
+        "baseline": "2025-01-01",
+        "current": "2025-08-01",
+        "group_by": [
+          "entity_id"
+        ],
+        "aggregate": "sum"
+      },
+      {
+        "id": "segment-composition",
+        "operation": "composition",
+        "column": "quality_score",
+        "period_column": "period",
+        "baseline": "2025-01-01",
+        "current": "2025-08-01",
+        "group_by": [
+          "segment"
+        ],
+        "aggregate": "mean"
+      },
+      {
+        "id": "ambient-quality-correlation",
+        "operation": "correlation",
+        "x_column": "ambient_index",
+        "y_column": "quality_score"
+      },
+      {
+        "id": "quality-trend",
+        "operation": "trend",
+        "column": "quality_score",
+        "period_column": "period",
+        "aggregate": "mean"
+      },
+      {
+        "id": "segment-share",
+        "operation": "share",
+        "column": "output_units",
+        "group_by": [
+          "segment"
+        ]
+      }
+    ],
+    "stop_conditions": [
+      "Stop after the declared comparison, cohort, coverage, composition and distribution calculations."
+    ],
+    "budgets": {
+      "max_rows": 50000,
+      "max_groups": 100
+    }
+  },
+  "fact_bindings": {
+    "observations": {
+      "operation": "observation-count",
+      "path": [
+        0,
+        "value"
+      ]
+    },
+    "time_periods": {
+      "operation": "period-count",
+      "path": [
+        0,
+        "value"
+      ]
+    },
+    "entities_total": {
+      "operation": "entity-count",
+      "path": [
+        0,
+        "value"
+      ]
+    },
+    "composite_observations": {
+      "operation": "grain-count",
+      "path": [
+        0,
+        "value"
+      ]
+    },
+    "baseline_population": {
+      "operation": "quality-cohort",
+      "path": [
+        0,
+        "eligible_baseline"
+      ]
+    },
+    "current_population": {
+      "operation": "quality-cohort",
+      "path": [
+        0,
+        "eligible_current"
+      ]
+    },
+    "retained_population": {
+      "operation": "quality-cohort",
+      "path": [
+        0,
+        "common_entities"
+      ]
+    },
+    "entrants": {
+      "operation": "quality-cohort",
+      "path": [
+        0,
+        "added_entities"
+      ]
+    },
+    "exits": {
+      "operation": "quality-cohort",
+      "path": [
+        0,
+        "removed_entities"
+      ]
+    },
+    "quality_mean_base": {
+      "operation": "quality-period",
+      "selector": {
+        "group.period": "2025-01-01"
+      },
+      "path": [
+        "value"
+      ]
+    },
+    "quality_mean_current": {
+      "operation": "quality-period",
+      "selector": {
+        "group.period": "2025-08-01"
+      },
+      "path": [
+        "value"
+      ]
+    },
+    "quality_delta_reported": {
+      "operation": "quality-delta",
+      "path": [
+        0,
+        "delta"
+      ]
+    },
+    "quality_delta_retained": {
+      "operation": "quality-cohort",
+      "path": [
+        0,
+        "like_for_like_delta"
+      ]
+    },
+    "quality_breadth": {
+      "operation": "quality-cohort",
+      "path": [
+        0,
+        "increased_entities"
+      ]
+    },
+    "response_mean_base": {
+      "operation": "response-period",
+      "selector": {
+        "group.period": "2025-01-01"
+      },
+      "path": [
+        "value"
+      ]
+    },
+    "response_mean_current": {
+      "operation": "response-period",
+      "selector": {
+        "group.period": "2025-08-01"
+      },
+      "path": [
+        "value"
+      ]
+    },
+    "response_p95_base": {
+      "operation": "response-distribution",
+      "selector": {
+        "group.period": "2025-01-01"
+      },
+      "path": [
+        "statistics",
+        "p95"
+      ]
+    },
+    "response_p95_current": {
+      "operation": "response-distribution",
+      "selector": {
+        "group.period": "2025-08-01"
+      },
+      "path": [
+        "statistics",
+        "p95"
+      ]
+    },
+    "coverage_base": {
+      "operation": "coverage-period",
+      "selector": {
+        "group.period": "2025-01-01"
+      },
+      "path": [
+        "coverage_ratio"
+      ]
+    },
+    "coverage_current": {
+      "operation": "coverage-period",
+      "selector": {
+        "group.period": "2025-08-01"
+      },
+      "path": [
+        "coverage_ratio"
+      ]
+    },
+    "output_sum_base": {
+      "operation": "output-period",
+      "selector": {
+        "group.period": "2025-01-01"
+      },
+      "path": [
+        "value"
+      ]
+    },
+    "output_sum_current": {
+      "operation": "output-period",
+      "selector": {
+        "group.period": "2025-08-01"
+      },
+      "path": [
+        "value"
+      ]
+    },
+    "top_two_contribution": {
+      "operation": "output-contribution",
+      "aggregate": "top_two_absolute_share"
+    },
+    "ambient_association": {
+      "operation": "ambient-quality-correlation",
+      "path": [
+        0,
+        "pearson_r"
+      ]
+    }
+  }
+}

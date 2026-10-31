@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
-.PHONY: help inspect test reforge upgrade update-runtime migrate-runtime doctor capabilities stats databricks-setup rollback
+.PHONY: help inspect test reforge upgrade update-runtime migrate-runtime doctor capabilities stats databricks-setup rollback eval-analytical eval-analytical-semantic eval-analytical-model eval-analytical-full eval-analytical-baseline eval-analytical-review
 
 VERSION := $(shell cat VERSION 2>/dev/null || printf 'unknown')
 
@@ -19,6 +19,12 @@ help:
 	  'make capabilities  Show features available on the detected runtime.' \
 	  'make stats      Show native stats, or an honest runtime fallback.' \
 	  'make databricks-setup  Configure Databricks; attempts safe CLI install, then SDK fallback.' \
+	  'make eval-analytical  Run offline analytical fixtures, scoring and performance evaluation.' \
+	  'make eval-analytical-semantic  Run adversarial semantic certification and FAST/STANDARD/DEEP benchmark.' \
+	  'make eval-analytical-model MODEL=provider/model RUNS=3  Run blind analysis through installed Anvil.' \
+	  'make eval-analytical-full MODEL=provider/model RUNS=3  Run deterministic and blind model evaluation.' \
+	  'make eval-analytical-baseline  Freeze the complete 2.14 deterministic baseline once.' \
+	  'make eval-analytical-review REPORT=... REVIEW=...  Apply human annotations as a new artifact.' \
 	  '  DRY_RUN=1            Preview providers and auth without changes or network access.' \
 	  '  RESET=1              Replace only Anvil-owned Databricks config after validation.' \
 	  '  OUTPUT=json          Emit structured machine-readable setup results.' \
@@ -60,6 +66,24 @@ stats:
 
 databricks-setup:
 	@python3 scripts/databricks.py setup --format "$(if $(OUTPUT),$(OUTPUT),text)" $(if $(filter 1 true yes,$(VERBOSE)),--verbose,) $(if $(filter 1 true yes,$(DRY_RUN)),--dry-run,) $(if $(filter 1 true yes,$(RESET)),--reset,)
+
+eval-analytical:
+	@python3 -m evals.analytical.cli run --mode deterministic --fixture "$(if $(FIXTURE),$(FIXTURE),all)" $(if $(DATASET),--dataset "$(DATASET)",) $(if $(GROUND_TRUTH),--ground-truth "$(GROUND_TRUTH)",) --benchmark-repetitions "$(if $(EVAL_REPS),$(EVAL_REPS),5)"
+
+eval-analytical-semantic:
+	@python3 -m evals.analytical.cli semantic --benchmark-repetitions "$(if $(EVAL_REPS),$(EVAL_REPS),3)"
+
+eval-analytical-model:
+	@python3 -m evals.analytical.cli run --mode model --fixture "$(if $(FIXTURE),$(FIXTURE),all)" $(if $(DATASET),--dataset "$(DATASET)",) $(if $(GROUND_TRUTH),--ground-truth "$(GROUND_TRUTH)",) --model "$(MODEL)" --runs "$(if $(RUNS),$(RUNS),1)" --benchmark-repetitions "$(if $(EVAL_REPS),$(EVAL_REPS),5)"
+
+eval-analytical-full:
+	@python3 -m evals.analytical.cli run --mode full --fixture "$(if $(FIXTURE),$(FIXTURE),all)" $(if $(DATASET),--dataset "$(DATASET)",) $(if $(GROUND_TRUTH),--ground-truth "$(GROUND_TRUTH)",) --model "$(MODEL)" --runs "$(if $(RUNS),$(RUNS),1)" --benchmark-repetitions "$(if $(EVAL_REPS),$(EVAL_REPS),5)"
+
+eval-analytical-baseline:
+	@python3 -m evals.analytical.cli run --mode deterministic --fixture all --freeze-baseline --benchmark-repetitions "$(if $(EVAL_REPS),$(EVAL_REPS),5)"
+
+eval-analytical-review:
+	@python3 -m evals.analytical.cli review --report "$(REPORT)" --review "$(REVIEW)" $(if $(GROUND_TRUTH),--ground-truth "$(GROUND_TRUTH)",)
 
 rollback:
 	@bash scripts/rollback.sh

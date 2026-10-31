@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections import Counter, defaultdict
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, localcontext
@@ -11,6 +12,8 @@ from typing import Any
 from .contracts import validate_analysis_plan
 from .errors import AnalysisError
 from .profiling import load_rows
+from .semantic import infer_semantic_context, validate_semantic_context
+from .statistics import compare_values, distribution_statistics, quantile
 
 
 MAX_RESULT_BYTES = 5 * 1024 * 1024
@@ -59,17 +62,6 @@ def _numeric(values: list[Any], operation: str) -> list[Decimal]:
     return numbers
 
 
-def _quantile(values: list[Decimal], percentile: Decimal) -> Decimal | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    position = (Decimal(len(ordered) - 1) * percentile) / Decimal(100)
-    lower = int(position)
-    upper = min(lower + 1, len(ordered) - 1)
-    fraction = position - lower
-    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
-
-
 def _aggregate(values: list[Any], operation: str, percentile: Any = 50) -> tuple[str | None, int]:
     present = [value for value in values if value is not None]
     if operation == "count":
@@ -86,9 +78,9 @@ def _aggregate(values: list[Any], operation: str, percentile: Any = 50) -> tuple
         elif operation == "mean":
             value = sum(numbers, Decimal(0)) / Decimal(len(numbers))
         elif operation == "median":
-            value = _quantile(numbers, Decimal(50))
+            value = quantile(numbers, 50)
         elif operation == "percentile":
-            value = _quantile(numbers, Decimal(str(percentile)))
+            value = quantile(numbers, percentile)
         elif operation == "min":
             value = min(numbers)
         elif operation == "max":
@@ -133,7 +125,10 @@ def _records_for_operation(rows: list[dict[str, Any]], operation: dict[str, Any]
     output: list[dict[str, Any]] = []
     if kind in {"count", "distinct_count", "sum", "mean", "median", "percentile", "min", "max", "coverage"}:
         for key, part in groups:
-            values = [row.get(column) for row in part] if column else [True] * len(part)
+            if kind == "distinct_count" and operation.get("columns"):
+                values = [tuple(row.get(name) for name in operation["columns"]) for row in part]
+            else:
+                values = [row.get(column) for row in part] if column else [True] * len(part)
             if kind == "coverage":
                 if "denominator" in operation:
                     count = sum(_numeric(values, "coverage"), Decimal(0))
@@ -162,15 +157,14 @@ def _records_for_operation(rows: list[dict[str, Any]], operation: dict[str, Any]
                 value is None or _decimal(value) is not None for value in values)
             if is_numeric:
                 numeric = [value for value in numbers if value is not None]
-                p25, p50, p75, p90, p95 = (_quantile(numeric, Decimal(p)) for p in (25, 50, 75, 90, 95))
-                iqr = p75 - p25 if p25 is not None and p75 is not None else None
-                low_fence = p25 - Decimal("1.5") * iqr if p25 is not None and iqr is not None else None
-                high_fence = p75 + Decimal("1.5") * iqr if p75 is not None and iqr is not None else None
-                outliers = sum(value < low_fence or value > high_fence for value in numeric) if low_fence is not None and high_fence is not None else 0
-                summary = {"count": len(numeric), "min": _text(min(numeric)), "p25": _text(p25),
-                           "median": _text(p50), "mean": _text(sum(numeric, Decimal(0)) / len(numeric)),
-                           "p75": _text(p75), "p90": _text(p90), "p95": _text(p95), "max": _text(max(numeric)),
-                           "iqr": _text(iqr), "outlier_count_1_5_iqr": outliers}
+                statistics = distribution_statistics(numeric)
+                assert statistics is not None
+                summary = {"count": statistics["count"], "min": statistics["min"],
+                           "p25": statistics["q1"], "median": statistics["median"],
+                           "mean": statistics["mean"], "p75": statistics["q3"],
+                           "p90": statistics["p90"], "p95": statistics["p95"],
+                           "max": statistics["max"], "iqr": statistics["iqr"],
+                           "outlier_count_1_5_iqr": statistics["outlier_count"]}
                 output.append({"group": _group_label(operation.get("group_by", []), key), "kind": "numeric",
                                "statistics": summary, "unit": operation.get("unit", "unknown"), "row_count": len(part),
                                "unknown_count": sum(value is None for value in values)})
@@ -217,7 +211,7 @@ def _records_for_operation(rows: list[dict[str, Any]], operation: dict[str, Any]
                            "unit": operation["result_unit"],
                            "unknown_reason": "zero denominator" if not denominator else None})
         return output
-    if kind in {"delta", "delta_percent", "delta_percentage_points"}:
+    if kind in {"delta", "delta_percent", "delta_percentage_points", "contribution"}:
         period_column = operation["period_column"]
         baseline_rows = [row for row in rows if _key(row.get(period_column)) == _key(operation["baseline"])]
         current_rows = [row for row in rows if _key(row.get(period_column)) == _key(operation["current"])]
@@ -227,13 +221,52 @@ def _records_for_operation(rows: list[dict[str, Any]], operation: dict[str, Any]
         if len(all_keys) > max_groups:
             raise AnalysisError("ANALYSIS_BUDGET_EXCEEDED", "Period comparison exceeded the configured group limit.")
         aggregate = operation.get("aggregate", "sum")
+        if kind == "contribution":
+            total_delta = Decimal(0)
+            deltas: list[dict[str, Any]] = []
+            incomplete = False
+            aggregate = operation.get("aggregate", "sum")
+            for encoded in all_keys:
+                key = (base_groups.get(encoded) or current_groups[encoded])[0]
+                base_part = base_groups.get(encoded)
+                current_part = current_groups.get(encoded)
+                before = (_aggregate([row.get(column) for row in base_part[1]], aggregate)[0]
+                          if base_part else "0")
+                after = (_aggregate([row.get(column) for row in current_part[1]], aggregate)[0]
+                         if current_part else "0")
+                left, right = _decimal(before), _decimal(after)
+                delta = right - left if left is not None and right is not None else None
+                if delta is None:
+                    incomplete = True
+                else:
+                    total_delta += delta
+                deltas.append({"group": _group_label(operation.get("group_by", []), key),
+                               "baseline": before, "current": after, "delta": _text(delta),
+                               "unit": operation.get("unit", "unknown")})
+            absolute_total = sum((abs(_decimal(item["delta"]) or Decimal(0)) for item in deltas), Decimal(0))
+            deltas.sort(key=lambda item: (abs(_decimal(item["delta"]) or Decimal(0)), _key(item["group"])), reverse=True)
+            for item in deltas:
+                delta = _decimal(item["delta"])
+                item["share_of_net_change"] = _text(delta / total_delta) if delta is not None and total_delta else None
+                item["share_of_absolute_change"] = _text(abs(delta) / absolute_total) if delta is not None and absolute_total else None
+                item["unknown_reason"] = ("some grouped values were missing" if delta is None else
+                                           "net change is zero" if not total_delta else None)
+            return [{"groups": deltas, "total_delta": _text(total_delta) if not incomplete else None,
+                     "known_group_delta": _text(total_delta), "absolute_group_delta": _text(absolute_total),
+                     "group_count": len(deltas), "aggregation": aggregate,
+                     "complete": not incomplete,
+                     "warning": ("At least one group had a missing metric value; total contribution is incomplete." if incomplete else
+                                 "Signed contribution shares may exceed 100% in magnitude when groups offset each other.") if incomplete or any(
+                                     abs(_decimal(item["share_of_net_change"]) or Decimal(0)) > 1 for item in deltas) else None}]
+
         for encoded in all_keys:
             key = (base_groups.get(encoded) or current_groups[encoded])[0]
             before = _aggregate([row.get(column) for row in base_groups[encoded][1]], aggregate)[0] if encoded in base_groups else None
             after = _aggregate([row.get(column) for row in current_groups[encoded][1]], aggregate)[0] if encoded in current_groups else None
             left, right = _decimal(before), _decimal(after)
-            delta = right - left if left is not None and right is not None else None
-            relative = delta / left * Decimal(100) if delta is not None and left is not None and left > 0 else None
+            comparison = compare_values(left, right)
+            delta = _decimal(comparison["absolute_change"])
+            relative = _decimal(comparison["relative_change"])
             output.append({"group": _group_label(operation.get("group_by", []), key),
                            "baseline": before, "current": after, "delta": _text(delta),
                            "relative_change": _text(relative),
@@ -242,6 +275,62 @@ def _records_for_operation(rows: list[dict[str, Any]], operation: dict[str, Any]
                            "delta_unit": "percentage_points" if kind == "delta_percentage_points" else operation.get("unit", "unknown"),
                            "unknown_reason": "missing comparison period or non-positive/unknown baseline" if delta is None or (kind == "delta_percent" and relative is None) else None})
         return output
+    if kind == "composition":
+        period_column = operation["period_column"]
+        baseline_rows = [row for row in rows if _key(row.get(period_column)) == _key(operation["baseline"])]
+        current_rows = [row for row in rows if _key(row.get(period_column)) == _key(operation["current"])]
+        dimensions = operation["group_by"]
+        baseline_groups = {_key(key): (key, part) for key, part in _group_rows(baseline_rows, dimensions, max_groups)}
+        current_groups = {_key(key): (key, part) for key, part in _group_rows(current_rows, dimensions, max_groups)}
+        all_keys = sorted(set(baseline_groups) | set(current_groups))
+        if len(all_keys) > max_groups:
+            raise AnalysisError("ANALYSIS_BUDGET_EXCEEDED", "Composition comparison exceeded the configured group limit.")
+        metric_column = operation.get("column")
+        aggregate = operation.get("aggregate", "mean")
+        baseline_total, current_total = len(baseline_rows), len(current_rows)
+        details = []
+        total_variation = Decimal(0)
+        for encoded in all_keys:
+            key = (baseline_groups.get(encoded) or current_groups[encoded])[0]
+            old_part = baseline_groups.get(encoded, (None, []))[1]
+            new_part = current_groups.get(encoded, (None, []))[1]
+            old_share = Decimal(len(old_part)) / baseline_total if baseline_total else None
+            new_share = Decimal(len(new_part)) / current_total if current_total else None
+            share_delta = new_share - old_share if old_share is not None and new_share is not None else None
+            if share_delta is not None:
+                total_variation += abs(share_delta)
+            old_metric, new_metric = None, None
+            old_metric_count, new_metric_count = None, None
+            metric_delta = None
+            if metric_column:
+                old_metric, old_metric_count = _aggregate([row.get(metric_column) for row in old_part], aggregate) if old_part else (None, 0)
+                new_metric, new_metric_count = _aggregate([row.get(metric_column) for row in new_part], aggregate) if new_part else (None, 0)
+                old_value, new_value = _decimal(old_metric), _decimal(new_metric)
+                metric_delta = _text(new_value - old_value) if old_value is not None and new_value is not None else None
+            details.append({"group": _group_label(dimensions, key),
+                            "baseline_count": len(old_part), "current_count": len(new_part),
+                            "baseline_share": _text(old_share), "current_share": _text(new_share),
+                            "share_delta": _text(share_delta), "share_delta_unit": "proportion",
+                            "baseline_metric_count": old_metric_count, "current_metric_count": new_metric_count,
+                            "metric_baseline": old_metric, "metric_current": new_metric,
+                            "metric_delta": metric_delta, "metric_unit": operation.get("unit", "unknown")})
+        overall_old, overall_new, overall_delta = None, None, None
+        overall_old_count, overall_new_count = None, None
+        if metric_column:
+            overall_old, overall_old_count = _aggregate([row.get(metric_column) for row in baseline_rows], aggregate) if baseline_rows else (None, 0)
+            overall_new, overall_new_count = _aggregate([row.get(metric_column) for row in current_rows], aggregate) if current_rows else (None, 0)
+            old_value, new_value = _decimal(overall_old), _decimal(overall_new)
+            overall_delta = _text(new_value - old_value) if old_value is not None and new_value is not None else None
+        return [{"baseline_period": _json_value(operation["baseline"]), "current_period": _json_value(operation["current"]),
+                 "baseline_observation_count": baseline_total, "current_observation_count": current_total,
+                 "groups": details,
+                 "composition_shift": _text(total_variation / 2) if baseline_total and current_total else None,
+                 "composition_shift_unit": "proportion of population mass",
+                 "overall_metric_baseline": overall_old, "overall_metric_current": overall_new,
+                 "overall_metric_delta": overall_delta, "metric_aggregate": aggregate if metric_column else None,
+                 "overall_baseline_metric_count": overall_old_count, "overall_current_metric_count": overall_new_count,
+                 "metric_unit": operation.get("unit", "unknown"),
+                 "warning": "Share movement is descriptive composition evidence; it does not establish causality or decompose the aggregate metric."}]
     if kind == "trend":
         period_column = operation["period_column"]
         period_groups = _group_rows(rows, [period_column] + operation.get("group_by", []), max_groups)
@@ -278,26 +367,59 @@ def _records_for_operation(rows: list[dict[str, Any]], operation: dict[str, Any]
                            "min": _text(min(values)) if values else None, "max": _text(max(values)) if values else None})
         return output
     if kind == "cohort":
-        entity, period = operation["entity_column"], operation["period_column"]
+        entity_fields = operation.get("entity_columns") or [operation["entity_column"]]
+        period = operation["period_column"]
         baseline, current = operation["baseline"], operation["current"]
-        sides: dict[Any, dict[str, list[Any]]] = defaultdict(lambda: {"baseline": [], "current": []})
+        sides: dict[str, dict[str, list[Any]]] = defaultdict(lambda: {"baseline": [], "current": []})
+        unkeyed_rows = 0
         for row in rows:
             target = "baseline" if _key(row.get(period)) == _key(baseline) else "current" if _key(row.get(period)) == _key(current) else None
+            entity_values = tuple(row.get(field) for field in entity_fields)
+            if target and any(value is None for value in entity_values):
+                unkeyed_rows += 1
+                continue
             if target:
-                sides[row.get(entity)][target].append(row.get(column) if column else 1)
-        old = {value for value, part in sides.items() if value is not None and part["baseline"]}
-        new = {value for value, part in sides.items() if value is not None and part["current"]}
+                key = _key(entity_values)
+                sides[key][target].append(row.get(column) if column else 1)
+        old = {value for value, part in sides.items() if part["baseline"]}
+        new = {value for value, part in sides.items() if part["current"]}
         common = old & new
         agg = operation.get("aggregate", "sum")
-        common_base = [value for entity_id in common for value in sides[entity_id]["baseline"]]
-        common_now = [value for entity_id in common for value in sides[entity_id]["current"]]
-        base_value = _aggregate(common_base, agg)[0] if common_base else None
-        current_value = _aggregate(common_now, agg)[0] if common_now else None
+        per_entity: dict[str, dict[str, str | None]] = {}
+        for entity_id in common:
+            before, _ = _aggregate(sides[entity_id]["baseline"], agg)
+            after, _ = _aggregate(sides[entity_id]["current"], agg)
+            per_entity[entity_id] = {"baseline": before, "current": after}
+        measured = [(entity_id, _decimal(values["baseline"]), _decimal(values["current"]))
+                    for entity_id, values in per_entity.items()]
+        comparable = [(entity_id, before, after) for entity_id, before, after in measured
+                      if before is not None and after is not None]
+        common_base = [before for _, before, _ in comparable]
+        common_now = [after for _, _, after in comparable]
+        base_value, _ = _aggregate(common_base, agg) if common_base else (None, 0)
+        current_value, _ = _aggregate(common_now, agg) if common_now else (None, 0)
+        increases = sum(after > before for _, before, after in comparable)
+        decreases = sum(after < before for _, before, after in comparable)
+        unchanged = len(comparable) - increases - decreases
+        improvement_direction = operation.get("improvement_direction")
+        improved = increases if improvement_direction == "increase" else decreases if improvement_direction == "decrease" else None
+        worsened = decreases if improvement_direction == "increase" else increases if improvement_direction == "decrease" else None
+        comparison = compare_values(base_value, current_value)
         output.append({"eligible_baseline": len(old), "eligible_current": len(new),
                        "common_entities": len(common), "added_entities": len(new - old), "removed_entities": len(old - new),
                        "like_for_like_baseline": base_value, "like_for_like_current": current_value,
-                       "like_for_like_delta": _text((_decimal(current_value) - _decimal(base_value))) if base_value is not None and current_value is not None else None,
-                       "unit": operation.get("unit", "unknown"), "aggregation": agg})
+                       "like_for_like_delta": comparison["absolute_change"],
+                       "comparable_entities": len(comparable), "unavailable_entity_comparisons": len(common) - len(comparable),
+                       "increased_entities": increases, "decreased_entities": decreases,
+                       "unchanged_entities": unchanged,
+                       "improved_entities": improved, "worsened_entities": worsened,
+                       "improvement_direction": improvement_direction,
+                       "improved_share": _text(Decimal(improved) / len(comparable)) if improved is not None and comparable else None,
+                       "entity_key_fields": entity_fields,
+                       "entity_count_basis": "distinct_key" if len(entity_fields) == 1 else "distinct_composite_key",
+                       "unkeyed_rows": unkeyed_rows,
+                       "unit": operation.get("unit", "unknown"), "aggregation": agg,
+                       "warning": "Entity-level values were aggregated within each entity-period before cohort comparison."})
         return output
     if kind == "correlation":
         pairs = [(_decimal(row.get(operation["x_column"])), _decimal(row.get(operation["y_column"]))) for row in rows]
@@ -322,7 +444,8 @@ def _records_for_operation(rows: list[dict[str, Any]], operation: dict[str, Any]
     raise AnalysisError("CONTRACT_INVALID", f"Unsupported operation {kind}.")
 
 
-def execute_plan(path: str, raw_plan: Any) -> dict[str, Any]:
+def execute_plan(path: str, raw_plan: Any, *, profile: Any = None) -> dict[str, Any]:
+    started = time.perf_counter()
     plan = validate_analysis_plan(raw_plan)
     rows, metadata = load_rows(path, max_rows=plan["budgets"]["max_rows"])
     if plan["source_sha256"] != metadata["source"]["sha256"]:
@@ -336,6 +459,8 @@ def execute_plan(path: str, raw_plan: Any) -> dict[str, Any]:
         references = {value for key, value in operation.items()
                       if key in {"column", "period_column", "entity_column", "numerator", "denominator", "x_column", "y_column"}}
         references.update(operation.get("group_by", []))
+        references.update(operation.get("columns", []))
+        references.update(operation.get("entity_columns", []))
         missing = references - available
         if missing:
             raise AnalysisError("PLAN_COLUMN_UNKNOWN", "Plan refers to columns absent from the input: " + ", ".join(sorted(missing)) + ".")
@@ -353,12 +478,51 @@ def execute_plan(path: str, raw_plan: Any) -> dict[str, Any]:
         results.append({"id": operation["id"], "operation": operation["operation"],
                         "question": plan["primary_question"],
                         "results": _records_for_operation(rows, operation, plan["budgets"]["max_groups"])})
+    semantic_reused = False
+    semantic_context = None
+    if profile is not None:
+        if not isinstance(profile, dict) or not isinstance(profile.get("source"), dict):
+            raise AnalysisError("CONTRACT_INVALID", "A reused profile must include source provenance.")
+        if (profile["source"].get("sha256") != metadata["source"]["sha256"]
+                or profile["source"].get("locator") != metadata["source"]["locator"]):
+            raise AnalysisError("EVIDENCE_PROVENANCE_INVALID", "Reused profile does not match the executed source path and content hash.")
+        if profile.get("row_count") != metadata["row_count"]:
+            raise AnalysisError("EVIDENCE_PROVENANCE_INVALID", "Reused profile row count does not match the executed source.")
+        if profile.get("semantic_context") is not None:
+            semantic_context = validate_semantic_context(profile["semantic_context"], known_columns=available)
+            if (semantic_context["observations"]["count"] != metadata["row_count"]
+                    or not semantic_context["observations"]["complete"]):
+                raise AnalysisError("EVIDENCE_PROVENANCE_INVALID", "Reused semantic context is incomplete or does not match the current source.")
+            semantic_reused = True
+    if semantic_context is None:
+        semantic_context = infer_semantic_context(rows, metadata["columns"], total_rows=metadata["row_count"],
+                                                 complete=True, depth=plan["depth"])
+    execution_metadata = {
+        "analysis_mode": plan["depth"], "datasets_inspected": 1, "rows_scanned": len(rows),
+        "operations_evaluated": len(results), "hypotheses_evaluated": 0, "findings_produced": 0,
+        "model_calls": 0, "semantic_profile_reused": semantic_reused,
+        "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+    }
+    limitations = ["The deterministic helper calculates evidence but does not assign business meaning or generate findings.",
+                   "Entity and grain fields are evidence-backed candidates; confirm them against the original question and source semantics."]
+    analysis_result = {
+        "schema_version": 1,
+        "analysis_context": semantic_context,
+        "metrics": results,
+        "findings": [],
+        "claims": [],
+        "warnings": [],
+        "limitations": limitations,
+        "provenance": {"source": metadata["source"], "plan_source_sha256": plan["source_sha256"]},
+        "execution_metadata": execution_metadata,
+    }
     result = {
         "schema_version": 1, "depth": plan["depth"], "primary_question": plan["primary_question"],
         "source": metadata["source"], "profile": {"row_count": metadata["row_count"],
         "analyzed_rows": len(rows), "column_count": len(metadata["columns"]), "complete": True},
         "questions": plan["questions"], "operations": results, "stop_conditions": plan["stop_conditions"],
-        "limits": plan["budgets"],
+        "limits": plan["budgets"], "semantic_context": semantic_context,
+        "execution_metadata": execution_metadata, "analysis_result": analysis_result,
         "notes": ["Exploration stopped after the bounded plan; no unrequested source or segment expansion was performed."],
     }
     if len(json.dumps(result, ensure_ascii=False, default=str).encode("utf-8")) > MAX_RESULT_BYTES:

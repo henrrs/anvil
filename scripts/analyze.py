@@ -15,13 +15,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
-from analysis.adapter import artifact_components  # noqa: E402
 from analysis.contracts import validate_analysis_plan, validate_task_brief  # noqa: E402
 from analysis.errors import AnalysisError  # noqa: E402
 from analysis.findings import validate_result  # noqa: E402
 from analysis.primitives import execute_plan  # noqa: E402
 from analysis.profiling import MAX_ROWS, profile_file  # noqa: E402
 from communication.errors import CommunicationError  # noqa: E402
+from communication.analysis_adapter import artifact_components  # noqa: E402
 
 
 def _json_file(raw: str) -> Any:
@@ -49,18 +49,27 @@ def main(argv: list[str] | None = None) -> int:
     profile = sub.add_parser("profile", help="deterministically profile a named CSV, TSV, JSON, or JSON Lines table")
     profile.add_argument("input")
     profile.add_argument("--max-rows", type=int, default=MAX_ROWS)
+    profile.add_argument("--depth", choices=("FAST", "STANDARD", "DEEP"), default="STANDARD",
+                         help="bound semantic inference work to the requested analysis depth")
+    profile.add_argument("--focus", choices=("general", "entity_count", "numeric", "grain"), default="general",
+                         help="use FAST only for the semantic safeguards needed by this request")
+    profile.add_argument("--semantic-metadata", help="optional local schema-1 JSON with authoritative field roles/keys")
     execute = sub.add_parser("execute", help="validate and run a bounded deterministic analysis plan")
     execute.add_argument("input")
     execute.add_argument("plan")
+    execute.add_argument("--profile", help="reuse semantic profile JSON from the same source snapshot")
     for name in ("validate-brief", "validate-plan", "validate-result", "artifact-components"):
         command = sub.add_parser(name, help=f"validate or adapt a structured {name.removeprefix('validate-')} contract")
         command.add_argument("json_file")
     args = parser.parse_args(argv)
     try:
         if args.command == "profile":
-            value = profile_file(args.input, max_rows=args.max_rows)
+            value = profile_file(args.input, max_rows=args.max_rows, semantic_depth=args.depth,
+                                 semantic_focus=args.focus,
+                                 semantic_metadata=_json_file(args.semantic_metadata) if args.semantic_metadata else None)
         elif args.command == "execute":
-            value = execute_plan(args.input, _json_file(args.plan))
+            value = execute_plan(args.input, _json_file(args.plan),
+                                 profile=_json_file(args.profile) if args.profile else None)
         elif args.command == "validate-brief":
             value = validate_task_brief(_json_file(args.json_file))
         elif args.command == "validate-plan":

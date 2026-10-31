@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.15.0] - 2026-10-31 (candidate; model-quality release gate pending)
+
+- Hardened the production semantic profile with an additive schema-v2 evidence model that separates observations, persistent entities/entity keys, events/event keys, technical keys, dimensions, time roles, measures, candidate keys, relationships and observation grain. Confidence, supporting/contradicting evidence and ambiguity are explicit; insufficient evidence can remain `UNKNOWN`.
+- Replaced the singleton-grain bottleneck with bounded composite candidate search and lightweight functional-dependency checks. Unique row IDs and event IDs no longer become entities by uniqueness alone; snapshots, composite entity keys, multiple entities, aggregated inputs and entity-free time series are supported.
+- Added optional schema-v1 semantic metadata for field roles, entity/event keys, uniqueness constraints and grain. Metadata is fingerprinted in the semantic profile; declared database keys remain distinct from analytical entities.
+- Added `make eval-analytical-semantic`, an isolated 24-case A–X certification report with precision/recall, confidence/abstention, role and grain metrics, metamorphic and adversarial checks, sensitivity/ablation results, evaluator mutations and FAST/STANDARD/DEEP comparison to the immutable 2.14 baseline.
+- Preserved all 2.14 numerical and semantic baseline artifacts. Deterministic certification is ready for subsequent L3–L5 model evaluation; model quality, communication fidelity and product release readiness remain unmeasured.
+- No runtime, external dependency, persisted user data or OpenCode configuration migration is required. The source migration window expands to nine prior minor releases to retain supported 2.6.x installations.
+
+## [2.14.0] - 2026-10-31 (candidate; release gate pending)
+
+- Realigned analytical responsibility around the renderer-independent `scripts/analysis/` core. Moved the consumer adapter into `scripts/communication/`; the analysis package no longer imports communication or artifact code. Shared distribution and change arithmetic now has one deterministic implementation.
+- Added bounded task-scoped semantic candidates for observation grain, composite row keys, repeated entities, temporal dimensions, measures, metric templates, questions, cardinality and data-quality risks. Candidate semantics preserve uncertainty and never assert business meaning automatically.
+- Added repeated-entity period aggregation, composite entity keys, retained/added/removed population comparisons, explicit like-for-like change and breadth, plus additive count/sum contribution with net and absolute movement shares.
+- Added category-composition comparison to show changing category shares alongside optional per-category and overall measures, without treating mix movement as causal attribution.
+- Extended analysis results with semantic context, source-bound execution metadata, hypotheses and claim checks for counts, distinct keys, trend evidence, cohort language, breadth and measured coverage changes. Causal claims remain hypotheses without causal evidence.
+- Added an isolated analytical evaluation harness with two deterministic versioned synthetic fixtures, eight exercised semantic-trap snapshots, hidden ground truth, exact L1 and separate L2 scoring, blind repeated OpenCode runs, structured human review, communication parity checks, FAST-path attribution, private-case support, and an immutable baseline workflow. Evaluation code and truth remain outside production analysis.
+- Reused validated profiles during execution while checking source path, hash, row count and completeness. Expanded offline regression coverage for composite grain, repeated observations per entity-period, population change, distribution shift under stable means, concentration, coverage and claim calibration.
+- Updated the analytical, system, release, migration and architecture documentation. No OpenCode runtime, dependency, persistent user data or configuration schema change is required. The lifecycle path remains Anvil-owned and manifest-driven.
+- Froze the first immutable offline 2.14 evaluation baseline. L1 passed 24/24 and 5/5 exact facts; L2 semantic candidate scores were 1/3 and 2/3, exposing composite-grain and false-entity-candidate gaps. The 10,000-row helper comparison against committed 2.13 was FAST 147.667→186.552 ms (+26.3%), STANDARD 186.239→223.209 ms (+19.9%), and DEEP 225.660→262.437 ms (+16.3%). FAST attribution is MIXED; no live model was available, so discovery, claim calibration, token/cost, and communication fidelity remain unmeasured.
+- Extended the same-major source window to eight prior minor releases so the previously supported Anvil 2.6.x source line remains upgradeable.
+- Live-model semantic/claim quality, real-task end-to-end latency, token/cost use, composition-effect decomposition, anomaly detection quality, and presentation-quality regressions remain unmeasured or incomplete. This candidate is **NOT RELEASE READY** pending the required product-level evaluation and follow-up capabilities.
+
 ## [2.13.0] - 2026-10-30 (candidate; release gate pending)
 
 - Added stateless intent and analytical-intelligence contracts, deterministic bounded table profiling and generic operations, source-snapshot validation, evidence-linked findings, explainable Pareto materiality tiers, and an adapter to the existing artifact contracts.

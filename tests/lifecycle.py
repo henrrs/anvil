@@ -392,7 +392,7 @@ def lifecycle_version_order_test() -> None:
     check(compare_versions("2.10.0", "2.9.9") == 1, "semantic version ordering compared minor releases lexically")
     check(compare_versions("2.08.0", "2.8.0") is None, "semantic version parser accepted a non-canonical leading zero")
     check(supported_migration("2.6.1", ANVIL_VERSION), "current release rejected the 2.6 source line retained by prior releases")
-    check(not supported_migration("2.5.9", ANVIL_VERSION), "source outside the seven-minor compatibility window was accepted")
+    check(not supported_migration("2.5.9", ANVIL_VERSION), "source outside the nine-minor compatibility window was accepted")
     check(not supported_migration("2.5.9", "2.10.0", minor_window=4), "2.10 historical source window changed")
     check(not supported_migration("2.12.0", "2.11.0"), "a newer installed release was treated as migratable")
     print("PASS semantic release ordering, supported source window, and downgrade rejection")
@@ -667,12 +667,15 @@ def brownfield_legacy_npm_symlink_test(temp: pathlib.Path) -> None:
     missing_manifest = sorted(expected_analysis - set(manifest["files"]))
     missing_install = sorted(relative for relative in expected_analysis if not (paths["config"] / relative).is_file())
     check(not missing_manifest and not missing_install,
-          "2.13 lifecycle upgrade did not install and manifest all analytical helper modules; "
+          "2.14 lifecycle upgrade did not install and manifest all analytical helper modules; "
           f"manifest omissions={missing_manifest}, installed omissions={missing_install}")
     profile = run([sys.executable, str(paths["config"] / "scripts/analyze.py"), "profile",
                    str(ROOT / "tests/fixtures/analysis/monthly-operations.csv")], env_for(paths))
-    check(json.loads(profile.stdout)["row_count"] == 6,
-          "installed analytical helper cannot profile a named local fixture")
+    installed_profile = json.loads(profile.stdout)
+    check(installed_profile["row_count"] == 6
+          and installed_profile["semantic_context"]["observations"]["count"] == 6
+          and "entity" in {item["fields"][0] for item in installed_profile["semantic_context"]["entities"]},
+          "installed analytical helper cannot profile row grain and repeated entity candidates from a named local fixture")
     check(filesystem_snapshot(node_modules) == filesystem_snapshot(paths["config"] / "node_modules"),
           "upgrade changed the external npm dependency tree or symlink targets")
     check(link.is_symlink() and os.readlink(link) == "../node-gyp-build-optional-packages/build-test.js"
