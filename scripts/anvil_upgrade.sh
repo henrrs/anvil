@@ -144,6 +144,7 @@ printf '  countdown           %ss\n' "${ANVIL_UPGRADE_COUNTDOWN_SECONDS:-5}"
 printf '  graceful shutdown   enabled (SIGTERM first)\n'
 printf '  force termination   fallback only\n'
 anvil_print_config_plan "$ANVIL_CONFIG_DIR" "$ready_config/generated" "$old_anvil_version" "$ANVIL_VERSION"
+anvil_print_analytics_plan "$ready_config/generated"
 
 if [[ "${DRY_RUN:-0}" == 1 ]]; then
   printf '\nNo changes performed.\nNo processes stopped.\nNo files changed.\n'

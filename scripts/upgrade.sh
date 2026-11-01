@@ -223,6 +223,7 @@ else
   anvil_build_config "$ready_config" "$ANVIL_CONFIG_DIR" yes "$target_major"
   anvil_print_config_plan "$ANVIL_CONFIG_DIR" "$ready_config" "$old_anvil_version" "$ANVIL_VERSION"
 fi
+anvil_print_analytics_plan "$ready_config"
 if [[ "$operation" == update-runtime ]]; then
   if [[ "$target_major" == 1 ]]; then
     python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$ready_config/opencode.jsonc"
@@ -279,7 +280,7 @@ transaction_active=1
 if [[ "$operation" == migrate-runtime ]]; then
   anvil_log "Applying the staged OpenCode $target_major Anvil profile and exact tested binary."
   python3 "$ROOT/scripts/lifecycle_transaction.py" phase applying-config
-  anvil_apply_config "$ready_config"
+  anvil_apply_config "$ready_config" no yes
   python3 "$ROOT/scripts/lifecycle_transaction.py" phase config-applied
   if [[ "${ANVIL_TEST_FAIL_AFTER_CONFIG:-0}" == 1 ]]; then
     anvil_error 'Injected failure after config replacement.'
@@ -298,6 +299,10 @@ fi
 export PATH="$ANVIL_INSTALL_BIN:$PATH"
 if [[ "$operation" == migrate-runtime ]]; then
   XDG_DATA_HOME="$ANVIL_DATA_HOME" python3 "$ANVIL_CONFIG_DIR/scripts/memory.py" init >/dev/null
+fi
+if [[ -f "$ANVIL_CONFIG_DIR/runtime/analytics-requirements.lock" ]]; then
+  anvil_log 'Revalidating the existing Analytics environment and service against the updated OpenCode runtime.'
+  anvil_converge_analytics_runtime "$ANVIL_CONFIG_DIR"
 fi
 if [[ "${ANVIL_TEST_FAIL_POSTFLIGHT:-0}" == 1 ]]; then
   anvil_error 'Injected postflight failure after the runtime upgrade.'

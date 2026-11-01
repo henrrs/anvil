@@ -124,10 +124,15 @@
           </div>
           <div class="warehouse-message hidden" id="warehouse-message" role="status"></div>
           <div class="editor-toolbar"><span class="editor-file-icon" aria-hidden="true">⌘</span><span id="query-file-name">query.sql</span><span class="editor-readonly">READ ONLY</span><span class="editor-toolbar-spacer"></span><span id="query-status-label" class="query-state idle">READY</span></div>
-          <div class="editor-wrap"><div class="editor-gutter" id="editor-gutter" aria-hidden="true">1</div>
-            <textarea id="sql-editor" spellcheck="false" aria-label="SQL query editor" autocomplete="off" autocapitalize="off" placeholder="SELECT order_id, status&#10;FROM catalog.schema.table&#10;WHERE status = 'failed'&#10;LIMIT 100"></textarea></div>
-          <div class="result-heading"><div><span class="eyebrow">RESULTS</span><span class="route-badge" id="route-badge">AUTO</span><span id="query-message">Read-only SQL. Results are capped for safety.</span></div><span id="query-metrics" class="muted"></span></div>
-          <div id="query-results" class="results-area" aria-live="polite"><div class="results-placeholder"><span>⌁</span><p>Run a query to inspect results</p></div></div>
+          <div class="query-split" id="query-split">
+            <div class="editor-wrap" id="query-editor-panel"><div class="editor-gutter" id="editor-gutter" aria-hidden="true">1</div>
+              <textarea id="sql-editor" spellcheck="false" aria-label="SQL query editor" autocomplete="off" autocapitalize="off" placeholder="SELECT order_id, status&#10;FROM catalog.schema.table&#10;WHERE status = 'failed'&#10;LIMIT 100"></textarea></div>
+            <div class="query-splitter" id="query-splitter" role="separator" aria-label="Resize SQL editor and results" aria-orientation="horizontal" aria-valuemin="25" aria-valuemax="75" aria-valuenow="62" tabindex="0"></div>
+            <div class="query-results-panel" id="query-results-panel">
+              <div class="result-heading"><div><span class="eyebrow">RESULTS</span><span class="route-badge" id="route-badge">AUTO</span><span id="query-message">Read-only SQL. Results are capped for safety.</span></div><span id="query-metrics" class="muted"></span></div>
+              <div id="query-results" class="results-area" aria-live="polite"><div class="results-placeholder"><span>⌁</span><p>Run a query to inspect results</p></div></div>
+            </div>
+          </div>
         </section>
       </section>
 

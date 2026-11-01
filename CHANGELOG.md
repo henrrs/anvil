@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.17.0] - 2026-11-01 (candidate; live workspace checks remain environment-specific)
+
+- Converged Analytics dependencies into a release-pinned, content-addressed Python environment; DuckDB and PyArrow are now required for the default local SQL and materialization capabilities, and failed preparation leaves the prior environment/configuration available.
+- Made fresh install, reforge, Anvil upgrade, and runtime migration prepare and validate the same Analytics runtime; dry-run reports dependency, runtime-artifact, service, OpenCode-session, and catalog-refresh actions without mutation.
+- Hardened the managed Analytics service lifecycle: valid systemd path escaping, installed/enabled/active/MainPID/health separation, one managed port owner, automatic service activation, idempotent `make analytics`, and explicit foreground `make analytics-dev`.
+- Added automatic OpenCode runtime/canonical-session convergence with bounded retrying health probes, and unified the local readiness snapshot used by inspect, doctor, capabilities, and `/api/runtime`.
+- Added explicit SQL Warehouse start/poll behavior only after a query selects the Databricks route; permission and timeout failures now include recovery choices.
+- Fixed Unity Catalog pagination at the API's 50-table page limit; metadata-only background hydration now persists catalogs, schemas, tables/views, progress, failures and removals, with bounded provider concurrency and distinct not-loaded, loading, empty and permission states.
+- Added an accessible vertical SQL editor/results splitter with minimum pane sizes, pointer and keyboard controls, local ratio persistence, and editor reflow notification.
+- Added dependency drift, install convergence, service, runtime, warehouse, catalog hydration, schema migration and browser geometry regressions; updated the Analytics user, operations, runtime, migration and architecture documentation.
+- Retained the Anvil 2.6.x same-major migration source line by extending the supported source window to eleven prior minor releases.
+
 ## [2.16.0] - 2026-10-31 (candidate; live workspace and model checks remain environment-specific)
 
 - Refined Analytics into a useful Home workspace with closable table/query tabs, a paginated catalog, local-state cues, resizable/collapsible side panels, SQL route states, and contextual Ask Anvil actions; removed the footer's external brand navigation.

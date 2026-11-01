@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import random
 import re
+import threading
+import time
 from typing import Any
 
 from .databricks import CatalogMetadataPort
@@ -10,14 +15,23 @@ from .errors import AnalyticsError, ProviderError, ValidationError
 from .models import CatalogObject, CatalogObjectType
 from .store import ContextStore
 
-PAGE_SIZE = 200
-MAX_PAGES = 50
+PAGE_SIZE = 50
+MAX_PAGES = 2000
+MAX_ROWS = 100_000
+RETRIES = 3
+MAX_METADATA_CONCURRENCY = 2
+_LOG = logging.getLogger(__name__)
+
+
+def _log_event(level: int, event: str, **details: Any) -> None:
+    _LOG.log(level, json.dumps({"event": event, **details}, sort_keys=True, separators=(",", ":")))
 
 
 class CatalogService:
     def __init__(self, store: ContextStore, provider: CatalogMetadataPort | None) -> None:
         self.store = store
         self.provider = provider
+        self._provider_slots = threading.BoundedSemaphore(MAX_METADATA_CONCURRENCY)
 
     def catalogs(self, *, refresh: bool = False, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         if refresh:
@@ -43,13 +57,24 @@ class CatalogService:
         self._validate_component(schema_name, "schema")
         parent = f"{catalog_name}.{schema_name}"
         if refresh:
+            _log_event(logging.INFO, "metadata_refresh_started", scope="tables")
+            self.store.catalog_hydration_set("tables", parent, "LOADING")
             try:
                 rows = self._fetch_all("tables.list", catalog_name=catalog_name,
                                        schema_name=schema_name)
                 objects = [self._table_object(row, catalog_name, schema_name) for row in rows]
-                self.store.catalog_upsert(objects)
+                self.store.catalog_reconcile(parent, objects)
+                self.store.catalog_hydration_set("tables", parent, "READY" if objects else "EMPTY",
+                                                  object_count=len(objects))
+                _log_event(logging.INFO, "metadata_refresh_completed", scope="tables",
+                           count=len(objects),
+                           tables_discovered=sum(item.object_type == CatalogObjectType.TABLE for item in objects),
+                           views_discovered=sum(item.object_type == CatalogObjectType.VIEW for item in objects))
                 return self._cached(parent=parent, status="READY", limit=limit, offset=offset)
             except AnalyticsError as exc:
+                self.store.catalog_hydration_set("tables", parent, "FAILED", error_code=exc.code,
+                                                  error_message=str(exc)[:500])
+                _log_event(logging.WARNING, "metadata_refresh_failed", scope="tables", reason_code=exc.code)
                 return self._cached(parent=parent, status="BROWSE_ONLY", error=exc.code,
                                     limit=limit, offset=offset)
         return self._cached(parent=parent, object_type=None, limit=limit, offset=offset)
@@ -100,6 +125,9 @@ class CatalogService:
     def _refresh_list(self, operation: str, key: str, *, parent: str,
                       object_type: CatalogObjectType, limit: int, offset: int,
                       **parameters: str) -> dict[str, Any]:
+        scope = key
+        _log_event(logging.INFO, "metadata_refresh_started", scope=scope)
+        self.store.catalog_hydration_set(scope, parent, "LOADING")
         try:
             rows = self._fetch_all(operation, **parameters)
             objects: list[CatalogObject] = []
@@ -112,14 +140,27 @@ class CatalogService:
                     workspace_id=str(row.get("workspace_id") or ""), parent_name=parent,
                     comment=str(row.get("comment") or ""),
                     properties=self._properties(row), updated_at=str(row.get("updated_at") or "")))
-            self.store.catalog_upsert(objects)
+            self.store.catalog_reconcile(parent, objects)
+            self.store.catalog_hydration_set(scope, parent, "READY" if objects else "EMPTY",
+                                              object_count=len(objects))
+            _log_event(logging.INFO, "metadata_refresh_completed",
+                scope=scope, count=len(objects),
+                catalogs_discovered=len(objects) if scope == "catalogs" else None,
+                schemas_discovered=len(objects) if scope == "schemas" else None,
+                tables_discovered=sum(item.object_type == CatalogObjectType.TABLE for item in objects)
+                    if scope == "tables" else None,
+                views_discovered=sum(item.object_type == CatalogObjectType.VIEW for item in objects)
+                    if scope == "tables" else None)
             return self._cached(parent=parent, object_type=object_type, status="READY",
                                 limit=limit, offset=offset)
         except AnalyticsError as exc:
+            self.store.catalog_hydration_set(scope, parent, "FAILED", error_code=exc.code,
+                                              error_message=str(exc)[:500])
+            _log_event(logging.WARNING, "metadata_refresh_failed", scope=scope, reason_code=exc.code)
             return self._cached(parent=parent, object_type=object_type,
                                 status="BROWSE_ONLY", error=exc.code, limit=limit, offset=offset)
 
-    def _fetch_all(self, operation: str, **parameters: str) -> list[dict[str, Any]]:
+    def _fetch_all(self, operation: str, **parameters: Any) -> list[dict[str, Any]]:
         if not self.provider:
             raise ProviderError("The Databricks metadata provider is not configured",
                                 code="PROVIDER_NOT_CONFIGURED", retryable=False)
@@ -129,15 +170,28 @@ class CatalogService:
         seen: set[str] = set()
         for _ in range(MAX_PAGES):
             request: dict[str, Any] = {**parameters, "max_results": PAGE_SIZE}
+            if operation == "tables.list":
+                request.update({"omit_columns": True, "omit_properties": True})
             if page_token:
                 request["page_token"] = page_token
-            result = self.provider.page(operation, **request)
+            for attempt in range(RETRIES + 1):
+                try:
+                    with self._provider_slots:
+                        result = self.provider.page(operation, **request)
+                    break
+                except AnalyticsError as exc:
+                    if not exc.retryable or attempt == RETRIES:
+                        raise
+                    time.sleep(min(2.0, 0.2 * (2 ** attempt)) + random.uniform(0, 0.15))
             page_rows = result.get(collection)
             if not isinstance(page_rows, list):
                 if operation == "tables.get":
                     return [result]
                 raise ProviderError("Databricks returned an invalid catalog page", retryable=False)
             values.extend(row for row in page_rows if isinstance(row, dict))
+            if len(values) > MAX_ROWS:
+                raise ProviderError("Databricks catalog scope exceeded the safe metadata row limit",
+                                    code="CATALOG_ROW_LIMIT", retryable=False)
             next_token = result.get("next_page_token") or result.get("nextPageToken")
             if not next_token:
                 return values
@@ -150,7 +204,7 @@ class CatalogService:
                             code="CATALOG_PAGINATION_LIMIT", retryable=False)
 
     def _cached(self, *, parent: str, object_type: CatalogObjectType | None = None,
-                status: str = "CACHED", error: str | None = None,
+                status: str | None = None, error: str | None = None,
                 limit: int = 100, offset: int = 0) -> dict[str, Any]:
         if type(limit) is not int or not 1 <= limit <= 200 or type(offset) is not int or not 0 <= offset <= 10_000_000:
             raise ValidationError("Catalog page size or offset is invalid")
@@ -158,8 +212,21 @@ class CatalogService:
                                        limit=limit + 1, offset=offset)
         has_more = len(rows) > limit
         items = rows[:limit]
-        return {"status": status if items else ("BROWSE_ONLY" if status == "BROWSE_ONLY" else "EMPTY"),
-                "items": items, "error": error, "has_more": has_more,
+        scope = "catalogs" if object_type == CatalogObjectType.CATALOG or parent == "" else (
+            "schemas" if object_type == CatalogObjectType.SCHEMA or "." not in parent else "tables")
+        hydration = self.store.catalog_hydration_get(scope, parent)
+        state = str((hydration or {}).get("state") or "NOT_LOADED")
+        resolved = status or ("CACHED" if items else state)
+        if status is None and state == "FAILED":
+            resolved = "BROWSE_ONLY" if (hydration or {}).get("error_code") == "PERMISSION_DENIED" else "FAILED"
+        if status == "READY" and not items:
+            resolved = "EMPTY"
+        if not items and status == "BROWSE_ONLY":
+            resolved = "BROWSE_ONLY"
+        return {"status": resolved, "items": items,
+                "error": error or (hydration or {}).get("error_code") or None,
+                "hydration": hydration or {"state": "NOT_LOADED", "scope": scope, "parent_name": parent},
+                "has_more": has_more,
                 "next_offset": offset + len(items) if has_more else None}
 
     @staticmethod

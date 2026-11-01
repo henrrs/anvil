@@ -206,7 +206,20 @@ def main() -> int:
     print(f"  previous Anvil version {installation.get('previous_anvil_version') or migration.get('from_anvil') or 'unknown'}")
     print(f"  migration state        {migration.get('status', 'not recorded')}")
     print()
-    analytics_workspace(args.config_dir, Path.home())
+    analytics = analytics_workspace(args.config_dir, Path.home())
+    if analytics.get("installed"):
+        unmet = []
+        for dependency in ("duckdb", "pyarrow"):
+            if analytics.get(dependency, {}).get("status") != "READY":
+                unmet.append(dependency)
+        if analytics.get("service", {}).get("status") != "READY":
+            unmet.append("Analytics service")
+        if analytics.get("opencode", analytics.get("runtime", {})).get("status") != "READY":
+            unmet.append("OpenCode Analytics runtime")
+        if analytics.get("canonical_session", {}).get("status") != "READY":
+            unmet.append("canonical Analytics session")
+        if unmet:
+            warnings.append("Analytics capabilities are degraded: " + ", ".join(unmet) + ". Run make upgrade to converge the supported runtime.")
     print("Project overrides")
     print(f"  active                 {', '.join(overrides) if overrides else 'none'}")
     print("Version documentation")

@@ -2,7 +2,7 @@
 
 ## Install, start and stop
 
-Analytics files are installed with `make reforge` and `make upgrade`; existing supported runtimes are preserved exactly. `make upgrade DRY_RUN=1` rehearses managed file changes without starting a service or changing live state.
+Analytics files and runtime dependencies are converged by fresh `make reforge`, `make upgrade`, and explicit runtime migration. Existing supported OpenCode runtimes remain on their selected major unless a runtime migration is requested. `make upgrade DRY_RUN=1` reports managed-file changes, dependency preparation, service actions, OpenCode/canonical-session bootstrap, and metadata refresh without changing files, the Python environment, systemd, runtime state or catalog state.
 
 ```bash
 make inspect
@@ -13,31 +13,31 @@ make analytics-status
 make analytics
 ```
 
-Open `http://anvil.localhost:8765`. Config activation writes a private systemd user unit only in the active XDG user unit directory. When systemd user mode is available, the unit starts and restarts the Analytics server. Without it, `make analytics` starts a foreground server; Ctrl-C stops that process. `make analytics-stop` stops an active Anvil systemd unit. A foreground server is stopped with Ctrl-C in its terminal.
+Lifecycle activation writes a private systemd user unit only in the active XDG user unit directory, reloads the manager, enables/starts the unit, and waits for service, OpenCode runtime and canonical session readiness. `make analytics` performs an idempotent reuse/start check and prints `Anvil Analytics READY` plus the URL. If no systemd user manager is available, Anvil uses a managed background process with one port owner; `make analytics-dev` is the explicit foreground mode. `make analytics-stop` stops only the Anvil-owned service.
 
 Use `ANALYTICS_PORT=8765 make analytics` for a one-command port override or export `ANVIL_ANALYTICS_PORT` for the shell/session. The selected port is written into the Anvil-owned service unit. `make analytics-status` returns a nonzero status while the endpoint is stopped.
 
 ## Readiness and diagnosis
 
-`make inspect` is a local structural inventory. It reports package and frontend presence, the configured URL, private workspace/state paths, whether SQLite exists, OpenCode generation/canonical ID presence and optional DuckDB availability. `make doctor` adds Analytics state to Anvil's current diagnostic without making Analytics required for the traditional core. `make capabilities` reports Catalog, SQL Workspace, Ask Anvil, Local Analytics, Materialization and service states.
+`make inspect`, `make doctor`, `make capabilities`, and `/api/runtime` use the same structured Analytics readiness snapshot. Inspect reports package/runtime artifacts, service unit installation/enabled/active/MainPID/health, OpenCode and canonical session state, DuckDB/PyArrow imports, and cached catalog counts/hydration. Doctor warns and exits with its warning code when an installed default Analytics capability is degraded, with `make upgrade` as the supported runtime-dependency recovery. Analytics remains outside traditional core dependencies. Capabilities distinguishes catalog browsing from remote SQL, Ask Anvil, local SQL and materialization availability.
 
-Analytics status uses `READY`, `DEGRADED`, `RECOVERABLE`, `NOT_CONFIGURED` and `FAILED` where the state can be established. A stopped service is reported as stopped; the core Anvil doctor can still be healthy. The Analytics UI remains available if the OpenCode process cannot start, and Ask Anvil displays a bounded error. Cached catalog and local data are not erased when a provider is offline.
+Service readiness requires installed code, an enabled/active unit (or managed fallback process), a live MainPID and a responding health endpoint. Analytics API readiness additionally requires the OpenCode runtime and canonical session; dependency and catalog state are reported separately. If OpenCode cannot start, the UI can still show a bounded degraded state. Cached catalog and local data are not erased when a provider is offline.
 
 | Symptom | Meaning | Next action |
 |---|---|---|
 | UI is unavailable | Service stopped, port occupied or frontend missing | Run `make analytics-status`; run `make analytics` and read its short error |
-| Catalog empty | No cache yet or Databricks metadata cannot be reached | Run `make databricks-setup` if needed, check `make doctor`, then use catalog refresh |
-| Preview/query asks for a warehouse | Databricks SQL uses an existing warehouse; Anvil does not start compute | Choose a running warehouse by name in the UI |
+| Catalog is loading | Metadata has not been hydrated or a background refresh is running | Check the persisted tree progress; expand catalogs/schemas for prioritized refresh |
+| Catalog browse-only or failed | Permission/provider failure; not an empty catalog | Review the structured reason, check `make databricks-setup`, then retry metadata refresh |
+| Preview/query asks for a warehouse | Remote Databricks SQL needs an explicitly selected warehouse | Choose a warehouse by name; remote queries start a stopped selection and wait, subject to workspace permission |
 | Ask Anvil degraded | OpenCode is missing, unsupported or not responding | Check `make inspect`, close conflicting runtime processes, then retry the service/chat |
-| Local SQL unavailable | DuckDB is not importable in the service Python environment | Install/use DuckDB in that environment or choose `AUTO`/`DATABRICKS` |
-| Materialization unavailable | PyArrow is missing, no warehouse/profile is selected, or local disk is insufficient | Check capabilities, setup Databricks, narrow the selection or free disk |
+| Local SQL or materialization unavailable | Managed dependency runtime is missing/unhealthy, provider access is unavailable, or disk is insufficient | Run `make upgrade` to restore release-pinned DuckDB/PyArrow; review provider and disk readiness. Do not use system `pip` as a recovery path |
 | WSL page does not open | Windows localhost forwarding/firewall policy may be unavailable | Try the same configured port on Windows localhost; host-side changes are environment-specific and are not made by Anvil |
 
-The default Anvil-owned Databricks profile and authentication remain the only supported identity source. Run `make databricks-setup` if it has not been set up. Analytics does not log into Databricks independently, install its CLI implicitly during feature startup, or adopt an external profile.
+The default Anvil-owned Databricks profile and authentication remain the only supported identity source. Run `make databricks-setup` if it has not been set up. Analytics does not log into Databricks independently, install its CLI implicitly during feature startup, or adopt an external profile. Warehouse start calls are made only after the query router selects remote Databricks execution; LOCAL and AUTO-to-LOCAL routes never start compute.
 
 ## Runtime update and migration
 
-`make update-runtime` and `make migrate-runtime OPENCODE_MAJOR=N` already rebuild the managed config, so the matching OpenCode 1 or 2 plugin adapter is packaged with the target runtime. The Analytics service is synced after config activation. The stored Analytics session record is checked/recovered when the service warms or the next chat is made; incompatible or missing canonical sessions are recreated and rehydrated from SQLite.
+`make update-runtime` revalidates the existing Analytics dependency environment and service after the same-major OpenCode update. `make migrate-runtime OPENCODE_MAJOR=N` prepares the target profile/dependencies, installs the requested runtime, then activates the Analytics service against that runtime. The matching OpenCode 1 or 2 plugin adapter is packaged with the target runtime. Service readiness waits for the canonical `anvil-global-analytics` session; missing/stale sessions are reused, recovered or recreated and rehydrated from SQLite under a process lock.
 
 ## Data and rollback
 
@@ -56,4 +56,4 @@ It binds to `127.0.0.1`, serves repository static assets, and uses fixtures in `
 
 ## Offline certification
 
-`make test` runs offline Anvil regressions and Analytics contracts/lifecycle fixtures. `make eval-analytics` emits `summary.md`, `report.json`, `scenarios.json` and JUnit-compatible `pytest.xml` under `artifacts/analytics-certification/`. No live Databricks, OpenCode model, production credentials or Windows browser are used by these checks.
+`make test` runs offline Anvil regressions and Analytics contracts/lifecycle fixtures. `make eval-analytics` emits `summary.md`, `report.json`, `scenarios.json` and JUnit-compatible `pytest.xml` under `artifacts/analytics-certification/`. The separate Firefox geometry run emits screenshots under `artifacts/analytics-production-hardening/ui/query-splitter/`. Offline checks use fake providers and do not install/download wheels or contact live Databricks, an OpenCode model, production credentials or a Windows browser.

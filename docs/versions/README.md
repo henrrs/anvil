@@ -14,6 +14,16 @@ Anvil 2.14 strengthens the existing analysis capability with uncertain grain/ent
 
 Anvil 2.16.0 adds the Analytics Workspace with a generation-specific OpenCode tool adapter on each supported runtime. Both `Anvil 2.16 + OpenCode 1` and `Anvil 2.16 + OpenCode 2` use the same loopback service, shared Databricks provider, bounded read-only SQL, and isolated local context. OpenCode plugin execution, live model quality, live Databricks access, and Windows-to-WSL browser reachability require separate environment validation.
 
+Anvil 2.17.0 adds release-pinned Analytics dependencies, lifecycle/service/OpenCode convergence, warehouse start-on-remote-query, resumable metadata-first catalog hydration, unified readiness, and an accessible resizable SQL/results workspace. Both `Anvil 2.17 + OpenCode 1` and `Anvil 2.17 + OpenCode 2` retain the same Analytics provider and session contracts.
+
+| Anvil 2.17 Analytics capability | OpenCode 1 | OpenCode 2 |
+|---|---|---|
+| Release-pinned DuckDB/PyArrow environment | Required | Required |
+| Service + OpenCode + canonical session readiness | Shared contract | Shared contract |
+| Catalog/schema/table-view metadata hydration | Shared provider/store | Shared provider/store |
+| Selected warehouse start for remote SQL | Shared provider route | Shared provider route |
+| Live workspace/model/browser-host validation in offline suite | No | No |
+
 | Analytics Workspace capability | Anvil 2.16 + OpenCode 1 | Anvil 2.16 + OpenCode 2 |
 |---|---|---|
 | Global Analytics UI and local service | Yes | Yes |

@@ -1,19 +1,24 @@
 <?xml version='1.0' encoding='utf-8'?>
-<testsuites tests="60" failures="0" errors="0" skipped="0" time="7.410">
-  <testsuite name="context_store" tests="6" failures="0" errors="0" skipped="0" time="0.024">
+<testsuites tests="93" failures="0" errors="0" skipped="0" time="11.413">
+  <testsuite name="context_store" tests="8" failures="0" errors="0" skipped="0" time="0.039">
+    <testcase classname="context_store" name="test_catalog_hydration_progress_is_persisted_and_bounded" time="0" />
     <testcase classname="context_store" name="test_catalog_knowledge_query_and_operations_are_durable" time="0" />
     <testcase classname="context_store" name="test_catalog_search_reaches_nested_cached_tables_and_bounds_results" time="0" />
     <testcase classname="context_store" name="test_failed_migration_rolls_back_all_schema_changes" time="0" />
     <testcase classname="context_store" name="test_private_paths_are_outside_managed_config_and_sqlite_uses_wal" time="0" />
     <testcase classname="context_store" name="test_rejects_symlinked_state_database" time="0" />
+    <testcase classname="context_store" name="test_v2_catalog_hydration_schema_migrates_to_v3" time="0" />
     <testcase classname="context_store" name="test_validation_bounds_and_json_values" time="0" />
   </testsuite>
-  <testsuite name="catalog" tests="11" failures="0" errors="0" skipped="0" time="0.060">
+  <testsuite name="catalog" tests="14" failures="0" errors="0" skipped="0" time="1.838">
     <testcase classname="catalog" name="test_catalog_hydration_is_scoped_lazy_paginated_and_cached" time="0" />
     <testcase classname="catalog" name="test_catalog_parameters_reject_unsafe_names" time="0" />
     <testcase classname="catalog" name="test_cli_provider_body_uses_private_temporary_file_not_process_argument" time="0" />
+    <testcase classname="catalog" name="test_confirmed_empty_permission_error_and_unloaded_are_distinct" time="0" />
     <testcase classname="catalog" name="test_failed_refresh_keeps_cached_metadata_and_reports_browse_only" time="0" />
     <testcase classname="catalog" name="test_missing_provider_uses_cached_browse_state" time="0" />
+    <testcase classname="catalog" name="test_more_than_fifty_catalogs_are_fully_paginated_and_persisted" time="0" />
+    <testcase classname="catalog" name="test_provider_metadata_concurrency_is_bounded_for_large_metastores" time="0" />
     <testcase classname="catalog" name="test_repeated_page_token_fails_without_publishing_partial_cache" time="0" />
     <testcase classname="catalog" name="test_sdk_provider_uses_authenticated_api_client_for_catalog_requests" time="0" />
     <testcase classname="catalog" name="test_sdk_worker_submits_external_arrow_with_existing_workspace_client" time="0" />
@@ -21,7 +26,11 @@
     <testcase classname="catalog" name="test_statement_transfer_uses_bounded_external_arrow_and_shared_provider_route" time="0" />
     <testcase classname="catalog" name="test_table_preview_runs_only_after_explicit_request_and_is_bounded" time="0" />
   </testsuite>
-  <testsuite name="query_materialization" tests="16" failures="0" errors="0" skipped="0" time="0.096">
+  <testsuite name="catalog_hydration" tests="2" failures="0" errors="0" skipped="0" time="0.000">
+    <testcase classname="catalog_hydration" name="test_closed_service_marks_hydration_resumable" time="0" />
+    <testcase classname="catalog_hydration" name="test_tree_hydrates_catalog_schemas_and_table_view_metadata_without_rows" time="0" />
+  </testsuite>
+  <testsuite name="query_materialization" tests="16" failures="0" errors="0" skipped="0" time="0.091">
     <testcase classname="query_materialization" name="test_auto_falls_back_to_remote_for_mismatch_or_missing_duckdb" time="0" />
     <testcase classname="query_materialization" name="test_coverage_requires_exact_filter_and_all_projected_columns" time="0" />
     <testcase classname="query_materialization" name="test_explicit_remote_route_records_the_actual_route" time="0" />
@@ -39,7 +48,7 @@
     <testcase classname="query_materialization" name="test_pointer_manifest_and_parquet_files_are_validated" time="0" />
     <testcase classname="query_materialization" name="test_remote_results_are_bounded_even_when_adapter_returns_too_much" time="0" />
   </testsuite>
-  <testsuite name="runtime_sessions" tests="9" failures="0" errors="0" skipped="0" time="1.598">
+  <testsuite name="runtime_sessions" tests="10" failures="0" errors="0" skipped="0" time="1.618">
     <testcase classname="runtime_sessions" name="test_adapter_is_loopback_only_and_does_not_follow_redirects" time="0" />
     <testcase classname="runtime_sessions" name="test_ask_anvil_uses_global_context_canonical_session_and_distills_deep_work" time="0" />
     <testcase classname="runtime_sessions" name="test_concurrent_ensure_creates_one_canonical_session" time="0" />
@@ -47,8 +56,29 @@
     <testcase classname="runtime_sessions" name="test_ensure_canonical_is_idempotent_and_rehydrates_once" time="0" />
     <testcase classname="runtime_sessions" name="test_lost_canonical_is_recreated_and_sqlite_context_survives" time="0" />
     <testcase classname="runtime_sessions" name="test_open_code_adapters_select_v1_and_v2_routes_and_payloads" time="0" />
+    <testcase classname="runtime_sessions" name="test_opencode_health_probe_is_short_and_runtime_retries_a_swallowed_startup_probe" time="0" />
     <testcase classname="runtime_sessions" name="test_service_startup_warms_canonical_session_and_keeps_ui_usable_when_runtime_is_missing" time="0" />
     <testcase classname="runtime_sessions" name="test_task_sessions_are_children_and_distill_durable_findings" time="0" />
+  </testsuite>
+  <testsuite name="dependency_runtime" tests="4" failures="0" errors="0" skipped="0" time="0.075">
+    <testcase classname="dependency_runtime" name="test_dependency_drift_is_rebuilt_and_imports_revalidated" time="0" />
+    <testcase classname="dependency_runtime" name="test_failed_package_install_preserves_previous_environment" time="0" />
+    <testcase classname="dependency_runtime" name="test_release_lock_is_exact_and_content_addressed" time="0" />
+    <testcase classname="dependency_runtime" name="test_validated_environment_is_published_only_after_all_pins_install" time="0" />
+  </testsuite>
+  <testsuite name="service_lifecycle" tests="6" failures="0" errors="0" skipped="0" time="0.137">
+    <testcase classname="service_lifecycle" name="test_activate_fails_if_daemon_reload_fails" time="0" />
+    <testcase classname="service_lifecycle" name="test_generated_unit_passes_systemd_analyze_verify" time="0" />
+    <testcase classname="service_lifecycle" name="test_status_without_systemd_is_read_only" time="0" />
+    <testcase classname="service_lifecycle" name="test_sync_reloads_enables_and_starts_before_readiness_gate" time="0" />
+    <testcase classname="service_lifecycle" name="test_systemd_mainpid_zero_is_not_ready_even_when_health_answers" time="0" />
+    <testcase classname="service_lifecycle" name="test_unit_uses_prepared_python_and_quoted_working_directory" time="0" />
+  </testsuite>
+  <testsuite name="warehouse_lifecycle" tests="4" failures="0" errors="0" skipped="0" time="0.005">
+    <testcase classname="warehouse_lifecycle" name="test_permission_failure_is_actionable_and_timeout_is_explicit" time="0" />
+    <testcase classname="warehouse_lifecycle" name="test_starting_warehouse_is_polled_without_duplicate_start" time="0" />
+    <testcase classname="warehouse_lifecycle" name="test_stopped_warehouse_starts_once_and_waits_until_running" time="0" />
+    <testcase classname="warehouse_lifecycle" name="test_stopping_warehouse_waits_for_stopped_before_start" time="0" />
   </testsuite>
   <testsuite name="http_ui" tests="7" failures="0" errors="0" skipped="0" time="3.536">
     <testcase classname="http_ui" name="test_api_is_same_origin_and_returns_json" time="0" />
@@ -59,7 +89,20 @@
     <testcase classname="http_ui" name="test_serves_local_assets_with_security_headers" time="0" />
     <testcase classname="http_ui" name="test_warehouse_discovery_and_recent_workspace_routes" time="0" />
   </testsuite>
-  <testsuite name="tools_service" tests="8" failures="0" errors="0" skipped="0" time="0.531">
+  <testsuite name="frontend_ui" tests="11" failures="0" errors="0" skipped="0" time="1.470">
+    <testcase classname="frontend_ui" name="test_active_indicator_is_bound_to_inner_tab_content" time="0" />
+    <testcase classname="frontend_ui" name="test_catalog_icons_have_no_image_placeholders_or_unstyled_star_buttons" time="0" />
+    <testcase classname="frontend_ui" name="test_final_polish_keeps_clear_action_scoped_and_context_compact" time="0" />
+    <testcase classname="frontend_ui" name="test_mock_scenarios_and_large_catalog_are_deterministic_and_paginated" time="0" />
+    <testcase classname="frontend_ui" name="test_production_and_mock_pages_provide_every_application_mount" time="0" />
+    <testcase classname="frontend_ui" name="test_production_assets_and_lifecycle_manifest_exclude_dev_mock" time="0" />
+    <testcase classname="frontend_ui" name="test_production_ui_uses_http_adapter_and_has_no_external_brand_link" time="0" />
+    <testcase classname="frontend_ui" name="test_query_editor_results_splitter_is_accessible_bounded_and_persistent" time="0" />
+    <testcase classname="frontend_ui" name="test_readability_structure_and_progressive_disclosure" time="0" />
+    <testcase classname="frontend_ui" name="test_static_mock_server_is_loopback_only_and_has_no_backend_api" time="0" />
+    <testcase classname="frontend_ui" name="test_warehouse_is_a_select_and_never_a_manual_identifier_field" time="0" />
+  </testsuite>
+  <testsuite name="tools_service" tests="8" failures="0" errors="0" skipped="0" time="0.535">
     <testcase classname="tools_service" name="test_compare_requires_complete_matching_result_sets" time="0" />
     <testcase classname="tools_service" name="test_lineage_escapes_literals_and_caps_rows_on_shared_query_router" time="0" />
     <testcase classname="tools_service" name="test_profile_is_bounded_and_never_returns_raw_sample_rows" time="0" />
@@ -69,13 +112,13 @@
     <testcase classname="tools_service" name="test_plugin_registers_all_shared_bff_tools_without_direct_runtime_or_credentials" time="0" />
     <testcase classname="tools_service" name="test_tool_dispatch_covers_all_registered_actions" time="0" />
   </testsuite>
-  <testsuite name="lifecycle" tests="1" failures="0" errors="0" skipped="0" time="1.291">
+  <testsuite name="lifecycle" tests="1" failures="0" errors="0" skipped="0" time="1.773">
     <testcase classname="lifecycle" name="lifecycle" time="0" />
   </testsuite>
-  <testsuite name="frontend_syntax" tests="1" failures="0" errors="0" skipped="0" time="0.117">
+  <testsuite name="frontend_syntax" tests="1" failures="0" errors="0" skipped="0" time="0.108">
     <testcase classname="frontend_syntax" name="frontend_syntax" time="0" />
   </testsuite>
-  <testsuite name="python_syntax" tests="1" failures="0" errors="0" skipped="0" time="0.098">
+  <testsuite name="python_syntax" tests="1" failures="0" errors="0" skipped="0" time="0.112">
     <testcase classname="python_syntax" name="python_syntax" time="0" />
   </testsuite>
 </testsuites>

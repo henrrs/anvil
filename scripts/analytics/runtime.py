@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 class AnalyticsRuntimeManager:
     def __init__(self, paths: AnalyticsPaths | None = None, *, runtime: dict[str, Any] | None = None,
                  base_url: str | None = None, adapter: OpenCodeRuntimePort | None = None,
-                 process_factory=subprocess.Popen, startup_timeout: float = 30.0) -> None:
+                 process_factory=subprocess.Popen, startup_timeout: float = 45.0) -> None:
         self.paths = paths or AnalyticsPaths.discover(create=True)
         self.runtime_record = runtime
         self.configured_base_url = base_url

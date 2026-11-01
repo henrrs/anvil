@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import stat
 import tempfile
 import unittest
@@ -30,7 +31,32 @@ class AnalyticsContextStoreTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(self.paths.database.stat().st_mode), 0o600)
         with self.store._connect() as db:
             self.assertEqual(db.execute("PRAGMA journal_mode").fetchone()[0].lower(), "wal")
-            self.assertEqual(db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 3)
+
+    def test_catalog_hydration_progress_is_persisted_and_bounded(self) -> None:
+        self.store.catalog_hydration_set("tree", "", "LOADING", phase="tables",
+                                          progress_current=4, progress_total=9)
+        progress = self.store.catalog_hydration_get("tree")
+        self.assertEqual((progress["state"], progress["phase"], progress["progress_current"],
+                          progress["progress_total"]), ("LOADING", "tables", 4, 9))
+        summary = self.store.catalog_hydration_summary()
+        self.assertEqual(summary["tree_hydration"]["progress_current"], 4)
+        self.assertEqual(summary["scope_hydration_states"]["tree"]["LOADING"], 1)
+        with self.assertRaises(ValidationError):
+            self.store.catalog_hydration_set("tree", "", "LOADING", progress_current=10,
+                                              progress_total=9)
+
+    def test_v2_catalog_hydration_schema_migrates_to_v3(self) -> None:
+        legacy_paths = AnalyticsPaths.from_root(Path(self.temp.name) / "legacy-anvil", create=True)
+        with sqlite3.connect(legacy_paths.database) as db:
+            db.execute("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
+            db.execute("INSERT INTO schema_migrations(version,applied_at) VALUES(1,'old'),(2,'old')")
+            db.execute("CREATE TABLE catalog_hydration(scope TEXT NOT NULL,parent_name TEXT NOT NULL DEFAULT '',state TEXT NOT NULL,error_code TEXT NOT NULL DEFAULT '',error_message TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,object_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,PRIMARY KEY(scope,parent_name))")
+        migrated = ContextStore(paths=legacy_paths)
+        with migrated._connect() as db:
+            self.assertEqual(db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 3)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(catalog_hydration)")}
+        self.assertTrue({"phase", "progress_current", "progress_total"} <= columns)
 
     def test_catalog_knowledge_query_and_operations_are_durable(self) -> None:
         self.assertEqual(self.store.catalog_upsert([

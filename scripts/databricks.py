@@ -616,7 +616,8 @@ def api_call(method: str, path: str, *, profile: str, body: dict[str, Any] | Non
 def unity_catalog_page(operation: str, profile: str | None = None, *,
                        catalog_name: str | None = None, schema_name: str | None = None,
                        full_name: str | None = None, max_results: int = 100,
-                       page_token: str | None = None, timeout: float | None = None) -> dict[str, Any]:
+                       page_token: str | None = None, omit_columns: bool = False,
+                       omit_properties: bool = False, timeout: float | None = None) -> dict[str, Any]:
     """Read one paginated Unity Catalog metadata page through Anvil's selected provider."""
     selected, _, _ = resolve_profile(profile)
     if not 1 <= max_results <= 1000:
@@ -640,6 +641,10 @@ def unity_catalog_page(operation: str, profile: str | None = None, *,
             raise DatabricksError("INVALID_INPUT", "catalog and schema names are required")
         path = "/api/2.1/unity-catalog/tables"
         query.update({"catalog_name": catalog_name, "schema_name": schema_name})
+        if omit_columns:
+            query["omit_columns"] = "true"
+        if omit_properties:
+            query["omit_properties"] = "true"
         collection = "tables"
     elif operation == "tables.get":
         if (not full_name or len(full_name) > 1024 or len(full_name.split(".")) != 3
@@ -850,6 +855,82 @@ def get_warehouse(warehouse_id: str, profile: str | None = None, *,
     return normalized_warehouse(data) or {}
 
 
+def start_warehouse(warehouse_id: str, profile: str | None = None, *,
+                    timeout: float | None = None) -> dict[str, Any]:
+    """Start one explicitly selected SQL warehouse through the shared provider router."""
+    if (not isinstance(warehouse_id, str) or not warehouse_id or len(warehouse_id) > 256
+            or any(ord(char) < 32 or char in "/\\" for char in warehouse_id)):
+        raise DatabricksError("INVALID_INPUT", "a valid SQL warehouse ID is required")
+    selected, _, _ = resolve_profile(profile)
+    path = "/api/2.0/sql/warehouses/" + quote(warehouse_id, safe="") + "/start"
+    try:
+        outcome = _call_provider("warehouse.start", "warehouse.start", ["api", "post", path],
+                                 profile=selected, timeout=timeout,
+                                 payload={"warehouse_id": warehouse_id}, cli_body={})
+        value = outcome.get("value")
+        result = value if isinstance(value, dict) else {}
+        _record_runtime_outcome(selected, "warehouse.start", provider=outcome["provider"],
+                                result=result, resolution={"warehouse.start": outcome["provider"]})
+        return result
+    except DatabricksError as exc:
+        _record_runtime_outcome(selected, "warehouse.start", error=exc)
+        raise
+
+
+def ensure_warehouse_running(warehouse: dict[str, Any], profile: str, *,
+                             start_timeout: float | None = None) -> dict[str, Any]:
+    """Start a stopped selected warehouse once, then wait through its state transitions."""
+    warehouse_id = str(warehouse.get("warehouse_id") or "")
+    name = str(warehouse.get("name") or warehouse_id or "selected warehouse")
+    limit = float(start_timeout or os.environ.get("ANVIL_ANALYTICS_WAREHOUSE_START_TIMEOUT", "600"))
+    limit = max(30.0, min(limit, 1800.0))
+    state = str(warehouse.get("state") or "UNKNOWN").upper()
+    deadline = time.monotonic() + limit
+    start_sent = False
+    if state == "RUNNING":
+        return warehouse
+    if state in {"DELETED", "DELETING", "UNKNOWN", "UNAVAILABLE"}:
+        raise DatabricksError("WAREHOUSE_UNAVAILABLE", f"SQL Warehouse {name} is {state.lower()} and cannot run this query.")
+    if state == "STOPPED":
+        try:
+            start_warehouse(warehouse_id, profile, timeout=min(limit, 60))
+            start_sent = True
+            state = "STARTING"
+        except DatabricksError as exc:
+            if exc.category in {"PERMISSION_DENIED", "AUTH_REQUIRED", "AUTH_INVALID"}:
+                raise DatabricksError("WAREHOUSE_START_PERMISSION_DENIED",
+                    f"Unable to start SQL Warehouse {name}.\n\nOptions:\n"
+                    "- select another running warehouse\n"
+                    "- start this warehouse manually if permitted\n"
+                    "- execute locally when coverage exists") from exc
+            raise DatabricksError("WAREHOUSE_START_FAILED",
+                                  f"Unable to start SQL Warehouse {name}. Check provider access, or select another running warehouse.") from exc
+    while time.monotonic() < deadline:
+        if state == "RUNNING":
+            return {**warehouse, "state": "RUNNING"}
+        if state == "STOPPED" and not start_sent:
+            try:
+                start_warehouse(warehouse_id, profile, timeout=min(limit, 60))
+                start_sent = True
+                state = "STARTING"
+            except DatabricksError as exc:
+                if exc.category == "PERMISSION_DENIED":
+                    raise DatabricksError("WAREHOUSE_START_PERMISSION_DENIED",
+                        f"Unable to start SQL Warehouse {name}.\n\nOptions:\n"
+                        "- select another running warehouse\n"
+                        "- start this warehouse manually if permitted\n"
+                        "- execute locally when coverage exists") from exc
+                raise DatabricksError("WAREHOUSE_START_FAILED",
+                                      f"Unable to start SQL Warehouse {name}. Check provider access, or select another running warehouse.") from exc
+        time.sleep(min(2.0, max(0.1, deadline - time.monotonic())))
+        warehouse = get_warehouse(warehouse_id, profile, timeout=min(limit, 60))
+        state = str(warehouse.get("state") or "UNKNOWN").upper()
+        if state in {"DELETED", "DELETING", "UNAVAILABLE", "UNKNOWN"}:
+            raise DatabricksError("WAREHOUSE_UNAVAILABLE", f"SQL Warehouse {name} became {state.lower()} before it was ready.")
+    raise DatabricksError("WAREHOUSE_START_TIMEOUT",
+                          f"SQL Warehouse {name} did not reach RUNNING within {int(limit)} seconds. Retry or select another warehouse.")
+
+
 def bounded_result(value: Any, byte_limit: int = MAX_RESULT_BYTES) -> Any:
     encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     if len(encoded.encode("utf-8")) <= byte_limit:
@@ -909,11 +990,11 @@ def execute_sql(statement: str, warehouse_id: str, profile: str | None = None, p
     if sql_may_mutate(statement) and not allow_mutation:
         raise DatabricksError("SQL_MUTATION_APPROVAL_REQUIRED", "statement may change remote data or configuration; obtain direct user approval, then explicitly pass --allow-mutation")
     found = discover_warehouses(selected)
-    warehouse = next((item for item in [*found["running"], *found["stopped"]] if item["warehouse_id"] == warehouse_id), None)
+    all_warehouses = found.get("warehouses") or [*found.get("running", []), *found.get("stopped", [])]
+    warehouse = next((item for item in all_warehouses if item["warehouse_id"] == warehouse_id), None)
     if warehouse is None:
         raise DatabricksError("WAREHOUSE_NOT_FOUND", "requested warehouse is not visible to the selected profile")
-    if warehouse["state"] != "RUNNING":
-        raise DatabricksError("WAREHOUSE_STOPPED", "selected warehouse is stopped; user approval is required before starting it")
+    warehouse = ensure_warehouse_running(warehouse, selected)
     selected_provider = active_provider("sql.execute")
     if selected_provider == "vscode":
         raise DatabricksError("CAPABILITY_ASSISTED", "SQL execution is not headless in VS Code; use the Databricks extension's supported SQL workflow")

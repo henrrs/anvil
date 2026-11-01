@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import os
 import sqlite3
@@ -13,6 +12,7 @@ import urllib.request
 from pathlib import Path
 
 from configure import parse_jsonc
+from analytics.diagnostics import collect as collect_analytics_readiness
 
 
 def config_data(path: Path) -> dict:
@@ -40,12 +40,11 @@ def safe_names(values: list[str]) -> str:
     return ", ".join(values) if values else "none"
 
 
-def analytics_workspace(config_dir: Path, home: Path) -> None:
+def analytics_workspace(config_dir: Path, home: Path) -> dict:
     package = config_dir / "scripts" / "analytics"
     web_root = config_dir / "web" / "analytics"
     root = home / ".anvil"
     state = root / "analytics"
-    runtime_path = state / "runtime.json"
     database = state / "context.db"
     try:
         port = int(os.environ.get("ANVIL_ANALYTICS_PORT", "8765"))
@@ -53,43 +52,36 @@ def analytics_workspace(config_dir: Path, home: Path) -> None:
             port = 8765
     except ValueError:
         port = 8765
-    unit = config_dir.parent / "systemd" / "user" / "anvil-analytics.service"
-    runtime: dict = {}
-    if runtime_path.is_file() and not runtime_path.is_symlink():
-        try:
-            value = json.loads(runtime_path.read_text(encoding="utf-8"))
-            runtime = value if isinstance(value, dict) else {}
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            runtime = {}
-    server_ready = False
-    try:
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/health",
-            headers={"Host": f"127.0.0.1:{port}", "Accept": "application/json"},
-        )
-        with urllib.request.urlopen(request, timeout=0.4) as response:
-            server_ready = response.status == 200 and b'"status":"OK"' in response.read(4096)
-    except (OSError, urllib.error.URLError, TimeoutError):
-        pass
+    readiness = collect_analytics_readiness(config_dir, home, port)
+    service = readiness.get("service", {})
     assets_ready = all((web_root / name).is_file() and not (web_root / name).is_symlink()
                        for name in ("index.html", "app.js", "styles.css"))
     print("Analytics Workspace")
     print(f"  installed             {'YES' if package.is_dir() and not package.is_symlink() else 'NO'}")
     print(f"  UI assets             {'READY' if assets_ready else 'MISSING'}")
-    print(f"  service               {'READY' if server_ready else 'CONFIGURED' if unit.is_file() else 'STOPPED'}")
+    print(f"  unit installed        {'YES' if service.get('unit_installed') else 'NO'}")
+    print(f"  service enabled       {'YES' if service.get('enabled') else 'NO'}")
+    print(f"  service active        {'YES' if service.get('active') else 'NO'} (MainPID {service.get('main_pid', 0)})")
+    print(f"  service health        {readiness.get('service', {}).get('status', 'NOT_READY')}")
     print(f"  configured URL        http://anvil.localhost:{port}")
     print(f"  workspace             {root / 'workspaces' / 'analytics'}")
     print(f"  Context Store         {'SQLite WAL' if database.is_file() and not database.is_symlink() else 'NOT CREATED'}")
-    generation = runtime.get("runtime_generation") or runtime.get("generation")
-    print(f"  OpenCode runtime      {generation if generation in (1, 2) else 'NOT CONFIGURED'}")
-    print(f"  canonical session     {'PRESENT' if runtime.get('canonical_session_id') else 'NOT CREATED'}")
+    opencode = readiness.get("opencode", readiness.get("runtime", {}))
+    print(f"  OpenCode runtime      {opencode.get('status', 'NOT_CHECKED')} (generation {opencode.get('generation') or 'unknown'})")
+    canonical = readiness.get("canonical_session", {})
+    print(f"  canonical session     {canonical.get('status', 'NOT_CHECKED')}")
     print(f"  SQLite module         {'AVAILABLE' if sqlite3.sqlite_version else 'UNAVAILABLE'}")
-    try:
-        duckdb = importlib.util.find_spec("duckdb") is not None
-    except (ImportError, ValueError):
-        duckdb = False
-    print(f"  DuckDB                {'AVAILABLE' if duckdb else 'DEGRADED (optional dependency missing)'}")
+    for name in ("duckdb", "pyarrow"):
+        dependency = readiness.get(name, {})
+        print(f"  {name.capitalize():21} {dependency.get('status', 'NOT_CHECKED')}"
+              + (f" · {dependency.get('message')}" if dependency.get('message') else ""))
+    catalog = readiness.get("catalog", {})
+    print(f"  catalog metadata      {catalog.get('catalogs', 0)} catalogs · {catalog.get('schemas', 0)} schemas · "
+          f"{catalog.get('objects', 0)} tables/views · {catalog.get('status', 'NOT_CHECKED')}")
+    if any(readiness.get(name, {}).get("status") != "READY" for name in ("duckdb", "pyarrow")):
+        print("  recovery              make upgrade")
     print("  WSL host reachability NOT_CHECKED (requires a Windows browser-side check)")
+    return readiness
 
 
 def main() -> int:

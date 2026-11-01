@@ -26,6 +26,7 @@ from analytics_ui_mock import make_server
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "artifacts" / "analytics-active-tab-indicator" / "final"
+SPLITTER_OUTPUT = ROOT / "artifacts" / "analytics-production-hardening" / "ui" / "query-splitter"
 SIZES = ((1366, 768), (1920, 1080), (2560, 1440), (3840, 2160))
 VIEWS = {
     "healthy": "home",
@@ -106,8 +107,8 @@ class Browser:
     def js(self, script: str):
         return self.command("POST", "/execute/sync", {"script": script, "args": []})
 
-    def screenshot(self, name: str) -> None:
-        OUTPUT.mkdir(parents=True, exist_ok=True)
+    def screenshot(self, name: str, output: Path = OUTPUT) -> None:
+        output.mkdir(parents=True, exist_ok=True)
         image = base64.b64decode(self.command("GET", "/screenshot"))
         if image[:8] != b"\x89PNG\r\n\x1a\n":
             raise AssertionError(f"{name}: browser did not return PNG")
@@ -116,7 +117,7 @@ class Browser:
             actual = (int.from_bytes(image[16:20], "big"), int.from_bytes(image[20:24], "big"))
             if actual != expected:
                 raise AssertionError(f"{name}: screenshot is {actual}, expected {expected}")
-        (OUTPUT / name).write_bytes(image)
+        (output / name).write_bytes(image)
 
     def close(self) -> None:
         if self.session:
@@ -261,6 +262,78 @@ def certify_tab_close(browser: Browser, base: str) -> None:
     require(all(result.values()), f"workspace tab close or visibility failed: {result}")
 
 
+def certify_query_splitter(browser: Browser, base: str) -> None:
+    for width, height in SIZES:
+        browser.load(f"{base}/dev/?scenario=query-results", width, height)
+        geometry = browser.js("""
+          const split = document.querySelector('#query-split');
+          const editor = document.querySelector('#query-editor-panel');
+          const divider = document.querySelector('#query-splitter');
+          const results = document.querySelector('#query-results-panel');
+          if (!split || !editor || !divider || !results) return null;
+          const s = split.getBoundingClientRect(), e = editor.getBoundingClientRect();
+          const d = divider.getBoundingClientRect(), r = results.getBoundingClientRect();
+          return {split: {top:s.top,bottom:s.bottom}, editor:{top:e.top,bottom:e.bottom,height:e.height},
+            divider:{top:d.top,bottom:d.bottom,height:d.height}, results:{top:r.top,bottom:r.bottom,height:r.height},
+            ratio: parseFloat(getComputedStyle(split).getPropertyValue('--query-editor-ratio')),
+            globalOverflow: document.documentElement.scrollWidth > innerWidth + 1};
+        """)
+        require(geometry is not None, f"query splitter mounts missing at {width}x{height}")
+        require(geometry["editor"]["height"] >= 132 and geometry["results"]["height"] >= 116,
+                f"query panes violate minimum heights at {width}x{height}: {geometry}")
+        require(geometry["split"]["top"] <= geometry["editor"]["top"] + 1
+                and geometry["editor"]["bottom"] <= geometry["divider"]["top"] + 1
+                and geometry["divider"]["bottom"] <= geometry["results"]["top"] + 1
+                and geometry["results"]["bottom"] <= geometry["split"]["bottom"] + 1
+                and geometry["divider"]["height"] > 0 and not geometry["globalOverflow"],
+                f"query splitter escapes its layout bounds at {width}x{height}: {geometry}")
+        require(browser.js("""
+          const split = document.querySelector('#query-split');
+          const divider = document.querySelector('#query-splitter');
+          const available = split.clientHeight - divider.offsetHeight;
+          const ratio = parseFloat(getComputedStyle(split).getPropertyValue('--query-editor-ratio')) / 100;
+          return ratio * available >= 132 - 1 && (1 - ratio) * available >= 116 - 1;
+        """), f"query ratio does not honor both pane minima at {width}x{height}")
+
+        interaction = browser.js("""
+          const split = document.querySelector('#query-split');
+          const divider = document.querySelector('#query-splitter');
+          const rect = split.getBoundingClientRect();
+          const before = parseFloat(getComputedStyle(split).getPropertyValue('--query-editor-ratio'));
+          divider.setPointerCapture = () => {};
+          const event = (type, y) => divider.dispatchEvent(new PointerEvent(type, {
+            bubbles:true, pointerId:7, pointerType:'mouse', clientY:y, clientX:rect.left+4
+          }));
+          event('pointerdown', rect.top + rect.height * .62);
+          event('pointermove', rect.top + rect.height * .43);
+          event('pointerup', rect.top + rect.height * .43);
+          const after = parseFloat(getComputedStyle(split).getPropertyValue('--query-editor-ratio'));
+          return {before, after, stored: Number(localStorage.getItem('analytics.query.splitRatio')),
+            aria: Number(divider.getAttribute('aria-valuenow'))};
+        """)
+        require(abs(interaction["after"] - interaction["before"]) >= 2
+                and abs(interaction["stored"] * 100 - interaction["after"]) < 1
+                and abs(interaction["aria"] - interaction["after"]) <= 1,
+                f"pointer drag or persistence failed at {width}x{height}: {interaction}")
+        require(browser.js("""
+          const split = document.querySelector('#query-split');
+          const divider = document.querySelector('#query-splitter');
+          const editor = document.querySelector('#query-editor-panel').getBoundingClientRect();
+          const results = document.querySelector('#query-results-panel').getBoundingClientRect();
+          const storedBefore = Number(localStorage.getItem('analytics.query.splitRatio')) * 100;
+          divider.focus(); divider.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowDown', bubbles:true}));
+          const updated = parseFloat(getComputedStyle(split).getPropertyValue('--query-editor-ratio'));
+          return document.activeElement === divider && updated > storedBefore
+            && editor.height >= 132 && results.height >= 116;
+        """), f"keyboard resizing failed at {width}x{height}")
+
+        browser.load(f"{base}/dev/?scenario=query-results", width, height)
+        persisted = browser.js("return Math.abs(parseFloat(getComputedStyle(document.querySelector('#query-split')).getPropertyValue('--query-editor-ratio')) / 100 - Number(localStorage.getItem('analytics.query.splitRatio'))) < .01;")
+        require(persisted, f"saved splitter ratio did not survive reload at {width}x{height}")
+        browser.screenshot(f"query-splitter-{width}x{height}.png", SPLITTER_OUTPUT)
+        print(f"PASS query splitter drag, keyboard, persistence, bounds and pane minima {width}x{height}")
+
+
 def capture_tab_indicator_review(browser: Browser, base: str) -> None:
     cases = (
         ("home-active", "healthy", None),
@@ -390,6 +463,7 @@ def certify(browser: Browser, base: str) -> None:
             "Ask Anvil collapse failed")
     certify_clear_conversation(browser, base)
     certify_tab_close(browser, base)
+    certify_query_splitter(browser, base)
     for width, height in ((1920, 1080), (3840, 2160)):
         browser.load(f"{base}/dev/?scenario=home-populated&tabs=many", width, height)
         require(browser.js("return document.querySelector('#workspace-tabs').scrollWidth >= document.querySelector('#workspace-tabs').clientWidth && document.querySelector('.workspace-tab.active .workspace-tab-label')?.textContent === 'Query 9';"),

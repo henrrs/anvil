@@ -68,6 +68,12 @@ def main() -> int:
               "fresh installation did not include the Analytics frontend")
         check("web/analytics/api.js" in manifest["files"],
               "fresh installation did not include the Analytics HTTP API adapter")
+        check("VERSION" in manifest["files"]
+              and "config/runtime-policy.json" in manifest["files"]
+              and "runtime/analytics-requirements.lock" in manifest["files"],
+              "fresh installation omitted versioned Analytics runtime artifacts")
+        check((fresh / "runtime/analytics-requirements.lock").is_file(),
+              "fresh installation omitted the Analytics dependency lock")
         check(not any(path.startswith("web/analytics/dev/") for path in manifest["files"]),
               "development-only mock files leaked into the production manifest")
         check(not (fresh / "web" / "analytics" / "dev").exists(),
@@ -102,6 +108,32 @@ def main() -> int:
         (legacy / "cli.json").write_text('{"theme":"company"}\n', encoding="utf-8")
         check(validate_installed(legacy, "2.15.0", expected_version)["manifest_present"],
               "legacy managed config could not be inspected")
+
+        # A 2.16 installation already has Analytics code but predates managed
+        # dependency/runtime-policy artifacts; upgrading must add them.
+        prior_analytics = root / "prior-analytics-config"
+        shutil.copytree(fresh, prior_analytics)
+        for relative in ("VERSION", "config/runtime-policy.json", "runtime/analytics-requirements.lock"):
+            (prior_analytics / relative).unlink()
+        prior_manifest_path = prior_analytics / MANIFEST_NAME
+        prior_manifest = json.loads(prior_manifest_path.read_text(encoding="utf-8"))
+        prior_manifest["anvil_version"] = "2.16.0"
+        prior_manifest["files"] = {path: digest for path, digest in prior_manifest["files"].items()
+                                    if path not in {"VERSION", "config/runtime-policy.json",
+                                                    "runtime/analytics-requirements.lock"}}
+        prior_manifest_path.write_text(json.dumps(prior_manifest, indent=2, sort_keys=True) + "\n",
+                                       encoding="utf-8")
+        check(validate_installed(prior_analytics, "2.16.0", expected_version)["manifest_present"],
+              "pre-convergence Analytics release could not be inspected")
+        converged_analytics = root / "converged-analytics-config"
+        build_config(converged_analytics, home, prior_analytics)
+        convergence = plan(inspect_source(prior_analytics, "2.16.0"),
+                           json.loads((converged_analytics / MANIFEST_NAME).read_text(encoding="utf-8")),
+                           "2.16.0", expected_version)
+        check({"VERSION", "config/runtime-policy.json", "runtime/analytics-requirements.lock"}
+              <= set(convergence["changes"]["added"]),
+              "upgrade did not add the release-pinned Analytics runtime artifacts")
+        validate_installed(converged_analytics, expected_version, expected_version)
 
         # User-global data is created outside both managed config and backup.
         analytics_data = home / ".anvil" / "analytics"

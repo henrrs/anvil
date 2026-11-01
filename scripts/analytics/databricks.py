@@ -142,6 +142,8 @@ class SharedDatabricksCatalogClient:
             raise
         except Exception as exc:
             category = getattr(exc, "category", "PROVIDER_UNHEALTHY")
+            if str(category).startswith("WAREHOUSE_START_") or category in {"WAREHOUSE_UNAVAILABLE", "WAREHOUSE_NOT_FOUND"}:
+                raise ProviderError(str(exc), code=str(category), retryable=False) from exc
             raise ProviderError("The shared Databricks SQL capability is unavailable",
                                 code=category,
                                 retryable=category in {"WORKSPACE_NETWORK_TIMEOUT", "WORKSPACE_UNREACHABLE",

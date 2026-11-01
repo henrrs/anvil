@@ -172,6 +172,7 @@ if [[ -d "$ANVIL_CONFIG_DIR" ]]; then
 else
   anvil_log 'No existing OpenCode config directory was found; reforge will install Anvil-owned profile files and a pre-mutation snapshot.'
 fi
+anvil_print_analytics_plan "$ready_config"
 if [[ "$target_major" == 1 ]]; then
   python3 "$ROOT/scripts/configure.py" audit-v1 "$ready_config/opencode.jsonc"
 else
@@ -228,7 +229,11 @@ python3 "$ROOT/scripts/lifecycle_transaction.py" begin --operation reforge \
   --backup "$backup_dir" --source-version "$previous_anvil_version" --target-version "$ANVIL_VERSION" --owner-pid "$$"
 transaction_active=1
 python3 "$ROOT/scripts/lifecycle_transaction.py" phase applying-config
-anvil_apply_config "$ready_config"
+if [[ "$runtime_action" == install ]]; then
+  anvil_apply_config "$ready_config" no yes
+else
+  anvil_apply_config "$ready_config"
+fi
 python3 "$ROOT/scripts/lifecycle_transaction.py" phase config-applied
 if [[ "$runtime_action" == install ]]; then
   bash "$ROOT/scripts/install-opencode.sh" install "$candidate" "$candidate_version" "$target_major"
@@ -236,6 +241,7 @@ if [[ "$runtime_action" == install ]]; then
     --home "$ANVIL_HOME_DIR" --xdg-config-home "$ANVIL_CONFIG_HOME" \
     --install-dir "$ANVIL_INSTALL_BIN" --shell "${SHELL:-bash}" --path "$PATH")"
   export PATH="$ANVIL_INSTALL_BIN:$PATH"
+  anvil_converge_analytics_runtime "$ANVIL_CONFIG_DIR"
 fi
 XDG_DATA_HOME="$ANVIL_DATA_HOME" python3 "$ANVIL_CONFIG_DIR/scripts/memory.py" init >/dev/null
 python3 "$ROOT/scripts/lifecycle_transaction.py" phase before-installation-metadata

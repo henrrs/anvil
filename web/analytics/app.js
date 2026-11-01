@@ -4,6 +4,7 @@ const WAREHOUSE_KEY = "anvil:analytics:selected-warehouse:v1";
 const FAVORITES_KEY = "anvil:analytics:favorites:v1";
 const RECENTS_KEY = "anvil:analytics:recent-tables:v1";
 const LAYOUT_KEY = "anvil:analytics:layout:v1";
+const QUERY_SPLIT_KEY = "analytics.query.splitRatio";
 const PAGE_SIZE = 100;
 
 function readStorage(key, fallback) {
@@ -568,10 +569,19 @@ function catalogObjectRow(item) {
   return row;
 }
 
-function renderTree(items, container, depth = 0) {
+function renderTree(items, container, depth = 0, response = null) {
   container.replaceChildren();
   if (!items.length) {
-    container.append(node("div", "empty-state compact", "No catalog objects are available yet."));
+    const status = response?.status || "NOT_LOADED";
+    const error = response?.error;
+    const message = status === "NOT_LOADED" || status === "PENDING" || status === "LOADING"
+      ? "Loading objects…"
+      : status === "BROWSE_ONLY" && error === "PERMISSION_DENIED"
+        ? "Permission denied while loading catalog metadata."
+        : status === "BROWSE_ONLY" || status === "FAILED"
+          ? "Catalog metadata could not be loaded. Retry when the provider is available."
+          : "No catalog objects are available.";
+    container.append(node("div", status === "LOADING" || status === "PENDING" ? "tree-loading" : "tree-empty", message));
     return;
   }
   const fragment = document.createDocumentFragment();
@@ -615,7 +625,7 @@ function renderCatalogView() {
   }
   if (term && filter !== "all") items = items.filter((item) => `${item.full_name || ""} ${item.comment || ""}`.toLowerCase().includes(term.toLowerCase()));
   if (filter === "all" && !term) {
-    renderTree(items, tree);
+    renderTree(items, tree, 0, { status: state.catalogStatus });
     if (state.catalogHasMore) tree.append(button("Load 100 more catalogs", "tree-load-more", () => loadCatalog({ offset: state.catalogOffset, append: true })));
   } else {
     tree.replaceChildren();
@@ -640,7 +650,7 @@ async function loadCatalogChildren(item, container, depth, offset = 0, append = 
     const rows = result.items || [];
     if (!append) container.replaceChildren();
     const entries = node("div", "tree-page");
-    renderTree(rows, entries, depth);
+    renderTree(rows, entries, depth, result);
     container.append(entries);
     if (result.has_more) {
       const more = button("Load 100 more", "tree-load-more", async () => {
@@ -1044,6 +1054,12 @@ async function runQuery() {
         throw new Error("Select a SQL Warehouse for this query. Local queries remain available when coverage is complete.");
       }
     }
+    const remoteRoute = workspace.route === "DATABRICKS" || (workspace.route === "AUTO" && explain?.route === "DATABRICKS");
+    const selected = state.warehouses.find((item) => item.warehouse_id === warehouseIdForQuery());
+    if (remoteRoute && selected && ["STOPPED", "STARTING", "STOPPING"].includes(selected.state)) {
+      workspace.message = selected.state === "RUNNING" ? "Running read-only query…" : "Starting SQL Warehouse…";
+      renderQueryWorkspace(workspace);
+    }
     const result = await post("/api/query", { sql: workspace.sql, route: workspace.route,
       warehouse_id: warehouseIdForQuery(), timeout: 120 });
     workspace.result = result;
@@ -1244,6 +1260,56 @@ function applyLayout() {
   $("collapse-assistant").title = state.layout.assistantCollapsed ? "Expand Ask Anvil" : "Collapse Ask Anvil";
 }
 
+function setQuerySplitRatio(value, persist = false) {
+  const split = $("query-split");
+  const divider = $("query-splitter");
+  if (!split || !divider) return;
+  const height = split.clientHeight - divider.offsetHeight;
+  const min = height > 0 ? Math.max(0.25, 132 / height) : 0.25;
+  const max = height > 0 ? Math.min(0.75, 1 - 116 / height) : 0.75;
+  const bounded = Math.max(min, Math.min(Math.max(min, max), Number.isFinite(value) ? value : 0.62));
+  split.style.setProperty("--query-editor-ratio", `${(bounded * 100).toFixed(2)}%`);
+  divider.setAttribute("aria-valuenow", String(Math.round(bounded * 100)));
+  if (persist) writeStorage(QUERY_SPLIT_KEY, bounded);
+  window.anvilAnalyticsEditor?.layout?.();
+  window.dispatchEvent(new Event("anvil:analytics-editor-resize"));
+  return bounded;
+}
+
+function bindQuerySplitter() {
+  const divider = $("query-splitter");
+  const split = $("query-split");
+  if (!divider || !split) return;
+  const stored = readStorage(QUERY_SPLIT_KEY, 0.62);
+  let ratio = setQuerySplitRatio(Number(stored));
+  divider.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    divider.classList.add("dragging");
+    divider.setPointerCapture(event.pointerId);
+    const move = (next) => {
+      const rect = split.getBoundingClientRect();
+      const available = Math.max(1, rect.height - divider.offsetHeight);
+      ratio = setQuerySplitRatio((next.clientY - rect.top) / available);
+    };
+    const end = () => {
+      divider.classList.remove("dragging");
+      divider.removeEventListener("pointermove", move);
+      divider.removeEventListener("pointerup", end);
+      divider.removeEventListener("pointercancel", end);
+      setQuerySplitRatio(ratio, true);
+    };
+    divider.addEventListener("pointermove", move);
+    divider.addEventListener("pointerup", end);
+    divider.addEventListener("pointercancel", end);
+  });
+  divider.addEventListener("keydown", (event) => {
+    if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
+    ratio = setQuerySplitRatio(ratio + (event.key === "ArrowDown" ? 0.03 : -0.03), true);
+  });
+  window.addEventListener("resize", () => { ratio = setQuerySplitRatio(ratio); });
+}
+
 function togglePanel(panelName) {
   const key = panelName === "catalog" ? "catalogCollapsed" : "assistantCollapsed";
   state.layout[key] = !state.layout[key];
@@ -1353,6 +1419,7 @@ function installHandlers() {
   $("collapse-assistant").addEventListener("click", () => togglePanel("assistant"));
   bindResize($("catalog-resize"), "catalog");
   bindResize($("assistant-resize"), "assistant");
+  bindQuerySplitter();
   window.addEventListener("resize", applyLayout);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !clearChatConfirm.hidden) {

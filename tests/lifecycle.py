@@ -194,6 +194,15 @@ def downgrade_to_legacy_profile(paths: dict[str, pathlib.Path], version: str) ->
                 if key == "anvil_memory_search" or key.startswith("anvil_analytics_"):
                     permission.pop(key, None)
             write_json(profile, config)
+    if compare_versions(version, "2.17.0") == -1:
+        (config_dir / "VERSION").unlink(missing_ok=True)
+        (config_dir / "config" / "runtime-policy.json").unlink(missing_ok=True)
+        (config_dir / "runtime" / "analytics-requirements.lock").unlink(missing_ok=True)
+        for directory in (config_dir / "config", config_dir / "runtime"):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
         profile = config_dir / "opencode.jsonc"
         config = json.loads(profile.read_text(encoding="utf-8"))
         anvil = config.get("agents", {}).get("anvil", {})
@@ -344,7 +353,10 @@ def fresh_machine_command_contract_test(temp: pathlib.Path, wrapper_v1: pathlib.
     successful_upgrade = run(["/usr/bin/make", "--no-print-directory", "upgrade"],
                              dict(bootstrap_env, ANVIL_DOCTOR_LOCAL="1"))
     assert_human_public_result(successful_upgrade, "make upgrade")
-    rollback = run(["/usr/bin/make", "--no-print-directory", "rollback"], offline)
+    # Keep the lifecycle fixture offline: the original install/upgrade used a
+    # fake runtime and did not populate release-pinned Analytics wheels.
+    rollback = run(["/usr/bin/make", "--no-print-directory", "rollback"],
+                  dict(offline, ANVIL_TEST_MODE="1"))
     assert_human_public_result(rollback, "make rollback")
     check("Rollback completed" in rollback.stderr,
           "post-install rollback did not restore a verified snapshot")
@@ -411,7 +423,7 @@ def lifecycle_version_order_test() -> None:
     check(compare_versions("2.10.0", "2.9.9") == 1, "semantic version ordering compared minor releases lexically")
     check(compare_versions("2.08.0", "2.8.0") is None, "semantic version parser accepted a non-canonical leading zero")
     check(supported_migration("2.6.1", ANVIL_VERSION), "current release rejected the 2.6 source line retained by prior releases")
-    check(not supported_migration("2.5.9", ANVIL_VERSION), "source outside the ten-minor compatibility window was accepted")
+    check(not supported_migration("2.5.9", ANVIL_VERSION), "source outside the current compatibility window was accepted")
     check(not supported_migration("2.5.9", "2.10.0", minor_window=4), "2.10 historical source window changed")
     check(not supported_migration("2.12.0", "2.11.0"), "a newer installed release was treated as migratable")
     print("PASS semantic release ordering, supported source window, and downgrade rejection")
@@ -431,7 +443,8 @@ def config_ownership_transition_test(temp: pathlib.Path) -> None:
     changed_nested = paths["config"] / "skills/anvil-databricks/references/authentication.md"
     check(changed_nested.is_file(), "legacy fixture lacks the nested skill file evolution regression target")
     changed_nested.unlink()
-    env = offline_env(paths, temp / "preserve", ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    env = offline_env(paths, temp / "preserve", ANVIL_TEST_MODE="1", ANVIL_YES="1",
+                      ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
     source_inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
     check("Status                MIGRATION_REQUIRED" in source_inspect.stdout,
           "a valid source profile with changed nested skill files and an older agent inventory was called corrupted")
@@ -886,7 +899,8 @@ def custom_agent_transition_test(temp: pathlib.Path) -> None:
 def filesystem_and_working_directory_test(temp: pathlib.Path) -> None:
     machine_root = temp / "machine with spaces ü"
     paths = fixture(machine_root)
-    env = offline_env(paths, temp, ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_YES="1",
+                      ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
     external_cwd = temp / "external working directory"
     external_cwd.mkdir()
     observed_roots = [paths["home"], paths["config_home"], paths["data_home"], paths["state_home"]]
@@ -982,7 +996,8 @@ def readonly_config_parent_preflight_test(temp: pathlib.Path) -> None:
 
 def concurrent_lifecycle_test(temp: pathlib.Path) -> None:
     paths = fixture(temp / "machine")
-    env = offline_env(paths, temp, ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_YES="1",
+                      ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
     runtime_before = file_hash(paths["binary"])
     command = ["/usr/bin/make", "--no-print-directory", "-C", str(ROOT), "upgrade"]
     processes = [subprocess.Popen(command, cwd=temp, env=env, text=True,
@@ -1014,7 +1029,7 @@ def concurrent_lifecycle_test(temp: pathlib.Path) -> None:
 
 def interrupted_transaction_recovery_test(temp: pathlib.Path) -> None:
     paths = fixture(temp)
-    env = offline_env(paths, temp, ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0",
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0",
                       ANVIL_TEST_KILL_AFTER_CONFIG_RENAME="1")
     crashed = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env, expected=2)
     check("Killed" in crashed.stderr or "137" in crashed.stderr,
@@ -1044,7 +1059,8 @@ def interrupted_transaction_recovery_test(temp: pathlib.Path) -> None:
 
 def managed_file_repair_test(temp: pathlib.Path) -> None:
     paths = fixture(temp)
-    env = offline_env(paths, temp, ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_YES="1",
+                      ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
     run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
     managed_script = paths["config"] / "scripts/memory.py"
     managed_script.write_text("# injected managed-file modification\n", encoding="utf-8")
@@ -1478,7 +1494,7 @@ def upgrade_external_runtime_is_offline_test(temp: pathlib.Path) -> None:
         env_for(paths))
     before_hash = file_hash(external_binary)
     before_startup = (paths["home"] / ".bashrc").read_text(encoding="utf-8")
-    env = offline_env(paths, temp, PATH="/usr/bin:/bin", ANVIL_YES="1")
+    env = offline_env(paths, temp, PATH="/usr/bin:/bin", ANVIL_TEST_MODE="1", ANVIL_YES="1")
     proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
     installation = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
     backup = pathlib.Path(installation["migration"]["backup"])
@@ -1510,7 +1526,7 @@ def anvil_upgrade_rollback_test(temp: pathlib.Path) -> None:
         "installation": file_hash(paths["anvil_data"] / "installation.json"),
         "memory": tree_hash(paths["memory"]),
     }
-    env = offline_env(paths, temp, ANVIL_YES="1", ANVIL_TEST_FAIL_AFTER_CONFIG="1")
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_YES="1", ANVIL_TEST_FAIL_AFTER_CONFIG="1")
     proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env, expected=2)
     after = {
         "config": tree_hash(paths["config"]), "binary": file_hash(paths["binary"]),
@@ -1535,7 +1551,7 @@ def anvil_upgrade_rollback_test(temp: pathlib.Path) -> None:
         "state": tree_hash(before_metadata_paths["state_opencode"]),
     }
     before_metadata_env = offline_env(
-        before_metadata_paths, temp / "before-metadata", ANVIL_YES="1",
+        before_metadata_paths, temp / "before-metadata", ANVIL_TEST_MODE="1", ANVIL_YES="1",
         ANVIL_TEST_FAIL_BEFORE_METADATA="1",
     )
     before_metadata_failure = run(
@@ -1602,7 +1618,8 @@ def release_403_boundary_test(temp: pathlib.Path) -> None:
     before_shell_startup = file_hash(paths["home"] / ".bashrc")
 
     env = offline_env(paths, temp, ANVIL_YES="1", ANVIL_NETWORK_GUARD_HTTP_403="1")
-    upgrade = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
+    upgrade = run(["/usr/bin/make", "--no-print-directory", "upgrade"],
+                  dict(env, ANVIL_TEST_MODE="1"))
     assert_no_external_network(temp)
     check(file_hash(paths["binary"]) == before_binary,
           "make upgrade changed the exact runtime while a mocked release service returned HTTP 403")
@@ -1756,7 +1773,8 @@ def upgrade_test(
         check(startup.count("# Anvil: OpenCode install directory") == 1, "upgrade did not add the managed executable to PATH")
     print("PASS migrate-runtime installs the rehearsed candidate and records a verified V1 rollback snapshot")
 
-    rolled = run(["/usr/bin/make", "--no-print-directory", "rollback"], env_for(paths))
+    rolled = run(["/usr/bin/make", "--no-print-directory", "rollback"],
+                 env_for(paths, ANVIL_TEST_MODE="1"))
     restored_config = tree_hash(paths["config"])
     restored_config.pop("opencode.jsonc", None)
     original_managed_files = dict(original_config)

@@ -210,6 +210,16 @@ if args[:2] == ["warehouses", "list"]:
     output(fixture(f"warehouses/{name}"))
     raise SystemExit(0)
 
+if args[:2] == ["warehouses", "get"] and len(args) >= 3:
+    warehouse = next((item for item in fixture("warehouses/stopped.json")["warehouses"]
+                     if item.get("id") == args[2]), None)
+    if not warehouse:
+        print(json.dumps({"error_code": "RESOURCE_DOES_NOT_EXIST"}), file=sys.stderr)
+        raise SystemExit(1)
+    warehouse["state"] = read_state("warehouse-state", warehouse.get("state", "STOPPED"))
+    output(warehouse)
+    raise SystemExit(0)
+
 if args and args[0] == "api" and len(args) >= 3:
     method, endpoint = args[1], args[2]
     body = None
@@ -221,10 +231,16 @@ if args and args[0] == "api" and len(args) >= 3:
             body = json.loads(raw)
     clean_endpoint = endpoint.split("?", 1)[0]
     record(method.upper(), clean_endpoint, body)
-    if scenario == "permission_denied" and clean_endpoint.startswith("/api/2.0/sql/statements"):
+    if scenario in {"permission_denied", "permission_denied_warehouse_start"} and clean_endpoint.startswith("/api/2.0/sql/statements"):
         print((FIXTURES / "api" / "permission-denied.json").read_text(encoding="utf-8"), file=sys.stderr)
         raise SystemExit(1)
-    if clean_endpoint == "/api/1.2/contexts/create":
+    if clean_endpoint.startswith("/api/2.0/sql/warehouses/") and clean_endpoint.endswith("/start") and method == "post":
+        if scenario == "permission_denied_warehouse_start":
+            print(json.dumps({"error_code": "PERMISSION_DENIED"}), file=sys.stderr)
+            raise SystemExit(1)
+        update_state("warehouse-state", "RUNNING")
+        output({})
+    elif clean_endpoint == "/api/1.2/contexts/create":
         output(fixture("api/context-created.json"))
     elif clean_endpoint == "/api/1.2/contexts/status":
         output(fixture("api/context-running.json"))

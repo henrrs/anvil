@@ -280,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
         # Warm the shared Databricks warehouse cache outside the browser request path.
         # Provider/auth failures are represented as DEGRADED and do not stop the UI.
         service.warehouses(refresh=True)
+        service.hydrate_catalog_tree()
 
     threading.Thread(target=initialize_services, name="anvil-analytics-runtime",
                      daemon=True).start()

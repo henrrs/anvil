@@ -49,6 +49,7 @@ COMMUNICATION_VERSION = SKILL_INTRODUCED.get("anvil-communication", (2, 7, 0))
 ENGINEERING_VERSION = SKILL_INTRODUCED.get("anvil-engineering", (2, 9, 0))
 ANALYSIS_INTELLIGENCE_VERSION = (2, 13, 0)
 ANALYTICS_WORKSPACE_VERSION = (2, 16, 0)
+ANALYTICS_RUNTIME_CONVERGENCE_VERSION = (2, 17, 0)
 DATABRICKS_PROVIDER_VERSION = (2, 3, 0)
 USER_PREFERENCES = {"cli.json", "tui.json", "tui.jsonc"}
 SHARED_PROFILE_KEYS = {
@@ -251,6 +252,8 @@ def _legacy_owned(root: Path, source_version: str | None, *, allow_missing: bool
     if version and version >= ANALYSIS_INTELLIGENCE_VERSION:
         required.add("scripts/analyze.py")
         required.update(_shipped_package("scripts/analysis", "scripts/analysis"))
+    if version and version >= ANALYTICS_RUNTIME_CONVERGENCE_VERSION:
+        required.update({"VERSION", "config/runtime-policy.json", "runtime/analytics-requirements.lock"})
     if version is None and "anvil-communication" in skills:
         required.update(path for path in ("scripts/artifacts.py", "skills/anvil-communication/SKILL.md", "commands/review.md")
                         if path in actual or path in symlinks or path in other)
@@ -277,6 +280,8 @@ def _legacy_owned(root: Path, source_version: str | None, *, allow_missing: bool
     if version and version >= ANALYTICS_WORKSPACE_VERSION:
         owned.update(path for path in _analytics_workspace_files()
                      if path in actual or path in symlinks or path in other)
+    if version and version >= ANALYTICS_RUNTIME_CONVERGENCE_VERSION:
+        owned.update({"VERSION", "config/runtime-policy.json", "runtime/analytics-requirements.lock"})
     for skill in skills:
         introduced = SKILL_INTRODUCED.get(skill)
         if version is not None and introduced is not None and version < introduced:

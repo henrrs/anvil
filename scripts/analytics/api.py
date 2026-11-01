@@ -17,7 +17,7 @@ class AnalyticsAPI:
                body: dict[str, Any] | None = None) -> tuple[int, Any]:
         body = body or {}
         if method == "GET" and path == "/api/health":
-            return 200, {"status": "OK"}
+            return 200, {"status": "OK", "service": "anvil-analytics"}
         if method == "GET" and path == "/api/me":
             return 200, self.service.me()
         if method == "GET" and path == "/api/runtime":

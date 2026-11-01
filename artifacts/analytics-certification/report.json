@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "anvil_version": "2.16.0",
+  "anvil_version": "2.17.0",
   "status": "PASS",
-  "run_at": "2026-11-01T01:11:39Z",
-  "duration_seconds": 7.41,
+  "run_at": "2026-11-01T23:04:23Z",
+  "duration_seconds": 11.413,
   "totals": {
-    "tests": 60,
+    "tests": 93,
     "failures": 0,
     "errors": 0,
     "skipped": 0
@@ -15,12 +15,17 @@
       "id": "context_store",
       "description": "SQLite context, privacy, WAL, migration and search",
       "status": "PASS",
-      "tests": 6,
+      "tests": 8,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 0.024,
+      "duration_seconds": 0.039,
       "cases": [
+        {
+          "id": "tests.analytics.test_store.AnalyticsContextStoreTests.test_catalog_hydration_progress_is_persisted_and_bounded",
+          "status": "PASS",
+          "message": ""
+        },
         {
           "id": "tests.analytics.test_store.AnalyticsContextStoreTests.test_catalog_knowledge_query_and_operations_are_durable",
           "status": "PASS",
@@ -47,6 +52,11 @@
           "message": ""
         },
         {
+          "id": "tests.analytics.test_store.AnalyticsContextStoreTests.test_v2_catalog_hydration_schema_migrates_to_v3",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_store.AnalyticsContextStoreTests.test_validation_bounds_and_json_values",
           "status": "PASS",
           "message": ""
@@ -57,11 +67,11 @@
       "id": "catalog",
       "description": "Shared Databricks capability, cached catalog and lazy hydration",
       "status": "PASS",
-      "tests": 11,
+      "tests": 14,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 0.06,
+      "duration_seconds": 1.838,
       "cases": [
         {
           "id": "tests.analytics.test_catalog.AnalyticsCatalogTests.test_catalog_hydration_is_scoped_lazy_paginated_and_cached",
@@ -79,12 +89,27 @@
           "message": ""
         },
         {
+          "id": "tests.analytics.test_catalog.AnalyticsCatalogTests.test_confirmed_empty_permission_error_and_unloaded_are_distinct",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_catalog.AnalyticsCatalogTests.test_failed_refresh_keeps_cached_metadata_and_reports_browse_only",
           "status": "PASS",
           "message": ""
         },
         {
           "id": "tests.analytics.test_catalog.AnalyticsCatalogTests.test_missing_provider_uses_cached_browse_state",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_catalog.AnalyticsCatalogTests.test_more_than_fifty_catalogs_are_fully_paginated_and_persisted",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_catalog.AnalyticsCatalogTests.test_provider_metadata_concurrency_is_bounded_for_large_metastores",
           "status": "PASS",
           "message": ""
         },
@@ -121,6 +146,28 @@
       ]
     },
     {
+      "id": "catalog_hydration",
+      "description": "Cached tree convergence, progress, resume and metadata-only discovery",
+      "status": "PASS",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 0.0,
+      "cases": [
+        {
+          "id": "tests.analytics.test_catalog_hydration.AnalyticsCatalogHydrationTests.test_closed_service_marks_hydration_resumable",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_catalog_hydration.AnalyticsCatalogHydrationTests.test_tree_hydrates_catalog_schemas_and_table_view_metadata_without_rows",
+          "status": "PASS",
+          "message": ""
+        }
+      ]
+    },
+    {
       "id": "query_materialization",
       "description": "Read-only routing, coverage, Parquet snapshots and resumable transfer",
       "status": "PASS",
@@ -128,7 +175,7 @@
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 0.096,
+      "duration_seconds": 0.091,
       "cases": [
         {
           "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_auto_falls_back_to_remote_for_mismatch_or_missing_duckdb",
@@ -216,11 +263,11 @@
       "id": "runtime_sessions",
       "description": "OpenCode 1/2 adapters, runtime warmup, canonical and task sessions",
       "status": "PASS",
-      "tests": 9,
+      "tests": 10,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 1.598,
+      "duration_seconds": 1.618,
       "cases": [
         {
           "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_adapter_is_loopback_only_and_does_not_follow_redirects",
@@ -258,12 +305,123 @@
           "message": ""
         },
         {
+          "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_opencode_health_probe_is_short_and_runtime_retries_a_swallowed_startup_probe",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_service_startup_warms_canonical_session_and_keeps_ui_usable_when_runtime_is_missing",
           "status": "PASS",
           "message": ""
         },
         {
           "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_task_sessions_are_children_and_distill_durable_findings",
+          "status": "PASS",
+          "message": ""
+        }
+      ]
+    },
+    {
+      "id": "dependency_runtime",
+      "description": "Release-pinned Analytics dependencies, drift repair and safe staging",
+      "status": "PASS",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 0.075,
+      "cases": [
+        {
+          "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_dependency_drift_is_rebuilt_and_imports_revalidated",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_failed_package_install_preserves_previous_environment",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_release_lock_is_exact_and_content_addressed",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_validated_environment_is_published_only_after_all_pins_install",
+          "status": "PASS",
+          "message": ""
+        }
+      ]
+    },
+    {
+      "id": "service_lifecycle",
+      "description": "systemd ownership, MainPID, unit verification and service convergence",
+      "status": "PASS",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 0.137,
+      "cases": [
+        {
+          "id": "tests.analytics.test_service_management.AnalyticsServiceManagementTests.test_activate_fails_if_daemon_reload_fails",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_service_management.AnalyticsServiceManagementTests.test_generated_unit_passes_systemd_analyze_verify",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_service_management.AnalyticsServiceManagementTests.test_status_without_systemd_is_read_only",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_service_management.AnalyticsServiceManagementTests.test_sync_reloads_enables_and_starts_before_readiness_gate",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_service_management.AnalyticsServiceManagementTests.test_systemd_mainpid_zero_is_not_ready_even_when_health_answers",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_service_management.AnalyticsServiceManagementTests.test_unit_uses_prepared_python_and_quoted_working_directory",
+          "status": "PASS",
+          "message": ""
+        }
+      ]
+    },
+    {
+      "id": "warehouse_lifecycle",
+      "description": "Stopped/start transitions, permission feedback and timeout",
+      "status": "PASS",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 0.005,
+      "cases": [
+        {
+          "id": "tests.analytics.test_warehouse_lifecycle.AnalyticsWarehouseLifecycleTests.test_permission_failure_is_actionable_and_timeout_is_explicit",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_warehouse_lifecycle.AnalyticsWarehouseLifecycleTests.test_starting_warehouse_is_polled_without_duplicate_start",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_warehouse_lifecycle.AnalyticsWarehouseLifecycleTests.test_stopped_warehouse_starts_once_and_waits_until_running",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_warehouse_lifecycle.AnalyticsWarehouseLifecycleTests.test_stopping_warehouse_waits_for_stopped_before_start",
           "status": "PASS",
           "message": ""
         }
@@ -317,6 +475,73 @@
       ]
     },
     {
+      "id": "frontend_ui",
+      "description": "Static UI contracts, accessible resizable SQL/results split and mock scenarios",
+      "status": "PASS",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 1.47,
+      "cases": [
+        {
+          "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_active_indicator_is_bound_to_inner_tab_content",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_catalog_icons_have_no_image_placeholders_or_unstyled_star_buttons",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_final_polish_keeps_clear_action_scoped_and_context_compact",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_mock_scenarios_and_large_catalog_are_deterministic_and_paginated",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_production_and_mock_pages_provide_every_application_mount",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_production_assets_and_lifecycle_manifest_exclude_dev_mock",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_production_ui_uses_http_adapter_and_has_no_external_brand_link",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_query_editor_results_splitter_is_accessible_bounded_and_persistent",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_readability_structure_and_progressive_disclosure",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_static_mock_server_is_loopback_only_and_has_no_backend_api",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_warehouse_is_a_select_and_never_a_manual_identifier_field",
+          "status": "PASS",
+          "message": ""
+        }
+      ]
+    },
+    {
       "id": "tools_service",
       "description": "OpenCode tool bridges, profile, lineage and route comparison",
       "status": "PASS",
@@ -324,7 +549,7 @@
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 0.531,
+      "duration_seconds": 0.535,
       "cases": [
         {
           "id": "tests.analytics.test_tools_service.AnalyticsServiceExtendedTests.test_compare_requires_complete_matching_result_sets",
@@ -370,13 +595,13 @@
     },
     {
       "id": "lifecycle",
-      "description": "Fresh install, 2.15→2.16 upgrade, idempotency, dry-run, rollback and user data preservation",
+      "description": "Fresh install, 2.15→2.17 and 2.16→2.17 convergence, idempotency, dry-run, rollback and user data preservation",
       "status": "PASS",
       "tests": 1,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 1.291,
+      "duration_seconds": 1.773,
       "cases": [
         {
           "id": "lifecycle",
@@ -393,7 +618,7 @@
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 0.117,
+      "duration_seconds": 0.108,
       "cases": [
         {
           "id": "frontend_syntax",
@@ -410,7 +635,7 @@
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 0.098,
+      "duration_seconds": 0.112,
       "cases": [
         {
           "id": "python_syntax",

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import getpass
 import json
+import logging
+import os
 import shutil
 import threading
 import time
@@ -35,6 +37,7 @@ MAX_CHAT_CHARS = 16_000
 MAX_ACTIVE_CONTEXT_CHARS = 10_000
 WAREHOUSE_CACHE_TTL_SECONDS = 60
 WAREHOUSE_STATES = {"RUNNING", "STOPPED", "STARTING", "STOPPING", "DELETED", "UNAVAILABLE", "UNKNOWN"}
+_LOG = logging.getLogger(__name__)
 
 
 class AnalyticsService:
@@ -81,6 +84,9 @@ class AnalyticsService:
         self._warehouse_cache: list[dict[str, Any]] = []
         self._warehouse_cache_at = 0.0
         self._warehouse_cache_refreshed_at: str | None = None
+        self._catalog_hydration_future: Future[Any] | None = None
+        self._catalog_hydration_guard = threading.Lock()
+        self._closed = threading.Event()
 
     @staticmethod
     def _default_web_root() -> Path:
@@ -91,6 +97,7 @@ class AnalyticsService:
         return f"http://anvil.localhost:{self.port}"
 
     def close(self) -> None:
+        self._closed.set()
         self._executor.shutdown(wait=False, cancel_futures=False)
 
     def initialize_runtime(self) -> dict[str, Any]:
@@ -193,6 +200,108 @@ class AnalyticsService:
                                 code="WAREHOUSE_RESPONSE_INVALID", retryable=False)
         return safe_item
 
+    def hydrate_catalog_tree(self) -> dict[str, Any]:
+        """Refresh roots, then schemas and table/view metadata without reading table rows."""
+        with self._catalog_hydration_guard:
+            future = self._catalog_hydration_future
+            if future and not future.done():
+                return {"status": "LOADING"}
+            self.store.catalog_hydration_set("tree", "", "PENDING", phase="catalogs",
+                                              progress_current=0, progress_total=0)
+            _LOG.info("analytics_catalog_event %s", json.dumps({"event": "catalog_hydration_started"},
+                                                                   sort_keys=True, separators=(",", ":")))
+            try:
+                self._catalog_hydration_future = self._executor.submit(self._hydrate_catalog_tree)
+            except RuntimeError:
+                self.store.catalog_hydration_set("tree", "", "FAILED", error_code="SERVICE_STOPPING",
+                                                  error_message="The Analytics service is stopping.")
+                return {"status": "FAILED", "error": "SERVICE_STOPPING"}
+            return {"status": "PENDING"}
+
+    def _hydrate_catalog_tree(self) -> dict[str, Any]:
+        try:
+            self.store.catalog_hydration_set("tree", "", "LOADING", phase="catalogs",
+                                              progress_current=0, progress_total=0)
+            root = self.catalog.catalogs(refresh=True, limit=200)
+            if root.get("status") in {"BROWSE_ONLY", "FAILED"}:
+                code = str(root.get("error") or "CATALOG_DISCOVERY_FAILED")
+                self.store.catalog_hydration_set("tree", "", "FAILED", error_code=code,
+                                                  error_message="Catalog roots could not be refreshed.")
+                return {"status": "FAILED", "error": code}
+            catalogs = self._catalog_rows("CATALOG", "")
+            if not catalogs:
+                self.store.catalog_hydration_set("tree", "", "EMPTY", phase="complete",
+                                                  progress_current=0, progress_total=0)
+                self._log_catalog_hydration("catalog_hydration_completed", status="EMPTY",
+                                            catalogs=0, schemas=0, tables=0, views=0)
+                return {"status": "EMPTY"}
+            total = len(catalogs)
+            completed = 0
+            self.store.catalog_hydration_set("tree", "", "LOADING", phase="schemas",
+                                              progress_current=completed, progress_total=total)
+            for catalog in catalogs:
+                if self._closed.is_set():
+                    self.store.catalog_hydration_set("tree", "", "PENDING", error_code="CANCELLED",
+                                                      error_message="Catalog refresh will resume on the next service start.",
+                                                      progress_current=completed, progress_total=total)
+                    return {"status": "CANCELLED"}
+                catalog_name = str(catalog.get("full_name") or "")
+                if not catalog_name:
+                    completed += 1
+                    continue
+                schemas_result = self.catalog.schemas(catalog_name, refresh=True, limit=200)
+                schemas = self._catalog_rows("SCHEMA", catalog_name) if schemas_result.get("status") not in {
+                    "BROWSE_ONLY", "FAILED"} else []
+                completed += 1
+                total += len(schemas)
+                self.store.catalog_hydration_set("tree", "", "LOADING", phase="tables",
+                                                  progress_current=completed, progress_total=total)
+                for schema in schemas:
+                    if self._closed.is_set():
+                        self.store.catalog_hydration_set("tree", "", "PENDING", error_code="CANCELLED",
+                                                          error_message="Catalog refresh will resume on the next service start.",
+                                                          progress_current=completed, progress_total=total)
+                        return {"status": "CANCELLED"}
+                    parts = str(schema.get("full_name") or "").split(".")
+                    if len(parts) == 2:
+                        self.catalog.tables(parts[0], parts[1], refresh=True, limit=200)
+                    completed += 1
+                    self.store.catalog_hydration_set("tree", "", "LOADING", phase="tables",
+                                                      progress_current=completed, progress_total=total)
+            summary = self.store.catalog_hydration_summary()
+            partial = any(scope_states.get("FAILED", 0)
+                          for scope, scope_states in summary.get("scope_hydration_states", {}).items()
+                          if scope in {"schemas", "tables"})
+            self.store.catalog_hydration_set("tree", "", "READY", phase="complete",
+                                              error_code="PARTIAL_DISCOVERY" if partial else "",
+                                              progress_current=completed, progress_total=total)
+            self._log_catalog_hydration("catalog_hydration_completed", status="READY",
+                                        catalogs=summary["catalogs"], schemas=summary["schemas"],
+                                        tables=summary["tables"], views=summary["views"], partial=partial)
+            return {"status": "READY", "partial": partial}
+        except Exception:
+            self.store.catalog_hydration_set("tree", "", "FAILED", error_code="CATALOG_HYDRATION_FAILED",
+                                              error_message="Catalog metadata refresh failed; cached metadata remains available.")
+            self._log_catalog_hydration("catalog_hydration_failed", status="FAILED",
+                                        reason_code="CATALOG_HYDRATION_FAILED")
+            return {"status": "FAILED", "error": "CATALOG_HYDRATION_FAILED"}
+
+    @staticmethod
+    def _log_catalog_hydration(event: str, **details: Any) -> None:
+        _LOG.info("analytics_catalog_event %s", json.dumps({"event": event, **details},
+                                                            sort_keys=True, separators=(",", ":")))
+
+    def _catalog_rows(self, object_type: str, parent: str) -> list[dict[str, Any]]:
+        values: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            page = self.store.catalog_list(parent=parent, object_type=object_type,
+                                           limit=2000, offset=offset)
+            values.extend(page)
+            if len(page) < 2000:
+                return values
+            offset += len(page)
+
     @staticmethod
     def _safe_warehouse(item: dict[str, Any]) -> dict[str, Any] | None:
         warehouse_id = item.get("warehouse_id") or item.get("id")
@@ -256,7 +365,10 @@ class AnalyticsService:
             runtime_status = "DEGRADED"
         elif self._runtime_start_state == "READY" and runtime_status == "NOT_CONFIGURED":
             runtime_status = "READY"
-        catalog_cache = self.catalog.catalogs(refresh=False).get("items", [])
+        catalog_page = self.catalog.catalogs(refresh=False, limit=200)
+        catalog_cache = catalog_page.get("items", [])
+        catalog_summary = self.store.catalog_hydration_summary()
+        catalog_hydration = catalog_page.get("hydration", {})
         local_engine = DuckDBLocalEngine()
         try:
             from .transfer import PyArrowChunkCodec
@@ -267,17 +379,51 @@ class AnalyticsService:
             local_bytes = self._data_bytes()
         except OSError:
             local_bytes = 0
+        service_state = {"status": "READY", "pid": os.getpid()}
+        duckdb_status = {"status": "READY" if local_engine.available else "DEGRADED",
+                         "reason_code": None if local_engine.available else "DEPENDENCY_MISSING",
+                         "message": None if local_engine.available else "DuckDB is missing from the Analytics runtime."}
+        pyarrow_status = {"status": "READY" if arrow_available else "DEGRADED",
+                          "reason_code": None if arrow_available else "DEPENDENCY_MISSING",
+                          "message": None if arrow_available else "PyArrow is missing from the Analytics runtime."}
+        canonical_status = "NOT_CREATED"
+        if runtime_status == "STARTING":
+            canonical_status = "RECOVERING"
+        elif runtime_status in {"DEGRADED", "FAILED", "NOT_CONFIGURED"}:
+            canonical_status = "UNAVAILABLE"
+        elif runtime_state.get("canonical_session_id"):
+            try:
+                adapter = create_adapter(int(runtime_state.get("runtime_generation") or runtime_state.get("generation") or 0),
+                                         str(runtime_state.get("base_url") or ""), self.paths.workspace, timeout=3)
+                session = adapter.get_session(str(runtime_state["canonical_session_id"]))
+                canonical_status = "READY" if session and session.get("title") == "anvil-global-analytics" else "RECOVERING"
+            except (AnalyticsError, ValueError, TypeError):
+                canonical_status = "RECOVERING"
+        databricks_workspace = ("READY" if self._warehouse_cache_refreshed_at and
+                                self._warehouse_cache_at and time.monotonic() - self._warehouse_cache_at < WAREHOUSE_CACHE_TTL_SECONDS
+                                else "NOT_CHECKED" if profile.get("name") else "NOT_CONFIGURED")
         return {
+            "service": service_state,
             "url": self.url,
-            "databricks": {"status": "CONFIGURED" if profile.get("name") else "NOT_CONFIGURED",
-                           "profile": profile.get("name", ""), "workspace": profile.get("host", "")},
-            "runtime": {"status": runtime_status, "generation": runtime_state.get("runtime_generation") or
-                        runtime_state.get("generation"), "canonical_session": canonical,
+            "databricks": {"status": databricks_workspace,
+                           "configuration": "READY" if profile.get("name") else "NOT_CONFIGURED",
+                           "authentication": "NOT_CHECKED", "workspace": databricks_workspace,
+                           "profile": profile.get("name", ""), "host": profile.get("host", "")},
+            "opencode": {"status": runtime_status, "generation": runtime_state.get("runtime_generation") or
+                        runtime_state.get("generation"), "canonical_session": canonical_status,
                         **({"error": self._runtime_start_error} if self._runtime_start_error else {})},
-            "catalog": {"status": "AVAILABLE" if catalog_cache else "EMPTY",
-                        "cached_objects": len(catalog_cache)},
-            "local": {"duckdb": "READY" if local_engine.available else "DEGRADED",
-                      "pyarrow": "READY" if arrow_available else "DEGRADED",
+            "runtime": {"status": runtime_status, "generation": runtime_state.get("runtime_generation") or
+                        runtime_state.get("generation"), "canonical_session": canonical_status,
+                        **({"error": self._runtime_start_error} if self._runtime_start_error else {})},
+            "canonical_session": {"status": canonical_status,
+                                  **({"reason_code": self._runtime_start_error.get("code")} if self._runtime_start_error else {})},
+            "duckdb": duckdb_status,
+            "pyarrow": pyarrow_status,
+            "catalog": {"status": ("READY" if catalog_summary["catalogs"] else
+                                     catalog_hydration.get("state", "NOT_LOADED")),
+                        **catalog_summary, "cached_root_items": len(catalog_cache)},
+            "local": {"duckdb": duckdb_status["status"],
+                      "pyarrow": pyarrow_status["status"],
                       "storage_bytes": local_bytes},
             "capabilities": {"catalog": "AVAILABLE" if catalog_cache else
                              ("READY" if profile.get("name") else "DEGRADED"),
@@ -288,17 +434,23 @@ class AnalyticsService:
         }
 
     def runtime_status(self) -> dict[str, Any]:
-        return self.status()["runtime"]
+        return self.status()
 
     def catalogs(self, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         return self.catalog.catalogs(limit=limit, offset=offset)
 
     def schemas(self, catalog_name: str, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
-        return self.catalog.schemas(catalog_name, limit=limit, offset=offset)
+        result = self.catalog.schemas(catalog_name, limit=limit, offset=offset)
+        if result.get("status") == "NOT_LOADED":
+            return self.catalog.schemas(catalog_name, refresh=True, limit=limit, offset=offset)
+        return result
 
     def tables(self, catalog_name: str, schema_name: str, *,
                limit: int = 100, offset: int = 0) -> dict[str, Any]:
-        return self.catalog.tables(catalog_name, schema_name, limit=limit, offset=offset)
+        result = self.catalog.tables(catalog_name, schema_name, limit=limit, offset=offset)
+        if result.get("status") == "NOT_LOADED":
+            return self.catalog.tables(catalog_name, schema_name, refresh=True, limit=limit, offset=offset)
+        return result
 
     def search_catalog(self, query: str, *, parent: str = "", limit: int = 100) -> dict[str, Any]:
         term = query.strip().casefold()

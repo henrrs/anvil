@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import contextlib
+import concurrent.futures
 import io
 import json
 import sys
+import threading
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -62,7 +65,7 @@ class AnalyticsCatalogTests(unittest.TestCase):
         self.catalog = CatalogService(self.store, self.provider)
 
     def test_catalog_hydration_is_scoped_lazy_paginated_and_cached(self):
-        self.assertEqual(self.catalog.catalogs()["status"], "EMPTY")
+        self.assertEqual(self.catalog.catalogs()["status"], "NOT_LOADED")
         self.assertEqual(self.provider.calls, [])
 
         refreshed = self.catalog.catalogs(refresh=True)
@@ -79,6 +82,9 @@ class AnalyticsCatalogTests(unittest.TestCase):
         self.assertEqual(table["full_name"], "main.silver.orders")
         self.assertEqual(table["columns"], [])
         self.assertNotIn("tables.get", [call[0] for call in self.provider.calls])
+        table_requests = [parameters for operation, parameters in self.provider.calls if operation == "tables.list"]
+        self.assertTrue(table_requests and all(item["max_results"] <= 50 for item in table_requests))
+        self.assertTrue(all(item["omit_columns"] and item["omit_properties"] for item in table_requests))
 
         described = self.catalog.describe("main.silver.orders")
         self.assertEqual(described["status"], "READY")
@@ -107,6 +113,64 @@ class AnalyticsCatalogTests(unittest.TestCase):
         self.assertEqual(result["items"], [])
         self.assertEqual(result["error"], "CATALOG_PAGINATION_INVALID")
         self.assertGreater(len(self.provider.calls), 1)
+
+    def test_provider_metadata_concurrency_is_bounded_for_large_metastores(self):
+        guard = threading.Lock()
+        active = 0
+        maximum = 0
+
+        class SlowProvider:
+            def page(_self, operation, **_parameters):
+                nonlocal active, maximum
+                with guard:
+                    active += 1
+                    maximum = max(maximum, active)
+                time.sleep(.03)
+                with guard:
+                    active -= 1
+                return {"schemas": []}
+
+        catalog = CatalogService(self.store, SlowProvider())
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda _: catalog._fetch_all("schemas.list", catalog_name="main"), range(8)))
+        self.assertEqual(results, [[] for _ in range(8)])
+        self.assertLessEqual(maximum, 2)
+        self.assertEqual(maximum, 2)
+
+    def test_more_than_fifty_catalogs_are_fully_paginated_and_persisted(self):
+        names = [f"catalog_{index:02d}" for index in range(53)]
+
+        class ManyCatalogs:
+            def page(_self, operation, **parameters):
+                self.assertEqual(operation, "catalogs.list")
+                self.assertLessEqual(parameters["max_results"], 50)
+                offset = 50 if parameters.get("page_token") else 0
+                page_names = names[offset:offset + 50]
+                return {"catalogs": [{"name": name} for name in page_names],
+                        "next_page_token": "page-2" if not offset else None}
+
+        result = CatalogService(self.store, ManyCatalogs()).catalogs(refresh=True, limit=100)
+        self.assertEqual(result["status"], "READY")
+        self.assertEqual(len(self.store.catalog_list(object_type="CATALOG", limit=100)), 53)
+        self.assertTrue(result["hydration"]["state"] == "READY")
+
+    def test_confirmed_empty_permission_error_and_unloaded_are_distinct(self):
+        self.assertEqual(self.catalog.schemas("main")["status"], "NOT_LOADED")
+
+        class EmptyProvider:
+            def page(self, operation, **_kwargs):
+                return {"schemas": []} if operation == "schemas.list" else {"catalogs": []}
+
+        empty = CatalogService(self.store, EmptyProvider()).schemas("main", refresh=True)
+        self.assertEqual(empty["status"], "EMPTY")
+
+        class DeniedProvider:
+            def page(self, *_args, **_kwargs):
+                raise ProviderError("denied", code="PERMISSION_DENIED", retryable=False)
+
+        denied = CatalogService(self.store, DeniedProvider()).schemas("private", refresh=True)
+        self.assertEqual(denied["status"], "BROWSE_ONLY")
+        self.assertEqual(denied["error"], "PERMISSION_DENIED")
 
     def test_catalog_parameters_reject_unsafe_names(self):
         with self.assertRaises(ValidationError):

@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
-.PHONY: help inspect test reforge upgrade update-runtime migrate-runtime doctor capabilities stats databricks-setup rollback analytics analytics-status analytics-stop analytics-ui-mock eval-analytics eval-analytical eval-analytical-semantic eval-analytical-model eval-analytical-full eval-analytical-baseline eval-analytical-review
+.PHONY: help inspect test reforge upgrade update-runtime migrate-runtime doctor capabilities stats databricks-setup rollback analytics analytics-dev analytics-status analytics-stop analytics-ui-mock eval-analytics eval-analytical eval-analytical-semantic eval-analytical-model eval-analytical-full eval-analytical-baseline eval-analytical-review
 
 VERSION := $(shell cat VERSION 2>/dev/null || printf 'unknown')
 
@@ -17,7 +17,8 @@ help:
 	  'make migrate-runtime OPENCODE_MAJOR=2  Explicitly migrate OpenCode major.' \
 	  'make doctor     Check Anvil, runtime, memory, knowledge and project state.' \
 	  'make capabilities  Show features available on the detected runtime.' \
-	  'make analytics  Start Anvil Analytics at http://anvil.localhost:8765.' \
+	  'make analytics  Ensure the managed Analytics service is READY and print its URL.' \
+	  'make analytics-dev  Run a foreground Analytics development server.' \
 	  'make analytics-ui-mock  Preview the UI without Anvil/OpenCode/Databricks (SCENARIO=healthy).' \
 	  'make analytics-status  Show Analytics service and URL status.' \
 	  'make analytics-stop  Stop the systemd user service when configured.' \
@@ -68,6 +69,9 @@ capabilities:
 
 analytics:
 	@python3 scripts/analytics_service.py start --port "$(if $(ANALYTICS_PORT),$(ANALYTICS_PORT),$${ANVIL_ANALYTICS_PORT:-8765})"
+
+analytics-dev:
+	@python3 scripts/analytics_service.py dev --port "$(if $(ANALYTICS_PORT),$(ANALYTICS_PORT),$${ANVIL_ANALYTICS_PORT:-8765})"
 
 analytics-status:
 	@python3 scripts/analytics_service.py status --port "$(if $(ANALYTICS_PORT),$(ANALYTICS_PORT),$${ANVIL_ANALYTICS_PORT:-8765})"

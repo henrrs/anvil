@@ -361,15 +361,18 @@ def test_resource_discovery_and_mutation_safety(temp: Path) -> None:
     with mock.patch.dict(os.environ, {**base, "ANVIL_DATABRICKS_SCENARIO": "stopped_warehouse"}, clear=False):
         warehouses = dbx.discover_warehouses()
         check(not warehouses["running"] and warehouses["approval_required_to_start"], "stopped warehouse did not require approval")
+        call_path = Path(base["ANVIL_DATABRICKS_CALL_LOG"])
+        calls_before_query = call_path.read_text(encoding="utf-8") if call_path.exists() else ""
+        check("/start" not in calls_before_query, "warehouse discovery attempted a mutation")
         try:
-            dbx.execute_sql("SELECT 1", "warehouse-stopped")
+            result = dbx.execute_sql("SELECT 1", "warehouse-stopped")
         except dbx.DatabricksError as exc:
-            check(exc.category == "WAREHOUSE_STOPPED", "stopped warehouse returned the wrong error")
-        else:
-            raise AssertionError("stopped warehouse was accepted for SQL execution")
+            raise AssertionError(f"stopped warehouse did not start for remote SQL: {exc.category}: {exc}") from exc
+        check(result.get("state") == "SUCCEEDED", "SQL execution did not complete after warehouse start")
     call_path = Path(base["ANVIL_DATABRICKS_CALL_LOG"])
     calls = call_path.read_text(encoding="utf-8") if call_path.exists() else ""
-    check("/start" not in calls and "/edit" not in calls and "/resize" not in calls, "resource discovery attempted a mutation")
+    check("/start" in calls and "/edit" not in calls and "/resize" not in calls,
+          "remote SQL did not start the selected warehouse or attempted an unrelated mutation")
 
 
 def test_python_execution_and_cleanup(temp: Path) -> None:

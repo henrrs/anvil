@@ -14,7 +14,7 @@ from .models import (CatalogObject, KnowledgeItem, MaterializationState,
                      OperationRecord, QueryRecord)
 from .paths import AnalyticsPaths
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 
 
 def _now() -> str:
@@ -82,6 +82,14 @@ class ContextStore:
                 if current < 1:
                     self._migration_1(db)
                     db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?)", (_now(),))
+                    current = 1
+                if current < 2:
+                    self._migration_2(db)
+                    db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES(2, ?)", (_now(),))
+                    current = 2
+                if current < 3:
+                    self._migration_3(db)
+                    db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES(3, ?)", (_now(),))
                 db.execute("COMMIT")
             except Exception:
                 db.execute("ROLLBACK")
@@ -179,6 +187,29 @@ class ContextStore:
             if statement.strip():
                 db.execute(statement)
 
+    @staticmethod
+    def _migration_2(db: sqlite3.Connection) -> None:
+        db.execute("""
+            CREATE TABLE catalog_hydration (
+                scope TEXT NOT NULL,
+                parent_name TEXT NOT NULL DEFAULT '',
+                state TEXT NOT NULL,
+                error_code TEXT NOT NULL DEFAULT '',
+                error_message TEXT NOT NULL DEFAULT '',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                object_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(scope, parent_name)
+            )
+        """)
+        db.execute("CREATE INDEX catalog_hydration_state ON catalog_hydration(state, updated_at)")
+
+    @staticmethod
+    def _migration_3(db: sqlite3.Connection) -> None:
+        db.execute("ALTER TABLE catalog_hydration ADD COLUMN phase TEXT NOT NULL DEFAULT ''")
+        db.execute("ALTER TABLE catalog_hydration ADD COLUMN progress_current INTEGER NOT NULL DEFAULT 0")
+        db.execute("ALTER TABLE catalog_hydration ADD COLUMN progress_total INTEGER NOT NULL DEFAULT 0")
+
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
         with self._connect() as db:
@@ -208,6 +239,110 @@ class ContextStore:
                    o.comment, _json(o.properties), _json(o.columns), o.updated_at, now)
                   for o in objects])
         return len(objects)
+
+    def catalog_reconcile(self, parent: str, objects: list[CatalogObject]) -> int:
+        """Atomically publish one complete listing and remove disappeared direct children."""
+        names = {item.full_name for item in objects}
+        with self.transaction() as db:
+            existing = [str(row[0]) for row in db.execute(
+                "SELECT full_name FROM catalog_objects WHERE parent_name=?", (parent,)).fetchall()]
+            removed = [name for name in existing if name not in names]
+            for name in removed:
+                db.execute("DELETE FROM catalog_objects WHERE full_name=? OR substr(full_name,1,?)=?",
+                           (name, len(name) + 1, name + "."))
+                descendants = db.execute(
+                    "SELECT scope,parent_name FROM catalog_hydration WHERE parent_name=? OR substr(parent_name,1,?)=?",
+                    (name, len(name) + 1, name + ".")).fetchall()
+                db.executemany("DELETE FROM catalog_hydration WHERE scope=? AND parent_name=?",
+                               [(row[0], row[1]) for row in descendants])
+            if objects:
+                now = _now()
+                db.executemany("""
+                    INSERT INTO catalog_objects(full_name, object_type, workspace_id, parent_name,
+                        comment, properties_json, columns_json, source_updated_at, cached_at)
+                    VALUES(?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(full_name) DO UPDATE SET object_type=excluded.object_type,
+                        workspace_id=excluded.workspace_id, parent_name=excluded.parent_name,
+                        comment=excluded.comment,
+                        properties_json=CASE WHEN excluded.properties_json='{}' THEN catalog_objects.properties_json ELSE excluded.properties_json END,
+                        columns_json=CASE WHEN excluded.columns_json='[]' THEN catalog_objects.columns_json ELSE excluded.columns_json END,
+                        source_updated_at=excluded.source_updated_at,
+                        cached_at=excluded.cached_at
+                """, [(o.full_name, o.object_type.value, o.workspace_id, o.parent_name,
+                       o.comment, _json(o.properties), _json(o.columns), o.updated_at, now)
+                      for o in objects])
+        return len(objects)
+
+    def catalog_hydration_set(self, scope: str, parent: str, state: str, *,
+                              error_code: str = "", error_message: str = "",
+                              object_count: int | None = None, phase: str = "",
+                              progress_current: int | None = None,
+                              progress_total: int | None = None) -> None:
+        allowed = {"PENDING", "LOADING", "READY", "EMPTY", "FAILED"}
+        if scope not in {"tree", "catalogs", "schemas", "tables"} or state not in allowed:
+            raise ValidationError("Catalog hydration state is invalid")
+        if len(parent) > 1024 or len(error_code) > 100 or len(error_message) > 500:
+            raise ValidationError("Catalog hydration metadata exceeds its limit")
+        if (len(phase) > 32 or any(type(value) is not int or value < 0
+                                   for value in (progress_current, progress_total)
+                                   if value is not None)
+                or (progress_current is not None and progress_total is not None
+                    and progress_current > progress_total)):
+            raise ValidationError("Catalog hydration progress is invalid")
+        with self.transaction() as db:
+            previous = db.execute("SELECT attempts, object_count, phase, progress_current, progress_total FROM catalog_hydration WHERE scope=? AND parent_name=?",
+                                  (scope, parent)).fetchone()
+            attempts = int(previous[0]) if previous else 0
+            count = int(previous[1]) if previous else 0
+            current_phase = str(previous[2]) if previous else ""
+            current_progress = int(previous[3]) if previous else 0
+            total_progress = int(previous[4]) if previous else 0
+            if state == "LOADING":
+                attempts += 1
+            if object_count is not None:
+                count = object_count
+            if phase:
+                current_phase = phase
+            if progress_current is not None:
+                current_progress = progress_current
+            if progress_total is not None:
+                total_progress = progress_total
+            db.execute("""
+                INSERT INTO catalog_hydration(scope,parent_name,state,error_code,error_message,attempts,object_count,updated_at,phase,progress_current,progress_total)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(scope,parent_name) DO UPDATE SET state=excluded.state,
+                    error_code=excluded.error_code,error_message=excluded.error_message,
+                    attempts=excluded.attempts,object_count=excluded.object_count,updated_at=excluded.updated_at,
+                    phase=excluded.phase,progress_current=excluded.progress_current,progress_total=excluded.progress_total
+            """, (scope, parent, state, error_code, error_message, attempts, count, _now(), current_phase,
+                  current_progress, total_progress))
+
+    def catalog_hydration_get(self, scope: str, parent: str = "") -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute("SELECT * FROM catalog_hydration WHERE scope=? AND parent_name=?",
+                             (scope, parent)).fetchone()
+        return dict(row) if row else None
+
+    def catalog_hydration_summary(self) -> dict[str, Any]:
+        with self._connect() as db:
+            counts = {str(row[0]): int(row[1]) for row in db.execute(
+                "SELECT object_type, COUNT(*) FROM catalog_objects GROUP BY object_type").fetchall()}
+            states = {str(row[0]): int(row[1]) for row in db.execute(
+                "SELECT state, COUNT(*) FROM catalog_hydration GROUP BY state").fetchall()}
+            scope_states = {str(row[0]): {str(item[0]): int(item[1]) for item in db.execute(
+                "SELECT state, COUNT(*) FROM catalog_hydration WHERE scope=? GROUP BY state", (row[0],)).fetchall()}
+                for row in db.execute("SELECT DISTINCT scope FROM catalog_hydration").fetchall()}
+            latest = db.execute("SELECT state,error_code,updated_at FROM catalog_hydration "
+                                "ORDER BY updated_at DESC LIMIT 1").fetchone()
+            tree = db.execute("SELECT state,error_code,phase,progress_current,progress_total,updated_at "
+                              "FROM catalog_hydration WHERE scope='tree' AND parent_name=''").fetchone()
+        return {"catalogs": counts.get("CATALOG", 0), "schemas": counts.get("SCHEMA", 0),
+                "tables": counts.get("TABLE", 0), "views": counts.get("VIEW", 0),
+                "objects": counts.get("TABLE", 0) + counts.get("VIEW", 0),
+                "hydration_states": states, "scope_hydration_states": scope_states,
+                "tree_hydration": dict(tree) if tree else {"state": "NOT_LOADED", "phase": "",
+                    "progress_current": 0, "progress_total": 0},
+                "last_hydration": dict(latest) if latest else None}
 
     def catalog_list(self, *, parent: str = "", object_type: str | None = None,
                      limit: int = 500, offset: int = 0) -> list[dict[str, Any]]:

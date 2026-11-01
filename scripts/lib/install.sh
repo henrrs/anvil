@@ -24,6 +24,10 @@ anvil_build_config() {
   if [[ "$preserve_cli" == yes ]]; then build_args+=(--preserve-cli); fi
   python3 "$ANVIL_ROOT/scripts/configure.py" "${build_args[@]}"
   mkdir -p -- "$destination/scripts"
+  mkdir -p -- "$destination/config" "$destination/runtime"
+  install -m 0600 -- "$ANVIL_ROOT/VERSION" "$destination/VERSION"
+  install -m 0600 -- "$ANVIL_ROOT/config/runtime-policy.json" "$destination/config/runtime-policy.json"
+  install -m 0600 -- "$ANVIL_ROOT/config/analytics-requirements.lock" "$destination/runtime/analytics-requirements.lock"
   install -m 0600 -- "$ANVIL_ROOT/scripts/memory.py" "$destination/scripts/memory.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/source_registry.py" "$destination/scripts/source_registry.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/runtime.py" "$destination/scripts/runtime.py"
@@ -125,8 +129,31 @@ print("  snapshot          scoped Anvil files plus shared profile/preferences be
   )
 }
 
+anvil_print_analytics_plan() {
+  local config="$1"
+  local lock="$config/runtime/analytics-requirements.lock"
+  [[ -f "$lock" ]] || return 0
+  python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" plan \
+    --lock "$lock" --data-root "$ANVIL_DATA_HOME"
+}
+
+anvil_converge_analytics_runtime() {
+  local config_dir="$1" lock="$1/runtime/analytics-requirements.lock"
+  [[ -f "$lock" ]] || return 0
+  [[ "${ANVIL_TEST_MODE:-0}" != 1 ]] || return 0
+  python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" prepare \
+    --lock "$lock" --data-root "$ANVIL_DATA_HOME" >/dev/null || {
+      anvil_error 'Analytics runtime dependency convergence failed before service activation.'
+      return 1
+    }
+  local systemd_dir="${XDG_CONFIG_HOME:-$ANVIL_HOME_DIR/.config}/systemd/user"
+  python3 "$ANVIL_ROOT/scripts/analytics_service.py" sync \
+    --config-dir "$config_dir" --home "$ANVIL_HOME_DIR" --systemd-dir "$systemd_dir" \
+    --port "${ANVIL_ANALYTICS_PORT:-8765}"
+}
+
 anvil_apply_config() {
-  local source_config="$1" allow_user_only="${2:-no}"
+  local source_config="$1" allow_user_only="${2:-no}" defer_analytics_service="${3:-no}"
   [[ -d "$source_config" ]] || { anvil_error "Generated Anvil config is missing: $source_config"; return 1; }
   mkdir -p -- "$(dirname -- "$ANVIL_CONFIG_DIR")"
   local parent stage previous managed_script managed_tree
@@ -141,6 +168,14 @@ anvil_apply_config() {
     rm -rf -- "$stage"
     anvil_error 'Anvil global config staging copy is incomplete.'
     return 1
+  fi
+  if [[ -f "$stage/runtime/analytics-requirements.lock" && "${ANVIL_TEST_MODE:-0}" != 1 ]]; then
+    if ! python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" prepare \
+        --lock "$stage/runtime/analytics-requirements.lock" --data-root "$ANVIL_DATA_HOME" >/dev/null; then
+      rm -rf -- "$stage"
+      anvil_error 'Analytics runtime dependency convergence failed before configuration activation.'
+      return 1
+    fi
   fi
   previous="$parent/.anvil-config-previous-$$"
   [[ ! -e "$previous" && ! -L "$previous" ]] || { rm -rf -- "$stage"; anvil_error 'A prior config swap needs manual review.'; return 1; }
@@ -168,12 +203,18 @@ anvil_apply_config() {
   if [[ -d "$ANVIL_CONFIG_DIR/web/analytics" ]]; then
     find "$ANVIL_CONFIG_DIR/web/analytics" -type f -exec chmod 600 -- {} +
   fi
-  if [[ "${ANVIL_TEST_MODE:-0}" != 1 && -f "$ANVIL_ROOT/scripts/analytics_service.py" ]]; then
+  if [[ "${ANVIL_TEST_MODE:-0}" != 1 && "$defer_analytics_service" != yes && -f "$ANVIL_ROOT/scripts/analytics_service.py" ]]; then
     local systemd_dir="${XDG_CONFIG_HOME:-$ANVIL_HOME_DIR/.config}/systemd/user"
-    if ! python3 "$ANVIL_ROOT/scripts/analytics_service.py" sync \
-        --config-dir "$ANVIL_CONFIG_DIR" --home "$ANVIL_HOME_DIR" --systemd-dir "$systemd_dir" \
-        --port "${ANVIL_ANALYTICS_PORT:-8765}"; then
-      anvil_warn 'Analytics service configuration needs attention; the core Anvil config is installed.'
+    if [[ -f "$ANVIL_CONFIG_DIR/runtime/analytics-requirements.lock" ]]; then
+      if ! anvil_converge_analytics_runtime "$ANVIL_CONFIG_DIR"; then
+        anvil_error 'Analytics service convergence failed; the lifecycle operation must roll back.'
+        return 1
+      fi
+    elif ! python3 "$ANVIL_ROOT/scripts/analytics_service.py" sync \
+          --config-dir "$ANVIL_CONFIG_DIR" --home "$ANVIL_HOME_DIR" --systemd-dir "$systemd_dir" \
+          --port "${ANVIL_ANALYTICS_PORT:-8765}"; then
+      anvil_error 'Analytics service convergence failed; the lifecycle operation must roll back.'
+      return 1
     fi
   fi
 }

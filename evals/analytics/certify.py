@@ -22,9 +22,14 @@ sys.path.insert(0, str(ROOT))
 UNIT_SUITES = [
     ("context_store", "tests.analytics.test_store", "SQLite context, privacy, WAL, migration and search"),
     ("catalog", "tests.analytics.test_catalog", "Shared Databricks capability, cached catalog and lazy hydration"),
+    ("catalog_hydration", "tests.analytics.test_catalog_hydration", "Cached tree convergence, progress, resume and metadata-only discovery"),
     ("query_materialization", "tests.analytics.test_query_materialization", "Read-only routing, coverage, Parquet snapshots and resumable transfer"),
     ("runtime_sessions", "tests.analytics.test_runtime", "OpenCode 1/2 adapters, runtime warmup, canonical and task sessions"),
+    ("dependency_runtime", "tests.analytics.test_dependencies", "Release-pinned Analytics dependencies, drift repair and safe staging"),
+    ("service_lifecycle", "tests.analytics.test_service_management", "systemd ownership, MainPID, unit verification and service convergence"),
+    ("warehouse_lifecycle", "tests.analytics.test_warehouse_lifecycle", "Stopped/start transitions, permission feedback and timeout"),
     ("http_ui", "tests.analytics.test_http_ui", "Loopback BFF, same-origin API, static UI and contextual SSE"),
+    ("frontend_ui", "tests.analytics.test_ui_mock", "Static UI contracts, accessible resizable SQL/results split and mock scenarios"),
     ("tools_service", "tests.analytics.test_tools_service", "OpenCode tool bridges, profile, lineage and route comparison"),
 ]
 
@@ -162,12 +167,12 @@ def main(argv: list[str] | None = None) -> int:
                            "tests": 1, "failures": 0, "errors": 1, "skipped": 0,
                            "duration_seconds": 0.0,
                            "cases": [{"id": name, "status": "ERROR", "message": str(exc)[:4000]}]})
-    suites.append(_run_command("lifecycle", "Fresh install, 2.15→2.16 upgrade, idempotency, dry-run, rollback and user data preservation",
+    suites.append(_run_command("lifecycle", "Fresh install, 2.15→2.17 and 2.16→2.17 convergence, idempotency, dry-run, rollback and user data preservation",
                                [sys.executable, "tests/analytics_lifecycle.py"]))
     suites.append(_run_command("frontend_syntax", "Static frontend JavaScript syntax", ["node", "--check", "web/analytics/app.js"], optional=True))
     suites.append(_run_command("python_syntax", "Compile Analytics modules", [sys.executable, "-m", "py_compile",
         *[str(path.relative_to(ROOT)) for path in (ROOT / "scripts" / "analytics").glob("*.py")],
-        "scripts/analytics_service.py"]))
+        "scripts/analytics_service.py", "scripts/analytics_dependencies.py"]))
     elapsed = round(time.monotonic() - started, 3)
     cases = [case for suite in suites for case in suite["cases"]]
     status = "PASS" if all(suite["status"] in {"PASS", "SKIP"} for suite in suites) else "FAIL"
@@ -184,7 +189,8 @@ def main(argv: list[str] | None = None) -> int:
     limitations = ["Live OpenCode prompt/tool execution and model quality were not measured.",
                    "Live Databricks permissions, authentication, SQL warehouse behavior, and Arrow CloudFetch were not measured.",
                    "Windows-to-WSL browser reachability is environment-specific and remains a host-side check.",
-                   "DuckDB and PyArrow availability depends on the user's Python environment; missing optional packages are reported as degraded."]
+                   "Release-pinned DuckDB/PyArrow wheels and their host ABI compatibility were not downloaded in the offline certification; install-time import checks are enforced before publishing the isolated runtime.",
+                   "Systemd ordering and MainPID semantics are fixture-checked and the generated unit is statically verified; this runner did not enable a real user service or OpenCode executable."]
     (output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (output / "scenarios.json").write_text(json.dumps({"schema_version": 1, "scenarios": scenario_groups,
         "limitations": limitations}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

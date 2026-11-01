@@ -79,6 +79,9 @@ def main() -> int:
         if operation == "warehouses.get":
             phase = "request"
             return emit(value_dict(workspace.warehouses.get(id=payload["warehouse_id"])))
+        if operation == "warehouse.start":
+            phase = "request"
+            return emit(value_dict(workspace.warehouses.start(id=payload["warehouse_id"])))
         if operation == "jobs.list":
             phase = "request"
             return emit(bounded_collection(workspace.jobs.list(limit=200, expand_tasks=False), "jobs"))

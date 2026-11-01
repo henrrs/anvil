@@ -130,6 +130,47 @@ class OpenCodeRuntimeTests(unittest.TestCase):
         self.paths = AnalyticsPaths.from_root(Path(self.temp.name) / ".anvil", create=True)
         self.store = ContextStore(paths=self.paths)
 
+    def test_opencode_health_probe_is_short_and_runtime_retries_a_swallowed_startup_probe(self):
+        adapter = create_adapter(1, "http://127.0.0.1:41999", self.paths.workspace)
+        with patch("scripts.analytics.opencode._LOCAL_OPENER.open", side_effect=TimeoutError("first probe stalled")) as opened:
+            self.assertFalse(adapter.health())
+        self.assertEqual(opened.call_args.kwargs["timeout"], 2.0)
+
+        executable = self.paths.root / "opencode"
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o700)
+
+        class Process:
+            def poll(self):
+                return None
+            def terminate(self):
+                pass
+            def wait(self, timeout=None):
+                return 0
+            def kill(self):
+                pass
+
+        class HealthAdapter:
+            base_url = "http://127.0.0.1:41999"
+            workspace = self.paths.workspace
+            generation = 1
+
+            def __init__(self):
+                self.calls = 0
+
+            def health(self):
+                self.calls += 1
+                return self.calls > 1
+
+        health = HealthAdapter()
+        manager = AnalyticsRuntimeManager(self.paths, process_factory=lambda *_a, **_k: Process(),
+                                          startup_timeout=2)
+        with patch("scripts.analytics.runtime.create_adapter", return_value=health), \
+             patch("scripts.analytics.runtime.time.sleep", return_value=None):
+            result = manager._start_runtime({"executable": str(executable), "generation": 1})
+        self.assertTrue(result.startswith("http://127.0.0.1:"))
+        self.assertEqual(health.calls, 2)
+
     def test_open_code_adapters_select_v1_and_v2_routes_and_payloads(self):
         for generation in (1, 2):
             with self.subTest(generation=generation):
@@ -288,7 +329,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
         with patch("scripts.analytics.service.create_adapter", return_value=adapter):
             ready = service.initialize_runtime()
         self.assertEqual(ready["runtime"]["status"], "READY")
-        self.assertEqual(ready["runtime"]["canonical_session"], "PRESENT")
+        self.assertEqual(ready["runtime"]["canonical_session"], "READY")
         self.assertEqual(len(adapter.sessions), 1)
 
         degraded_service = AnalyticsService(paths=self.paths,

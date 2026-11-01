@@ -99,6 +99,27 @@ class AnalyticsUIMockTests(unittest.TestCase):
         self.assertIn("align-self: stretch", css.split(".workspace-tab-content {", 1)[1].split("}", 1)[0])
         self.assertIn("height: 100%", css.split(".workspace-tab {", 1)[1].split("}", 1)[0])
 
+    def test_query_editor_results_splitter_is_accessible_bounded_and_persistent(self) -> None:
+        app = (ROOT / "web/analytics/app.js").read_text(encoding="utf-8")
+        css = (ROOT / "web/analytics/styles.css").read_text(encoding="utf-8")
+        for relative in ("web/analytics/index.html", "web/analytics/dev/index.html"):
+            html = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn('id="query-split"', html)
+            self.assertIn('id="query-editor-panel"', html)
+            self.assertIn('id="query-results-panel"', html)
+            self.assertIn('id="query-splitter" role="separator"', html)
+            self.assertIn('aria-orientation="horizontal"', html)
+            self.assertIn('tabindex="0"', html)
+        self.assertIn('"analytics.query.splitRatio"', app)
+        self.assertIn('"ArrowUp", "ArrowDown"', app)
+        self.assertIn('"pointerdown"', app)
+        self.assertIn('"pointermove"', app)
+        self.assertIn('"pointerup"', app)
+        self.assertIn('Math.max(0.25, 132 / height)', app)
+        self.assertIn('1 - 116 / height', app)
+        self.assertIn('dispatchEvent(new Event("anvil:analytics-editor-resize"))', app)
+        self.assertIn('overflow: auto', css.split(".results-area {", 1)[1].split("}", 1)[0])
+
     def test_warehouse_is_a_select_and_never_a_manual_identifier_field(self) -> None:
         html = (ROOT / "web/analytics/index.html").read_text(encoding="utf-8")
         self.assertIn('<select id="warehouse-select"', html)

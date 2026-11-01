@@ -25,7 +25,7 @@ Every route accepts one read-only SQL statement. Anvil rejects mutation words, m
 
 - **AUTO** uses local DuckDB only for a single-source query in Anvil's deliberately small provable subset and only if snapshot coverage matches source, projection and normalized filter. Otherwise it falls back to Databricks.
 - **LOCAL** fails if DuckDB is unavailable or exact coverage cannot be proven; it never silently sends a requested local query remotely.
-- **DATABRICKS** uses the existing shared provider and a selected, already-running SQL warehouse.
+- **DATABRICKS** uses the existing shared provider and the explicitly selected SQL warehouse. If it is STOPPED, Anvil sends one start request and polls through STARTING/STOPPING until RUNNING or a bounded timeout; a permission denial gives the user local/other-warehouse/manual-start choices. A LOCAL route never starts compute.
 - **Explain** reports the planned route, coverage and reason without executing SQL.
 - **Compare** executes the same bounded query locally and remotely. It reports equality only when both complete bounded result sets and column sets are available; truncation produces `INCONCLUSIVE`.
 
@@ -33,7 +33,7 @@ The local parser intentionally defers joins, CTEs, unions, grouping, windowing a
 
 ## Catalog and preview
 
-Catalog/schema/table metadata uses the shared Unity Catalog capability with pagination and atomic cache updates. The browser reads cached state first and requests at most 100 visible objects per page; schema/table details hydrate as a user expands them. Columns hydrate only when requested. SQL warehouse listing and detail use the same existing shared capability, with a short-lived in-memory cache and response fields limited to ID, name, state, type and size. Preview is a separate user-requested remote read capped at 100 rows; it does not create a snapshot or imply local coverage.
+Catalog/schema/table metadata uses the shared Unity Catalog capability with pagination and atomic cache updates. On service startup, the browser can read cached state immediately while bounded background hydration refreshes catalogs, schemas, and tables/views. Each scope has persisted NOT_LOADED/PENDING/LOADING/READY/EMPTY/FAILED state, attempt time, reason code and object count; the tree also persists its phase and completed/total scope progress. Provider calls are bounded to two concurrent requests and retry only retryable provider failures with jitter. Service cancellation leaves the tree pending for a later restart. A user-expanded scope is fetched immediately if background work has not reached it. The Unity Catalog tables API has a maximum page size of 50, so table listings request at most 50 objects per page and follow the continuation token. Refresh replaces each complete scope atomically and removes disappeared catalog/schema/table descendants. Permission failures become browse-only state, never EMPTY. Columns hydrate only when requested. SQL warehouse listing and detail use the same existing shared capability, with a short-lived in-memory cache and response fields limited to ID, name, state, type and size. Preview is a separate user-requested remote read capped at 100 rows; it does not create a snapshot or imply local coverage.
 
 Metadata failure keeps the prior cache and reports browse-only status. `search_catalog` searches all cached levels locally. It does not issue a remote wildcard scan or invoke an LLM.
 
@@ -64,4 +64,4 @@ Refresh metadata updates catalog state only. Refresh local repeats or resumes a 
 | Transfer staging and committed snapshots | `~/.anvil/analytics/datasets/` and `snapshots/` | Arrow during transfer, Parquet after commit |
 | Dedicated OpenCode directory | `~/.anvil/workspaces/analytics/` | OpenCode-owned workspace files |
 
-All Analytics user data is outside managed OpenCode config and Anvil backups/rollback. Files and directories are private to the current OS user. DuckDB is an optional execution dependency, not the state store. PyArrow is an optional transfer/materialization dependency.
+All Analytics user data is outside managed OpenCode config and Anvil backups/rollback. Files and directories are private to the current OS user. DuckDB and PyArrow are required feature dependencies in a content-addressed, release-pinned Python environment prepared and import-validated by Anvil before service activation. The exact lock is installed with the managed package; neither package is installed into the system Python.
