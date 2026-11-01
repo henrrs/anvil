@@ -7,8 +7,11 @@ import argparse
 import importlib.util
 import json
 import os
+import sqlite3
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 
@@ -80,6 +83,73 @@ def engineering_state() -> dict:
                             "Deterministic fixtures do not measure real-model task success."]}
 
 
+def analytics_state() -> dict:
+    home = Path.home()
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config"))).expanduser()
+    config_dir = config_home / "opencode"
+    package = config_dir / "scripts" / "analytics"
+    web_root = config_dir / "web" / "analytics"
+    state_file = home / ".anvil" / "analytics" / "runtime.json"
+    port = os.environ.get("ANVIL_ANALYTICS_PORT", "8765")
+    try:
+        parsed_port = int(port)
+        if not 1 <= parsed_port <= 65535:
+            parsed_port = 8765
+    except ValueError:
+        parsed_port = 8765
+    runtime_state: dict = {}
+    try:
+        runtime_value = json.loads(state_file.read_text(encoding="utf-8"))
+        runtime_state = runtime_value if isinstance(runtime_value, dict) else {}
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        pass
+    service_ready = False
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{parsed_port}/api/health",
+            headers={"Host": f"127.0.0.1:{parsed_port}", "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=0.35) as response:
+            service_ready = response.status == 200 and b'"status":"OK"' in response.read(4096)
+    except (OSError, urllib.error.URLError, TimeoutError):
+        pass
+    installed = package.is_dir() and not package.is_symlink()
+    frontend = all((web_root / name).is_file() and not (web_root / name).is_symlink()
+                   for name in ("index.html", "app.js", "styles.css"))
+    try:
+        duckdb = importlib.util.find_spec("duckdb") is not None
+    except (ImportError, ValueError):
+        duckdb = False
+    try:
+        pyarrow = importlib.util.find_spec("pyarrow") is not None
+    except (ImportError, ValueError):
+        pyarrow = False
+    shared = (config_dir / "scripts" / "databricks.py").is_file()
+    runtime_ready = bool(runtime_state.get("runtime_generation") or runtime_state.get("generation"))
+    catalog_status = "AVAILABLE" if installed and shared else "DEGRADED"
+    local_status = "AVAILABLE" if duckdb else "DEGRADED"
+    materialization_status = "AVAILABLE" if installed and shared and pyarrow else "DEGRADED"
+    return {
+        "status": "AVAILABLE" if installed and frontend else "DEGRADED",
+        "installed": installed,
+        "frontend": "READY" if frontend else "MISSING",
+        "url": f"http://anvil.localhost:{parsed_port}",
+        "service": "READY" if service_ready else "STOPPED",
+        "context_store": "AVAILABLE" if sqlite3.sqlite_version else "UNAVAILABLE",
+        "catalog": catalog_status,
+        "sql_workspace": "AVAILABLE" if installed else "DEGRADED",
+        "ask_anvil": "READY" if service_ready and runtime_ready else "DEGRADED",
+        "local_analytics": local_status,
+        "materialization": materialization_status,
+        "runtime_generation": runtime_state.get("runtime_generation") or runtime_state.get("generation"),
+        "canonical_session": bool(runtime_state.get("canonical_session_id")),
+        "dependencies": {"duckdb": duckdb, "pyarrow": pyarrow, "sqlite": sqlite3.sqlite_version},
+        "data_root": str(home / ".anvil" / "analytics"),
+        "host_reachability": "NOT_CHECKED",
+        "limitations": ["A Windows-to-WSL browser check requires the user's Windows host."],
+    }
+
+
 def databricks_module():
     path = ROOT / "scripts" / "databricks.py"
     spec = importlib.util.spec_from_file_location("anvil_databricks_adapter", path)
@@ -104,6 +174,7 @@ def main() -> int:
     communication = communication_state()
     analysis = analysis_state()
     engineering = engineering_state()
+    analytics = analytics_state()
     if args.format == "json":
         print(json.dumps({
             "schema_version": 1,
@@ -114,6 +185,7 @@ def main() -> int:
             "communication": communication,
             "analysis": analysis,
             "engineering": engineering,
+            "analytics": analytics,
         }, indent=2))
         return 0
 
@@ -153,6 +225,17 @@ def main() -> int:
     print("  Activation             Complex tasks; direct fast path for small edits")
     print("  Models                 Requirements, architecture, work (separate from memory)")
     print("  Resume                 Bounded, stale-aware; no automatic execution")
+    print()
+    print("Analytics Workspace")
+    print(f"  Status                 {analytics['status']}")
+    print(f"  Catalog                {analytics['catalog']}")
+    print(f"  SQL Workspace          {analytics['sql_workspace']}")
+    print(f"  Ask Anvil              {analytics['ask_anvil']}")
+    print(f"  Local Analytics        {analytics['local_analytics']}")
+    print(f"  Materialization        {analytics['materialization']}")
+    print(f"  Service                {analytics['service']} ({analytics['url']})")
+    print(f"  Context Store          {analytics['context_store']}")
+    print("  WSL reachability       NOT_CHECKED")
     return 0
 
 

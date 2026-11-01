@@ -1,0 +1,650 @@
+"""Application services shared by the loopback API and offline contracts."""
+
+from __future__ import annotations
+
+import getpass
+import json
+import shutil
+import threading
+import time
+from collections import Counter
+from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable
+
+from .catalog import CatalogService
+from .context import ContextResolver
+from .coverage import CoverageRegistry
+from .databricks import ComputePort, SharedDatabricksCatalogClient, _shared_module
+from .errors import (AnalyticsError, ConflictError, CoverageError, ProviderError,
+                     UnavailableError, ValidationError)
+from .materialization import MaterializationService
+from .models import MaterializationState, OperationRecord, QueryRoute
+from .opencode import create_adapter
+from .paths import AnalyticsPaths
+from .planner import ensure_read_only, parse_local_query
+from .query import DuckDBLocalEngine, QueryRouter
+from .runtime import AnalyticsRuntimeManager
+from .sessions import AnalyticsSessionManager
+from .store import ContextStore
+
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8765
+MAX_CHAT_CHARS = 16_000
+MAX_ACTIVE_CONTEXT_CHARS = 10_000
+WAREHOUSE_CACHE_TTL_SECONDS = 60
+WAREHOUSE_STATES = {"RUNNING", "STOPPED", "STARTING", "STOPPING", "DELETED", "UNAVAILABLE", "UNKNOWN"}
+
+
+class AnalyticsService:
+    """Feature-level composition; the traditional Anvil core does not import it."""
+
+    def __init__(self, *, paths: AnalyticsPaths | None = None,
+                 store: ContextStore | None = None,
+                 databricks: SharedDatabricksCatalogClient | None = None,
+                 compute: ComputePort | None = None,
+                 catalog: CatalogService | None = None,
+                 coverage: CoverageRegistry | None = None,
+                 query: QueryRouter | None = None,
+                 runtime: AnalyticsRuntimeManager | None = None,
+                 sessions: AnalyticsSessionManager | None = None,
+                 materializations: MaterializationService | None = None,
+                 identity: Callable[[], dict[str, Any]] | None = None,
+                 host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
+                 web_root: Path | None = None,
+                 max_workers: int = 2) -> None:
+        self.paths = paths or AnalyticsPaths.discover(create=True)
+        self.store = store or ContextStore(paths=self.paths)
+        self.databricks = databricks or SharedDatabricksCatalogClient()
+        self.compute = compute or (self.databricks if hasattr(self.databricks, "list_sql_warehouses") else None)
+        self.catalog = catalog or CatalogService(self.store, self.databricks)
+        self.coverage = coverage or CoverageRegistry(self.paths, self.store)
+        self.query = query or QueryRouter(self.store, self.coverage, self.databricks)
+        self.runtime = runtime or AnalyticsRuntimeManager(self.paths)
+        self.sessions = sessions or AnalyticsSessionManager(self.runtime, self.store, paths=self.paths)
+        self.materializations = materializations or MaterializationService(
+            self.paths, self.store, self.databricks)
+        self.identity = identity
+        self.host = host
+        self.port = int(port)
+        self.web_root = Path(web_root) if web_root else self._default_web_root()
+        self._executor = ThreadPoolExecutor(max_workers=max(1, min(max_workers, 4)),
+                                            thread_name_prefix="anvil-analytics")
+        self._jobs: dict[str, Future[Any]] = {}
+        self._job_guard = threading.Lock()
+        self._chat_lock = threading.Lock()
+        self._runtime_start_lock = threading.Lock()
+        self._runtime_start_state = "NOT_STARTED"
+        self._runtime_start_error: dict[str, str] | None = None
+        self._warehouse_guard = threading.Lock()
+        self._warehouse_cache: list[dict[str, Any]] = []
+        self._warehouse_cache_at = 0.0
+        self._warehouse_cache_refreshed_at: str | None = None
+
+    @staticmethod
+    def _default_web_root() -> Path:
+        return Path(__file__).resolve().parents[2] / "web" / "analytics"
+
+    @property
+    def url(self) -> str:
+        return f"http://anvil.localhost:{self.port}"
+
+    def close(self) -> None:
+        self._executor.shutdown(wait=False, cancel_futures=False)
+
+    def initialize_runtime(self) -> dict[str, Any]:
+        """Warm the dedicated runtime and canonical session without blocking UI startup."""
+        if not self._runtime_start_lock.acquire(blocking=False):
+            return self.status()
+        self._runtime_start_state = "STARTING"
+        self._runtime_start_error = None
+        try:
+            self.sessions.ensure_canonical()
+            self._runtime_start_state = "READY"
+        except AnalyticsError as exc:
+            self._runtime_start_state = "DEGRADED"
+            self._runtime_start_error = {"code": exc.code, "message": str(exc)[:500]}
+        except Exception:
+            self._runtime_start_state = "DEGRADED"
+            self._runtime_start_error = {
+                "code": "RUNTIME_INITIALIZATION_FAILED",
+                "message": "The Analytics AI runtime could not be initialized.",
+            }
+        finally:
+            self._runtime_start_lock.release()
+        return self.status()
+
+    def warehouses(self, *, refresh: bool = False) -> dict[str, Any]:
+        """Return a short-lived, safe warehouse inventory through the shared provider."""
+        now = time.monotonic()
+        with self._warehouse_guard:
+            if (not refresh and self._warehouse_cache_at
+                    and now - self._warehouse_cache_at < WAREHOUSE_CACHE_TTL_SECONDS):
+                status = "READY" if self._warehouse_cache else "EMPTY"
+                return self._warehouse_result(self._warehouse_cache, status, None,
+                                              refreshed_at=self._warehouse_cache_refreshed_at)
+            if self.compute is None:
+                return self._warehouse_result([], "DEGRADED", {
+                    "code": "WAREHOUSE_DISCOVERY_UNAVAILABLE",
+                    "message": "SQL Warehouse discovery is not available. Local datasets and the catalog remain usable.",
+                })
+            try:
+                payload = self.compute.list_sql_warehouses()
+                raw_items = payload.get("warehouses", []) if isinstance(payload, dict) else []
+                if not isinstance(raw_items, list):
+                    raise ProviderError("Databricks returned an invalid SQL warehouse list",
+                                        code="WAREHOUSE_RESPONSE_INVALID", retryable=False)
+                items = []
+                seen = set()
+                for item in raw_items[:1000]:
+                    if not isinstance(item, dict):
+                        continue
+                    safe_item = self._safe_warehouse(item)
+                    if not safe_item:
+                        continue
+                    if safe_item["warehouse_id"] in seen:
+                        continue
+                    seen.add(safe_item["warehouse_id"])
+                    items.append(safe_item)
+                self._warehouse_cache = items
+                self._warehouse_cache_at = time.monotonic()
+                self._warehouse_cache_refreshed_at = datetime.now(timezone.utc).isoformat()
+                result_status = "READY" if items else "EMPTY"
+                return self._warehouse_result(items, result_status, None,
+                                              refreshed_at=self._warehouse_cache_refreshed_at)
+            except AnalyticsError as exc:
+                category = str(exc.code)
+                if category not in {"PROVIDER_NOT_INSTALLED", "AUTH_REQUIRED", "AUTH_INVALID",
+                                    "PERMISSION_DENIED", "WORKSPACE_NETWORK_TIMEOUT",
+                                    "WORKSPACE_UNREACHABLE", "CLI_PROCESS_TIMEOUT", "SDK_PROCESS_TIMEOUT",
+                                    "WORKSPACE_NOT_CONFIGURED", "PROFILE_NOT_CONFIGURED",
+                                    "WAREHOUSE_RESPONSE_INVALID", "PROVIDER_UNHEALTHY"}:
+                    category = "PROVIDER_UNHEALTHY"
+                message = "Unable to refresh SQL Warehouses. Your local datasets and catalog remain available."
+                return self._warehouse_result(self._warehouse_cache,
+                    "STALE" if self._warehouse_cache else "DEGRADED",
+                    {"code": category, "message": message},
+                    refreshed_at=self._warehouse_cache_refreshed_at)
+            except Exception:
+                return self._warehouse_result(self._warehouse_cache,
+                    "STALE" if self._warehouse_cache else "DEGRADED",
+                    {"code": "PROVIDER_UNHEALTHY",
+                     "message": "Unable to refresh SQL Warehouses. Your local datasets and catalog remain available."},
+                    refreshed_at=self._warehouse_cache_refreshed_at)
+
+    def get_warehouse(self, warehouse_id: str) -> dict[str, Any]:
+        if (not isinstance(warehouse_id, str) or not warehouse_id or len(warehouse_id) > 256
+                or any(ord(char) < 32 for char in warehouse_id)):
+            raise ValidationError("A valid SQL warehouse is required")
+        if self.compute is None or not hasattr(self.compute, "get_sql_warehouse"):
+            raise UnavailableError("SQL Warehouse details are not available through the shared Databricks capability",
+                                   code="WAREHOUSE_DISCOVERY_UNAVAILABLE", retryable=False)
+        try:
+            item = self.compute.get_sql_warehouse(warehouse_id)
+        except AnalyticsError:
+            raise
+        if not isinstance(item, dict):
+            raise ProviderError("Databricks returned invalid SQL warehouse metadata",
+                                code="WAREHOUSE_RESPONSE_INVALID", retryable=False)
+        safe_item = self._safe_warehouse(item)
+        if not safe_item:
+            raise ProviderError("Databricks returned invalid SQL warehouse metadata",
+                                code="WAREHOUSE_RESPONSE_INVALID", retryable=False)
+        return safe_item
+
+    @staticmethod
+    def _safe_warehouse(item: dict[str, Any]) -> dict[str, Any] | None:
+        warehouse_id = item.get("warehouse_id") or item.get("id")
+        if not isinstance(warehouse_id, str) or not warehouse_id or len(warehouse_id) > 256 \
+                or any(ord(char) < 32 for char in warehouse_id):
+            return None
+        state = str(item.get("state") or "UNKNOWN").upper()
+        if state not in WAREHOUSE_STATES:
+            state = "UNKNOWN"
+        name = item.get("name")
+        return {
+            "warehouse_id": warehouse_id,
+            "name": str(name)[:160] if isinstance(name, str) and name.strip() else "Unnamed SQL warehouse",
+            "state": state,
+            "warehouse_type": str(item.get("warehouse_type") or item.get("type") or "")[:80],
+            "size": str(item.get("size") or "")[:80],
+        }
+
+    @staticmethod
+    def _warehouse_result(items: list[dict[str, Any]], status: str,
+                          error: dict[str, str] | None, *,
+                          refreshed_at: str | None = None) -> dict[str, Any]:
+        return {"status": status, "warehouses": [dict(item) for item in items],
+                "refreshed_at": refreshed_at, "error": error}
+
+    def me(self) -> dict[str, Any]:
+        current_identity = self.identity() if self.identity else {}
+        if not isinstance(current_identity, dict):
+            current_identity = {}
+        profile = self._profile_selection()
+        username = (current_identity.get("display_name") or current_identity.get("user_name")
+                    or current_identity.get("userName") or getpass.getuser())
+        return {"name": str(username)[:160], "identity_source": "databricks" if current_identity else "os",
+                "workspace": profile.get("host", ""), "profile": profile.get("name", ""),
+                "databricks_configured": bool(profile.get("name")),
+                "url": self.url, "status": self.status()}
+
+    def status(self) -> dict[str, Any]:
+        profile = self._profile_selection()
+        runtime_state: dict[str, Any] = {}
+        runtime_status = "NOT_CONFIGURED"
+        canonical = "NOT_CREATED"
+        if self.paths.runtime.is_file() and not self.paths.runtime.is_symlink():
+            try:
+                import json
+                runtime_state = json.loads(self.paths.runtime.read_text(encoding="utf-8"))
+                generation = int(runtime_state.get("runtime_generation") or runtime_state.get("generation") or 0)
+                base_url = str(runtime_state.get("base_url") or "")
+                if generation in {1, 2} and base_url:
+                    adapter = create_adapter(generation, base_url, self.paths.workspace, timeout=3)
+                    runtime_status = "READY" if adapter.health() else "DEGRADED"
+                else:
+                    runtime_status = "DEGRADED"
+                canonical = "PRESENT" if runtime_state.get("canonical_session_id") else "NOT_CREATED"
+            except (OSError, ValueError, AnalyticsError):
+                runtime_status = "FAILED"
+                canonical = "UNKNOWN"
+        if self._runtime_start_state == "STARTING":
+            runtime_status = "STARTING"
+        elif self._runtime_start_state == "DEGRADED":
+            runtime_status = "DEGRADED"
+        elif self._runtime_start_state == "READY" and runtime_status == "NOT_CONFIGURED":
+            runtime_status = "READY"
+        catalog_cache = self.catalog.catalogs(refresh=False).get("items", [])
+        local_engine = DuckDBLocalEngine()
+        try:
+            from .transfer import PyArrowChunkCodec
+            arrow_available = PyArrowChunkCodec().available
+        except Exception:
+            arrow_available = False
+        try:
+            local_bytes = self._data_bytes()
+        except OSError:
+            local_bytes = 0
+        return {
+            "url": self.url,
+            "databricks": {"status": "CONFIGURED" if profile.get("name") else "NOT_CONFIGURED",
+                           "profile": profile.get("name", ""), "workspace": profile.get("host", "")},
+            "runtime": {"status": runtime_status, "generation": runtime_state.get("runtime_generation") or
+                        runtime_state.get("generation"), "canonical_session": canonical,
+                        **({"error": self._runtime_start_error} if self._runtime_start_error else {})},
+            "catalog": {"status": "AVAILABLE" if catalog_cache else "EMPTY",
+                        "cached_objects": len(catalog_cache)},
+            "local": {"duckdb": "READY" if local_engine.available else "DEGRADED",
+                      "pyarrow": "READY" if arrow_available else "DEGRADED",
+                      "storage_bytes": local_bytes},
+            "capabilities": {"catalog": "AVAILABLE" if catalog_cache else
+                             ("READY" if profile.get("name") else "DEGRADED"),
+                             "sql_remote": "READY" if profile.get("name") else "DEGRADED",
+                             "sql_local": "READY" if local_engine.available else "DEGRADED",
+                             "ask_anvil": "READY" if runtime_status == "READY" else "DEGRADED",
+                             "materialization": "READY" if arrow_available else "DEGRADED"},
+        }
+
+    def runtime_status(self) -> dict[str, Any]:
+        return self.status()["runtime"]
+
+    def catalogs(self, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+        return self.catalog.catalogs(limit=limit, offset=offset)
+
+    def schemas(self, catalog_name: str, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+        return self.catalog.schemas(catalog_name, limit=limit, offset=offset)
+
+    def tables(self, catalog_name: str, schema_name: str, *,
+               limit: int = 100, offset: int = 0) -> dict[str, Any]:
+        return self.catalog.tables(catalog_name, schema_name, limit=limit, offset=offset)
+
+    def search_catalog(self, query: str, *, parent: str = "", limit: int = 100) -> dict[str, Any]:
+        term = query.strip().casefold()
+        if len(term) > 256 or len(parent) > 768:
+            raise ValidationError("Catalog search text exceeds its limit")
+        if not term:
+            raise ValidationError("Enter a catalog search term")
+        bounded_limit = max(1, min(limit, 200))
+        matches, truncated = self.store.catalog_search(term, parent=parent, limit=bounded_limit)
+        return {"status": "CACHED", "parent": parent, "items": matches,
+                "truncated": truncated}
+
+    def table(self, full_name: str, *, refresh: bool = False) -> dict[str, Any]:
+        return self.catalog.describe(full_name, refresh=refresh)
+
+    def preview(self, full_name: str, warehouse_id: str, *, limit: int = 10,
+                profile: str | None = None) -> dict[str, Any]:
+        del profile
+        return self.catalog.preview(full_name, warehouse_id, limit=limit)
+
+    def refresh_catalog(self, *, scope: str, catalog_name: str = "",
+                        schema_name: str = "", limit: int = 100,
+                        offset: int = 0) -> dict[str, Any]:
+        return self.catalog.refresh_scope(scope, catalog_name=catalog_name, schema_name=schema_name,
+                                          limit=limit, offset=offset)
+
+    def query_explain(self, sql: str) -> dict[str, Any]:
+        normalized = ensure_read_only(sql)
+        plan = parse_local_query(normalized)
+        local = DuckDBLocalEngine()
+        if plan is None:
+            return {"route": "DATABRICKS", "local_coverage": False,
+                    "reason": "This SQL shape is not in Anvil's provable local subset."}
+        decision = self.coverage.covers(plan)
+        if decision.covered and local.available:
+            return {"route": "LOCAL", "local_coverage": True,
+                    "snapshot_id": decision.snapshot_id, "reason": decision.reason}
+        return {"route": "DATABRICKS", "local_coverage": decision.covered,
+                "snapshot_id": decision.snapshot_id,
+                "reason": (decision.reason if not decision.covered else
+                           "Local coverage exists, but DuckDB is unavailable.")}
+
+    def run_query(self, sql: str, *, route: str = "AUTO", warehouse_id: str = "",
+                  profile: str | None = None, timeout: int = 120) -> dict[str, Any]:
+        return self.query.execute(sql, route=route, warehouse_id=warehouse_id or None,
+                                  profile=profile, timeout=timeout)
+
+    def query_history(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        return self.store.query_recent(limit=max(1, min(limit, 100)))
+
+    def operations_recent(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        items = []
+        for item in self.store.operation_recent(limit=max(1, min(limit, 100))):
+            payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            plan = payload.get("plan") if isinstance(payload.get("plan"), dict) else {}
+            items.append({"operation_id": str(item.get("operation_id") or "")[:256],
+                          "kind": str(item.get("kind") or "")[:40],
+                          "state": str(item.get("state") or "")[:40],
+                          "source_name": str(plan.get("source_name") or "")[:768],
+                          "updated_at": str(item.get("updated_at") or "")[:40]})
+        return items
+
+    def investigations_recent(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        return [{"title": str(item.get("title") or "")[:160],
+                 "state": str(item.get("state") or "")[:40],
+                 "summary": str(item.get("summary") or "")[:1000],
+                 "updated_at": str(item.get("updated_at") or "")[:40]}
+                for item in self.store.investigation_recent(limit=max(1, min(limit, 100)))]
+
+    def profile_table(self, full_name: str, warehouse_id: str, *, limit: int = 100) -> dict[str, Any]:
+        sample = self.preview(full_name, warehouse_id, limit=max(1, min(limit, 100)))
+        if sample.get("status") != "READY":
+            return {"status": sample.get("status", "BROWSE_ONLY"),
+                    "error": sample.get("error", "PREVIEW_UNAVAILABLE")}
+        columns = sample.get("columns")
+        rows = sample.get("rows")
+        if not isinstance(columns, list) or not isinstance(rows, list):
+            raise ProviderError("The shared Databricks preview returned an invalid sample",
+                                code="PREVIEW_RESULT_INVALID", retryable=False)
+        profiled = []
+        for index, name in enumerate(columns[:100]):
+            values = [row[index] if isinstance(row, (list, tuple)) and index < len(row) else None
+                      for row in rows[:100]]
+            present = [value for value in values if value is not None]
+            distinct = {json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+                        for value in present}
+            result: dict[str, Any] = {"name": str(name), "null_count": len(values) - len(present),
+                                      "distinct_in_sample": len(distinct)}
+            if present and (all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                                for value in present) or all(isinstance(value, str) for value in present)):
+                try:
+                    result["min"] = min(present)
+                    result["max"] = max(present)
+                except (TypeError, ValueError):
+                    pass
+            profiled.append(result)
+        return {"status": "READY", "source_name": full_name,
+                "sample_rows": len(rows[:100]), "sample_truncated": bool(sample.get("truncated")),
+                "columns": profiled}
+
+    def get_lineage(self, full_name: str, warehouse_id: str, *, limit: int = 100) -> dict[str, Any]:
+        self.catalog._validate_full_name(full_name)
+        if not warehouse_id or len(warehouse_id) > 256:
+            raise ValidationError("Choose a SQL warehouse to query Databricks lineage")
+        literal = full_name.replace("'", "''")
+        statement = ("SELECT event_time, entity_type, entity_id, source_table_full_name, "
+                     "target_table_full_name, source_type, target_type "
+                     "FROM system.access.table_lineage "
+                     f"WHERE source_table_full_name = '{literal}' OR target_table_full_name = '{literal}' "
+                     "ORDER BY event_time DESC LIMIT " + str(max(1, min(limit, 100))))
+        result = self.run_query(statement, route="DATABRICKS", warehouse_id=warehouse_id, timeout=120)
+        return {"status": "READY", **result}
+
+    def compare_remote_local(self, sql: str, warehouse_id: str, *,
+                             profile: str | None = None) -> dict[str, Any]:
+        local = self.run_query(sql, route="LOCAL")
+        remote = self.run_query(sql, route="DATABRICKS", warehouse_id=warehouse_id, profile=profile)
+        local_columns = [str(value).casefold() for value in local.get("columns", [])]
+        remote_columns = [str(value).casefold() for value in remote.get("columns", [])]
+        if local.get("truncated") or remote.get("truncated"):
+            equivalent: bool | None = None
+            different_rows = None
+        elif local_columns != remote_columns:
+            equivalent = False
+            different_rows = None
+        else:
+            local_counts = Counter(json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+                                   for row in local.get("rows", []))
+            remote_counts = Counter(json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+                                    for row in remote.get("rows", []))
+            different_rows = sum((local_counts - remote_counts).values()) + sum((remote_counts - local_counts).values())
+            equivalent = different_rows == 0
+        return {"status": "COMPARABLE" if equivalent is not None else "INCONCLUSIVE",
+                "equivalent": equivalent, "different_rows": different_rows,
+                "local_rows": len(local.get("rows", [])),
+                "remote_rows": len(remote.get("rows", [])),
+                "columns_match": local_columns == remote_columns,
+                "reason": ("Results match within the bounded result window." if equivalent is True else
+                           "Results differ within the bounded result window." if equivalent is False else
+                           "At least one result was truncated, so equality could not be proven.")}
+
+    def local_coverage(self, full_name: str, *, sql: str = "") -> dict[str, Any]:
+        if sql:
+            plan = parse_local_query(ensure_read_only(sql))
+            if plan is None or plan.source_name != full_name:
+                return {"covered": False, "reason": "SQL cannot be proven against one local source."}
+            decision = self.coverage.covers(plan)
+            return {"covered": decision.covered, "reason": decision.reason,
+                    "missing_columns": list(decision.missing_columns),
+                    "snapshot_id": decision.snapshot_id}
+        snapshot = self.coverage.current(full_name)
+        if not snapshot:
+            return {"covered": False, "reason": "No local snapshot exists for this source."}
+        manifest = snapshot["manifest"]
+        return {"covered": bool(manifest.get("complete")), "snapshot_id": snapshot["snapshot_id"],
+                "columns": manifest.get("columns", []), "predicate": manifest.get("predicate", ""),
+                "source_version": manifest.get("source_version", ""),
+                "rows": manifest.get("row_count", 0), "bytes": manifest.get("bytes", 0)}
+
+    def submit_materialization(self, body: dict[str, Any]) -> dict[str, Any]:
+        if not self.materializations.transfer.codec.available:
+            raise UnavailableError("PyArrow is not installed; Parquet materialization is unavailable",
+                                   code="PYARROW_MISSING", retryable=False)
+        table_name = str(body.get("source_name") or "")
+        columns = body.get("columns")
+        if not isinstance(columns, list) or any(not isinstance(value, str) for value in columns):
+            raise ValidationError("Materialization columns must be a list of names")
+        profile = body.get("profile")
+        warehouse_id = body.get("warehouse_id")
+        if profile is not None and (not isinstance(profile, str) or len(profile) > 128):
+            raise ValidationError("Databricks profile name is invalid")
+        if not isinstance(warehouse_id, str) or not warehouse_id:
+            raise ValidationError("Choose a running SQL warehouse before making data local")
+        selected_profile = self._profile_selection()
+        if not selected_profile.get("name") or not selected_profile.get("host"):
+            raise UnavailableError("Select an Anvil-owned Databricks profile before materializing data",
+                                   code="PROFILE_NOT_SELECTED", retryable=False)
+        if profile and profile != selected_profile["name"]:
+            raise ValidationError("Analytics only uses the currently selected Anvil-owned Databricks profile")
+        profile = selected_profile["name"]
+        metadata = self.catalog.describe(table_name, refresh=False).get("object")
+        if not isinstance(metadata, dict):
+            raise ValidationError("Refresh table metadata before materializing local data")
+        source_version = str(metadata.get("source_updated_at") or metadata.get("updated_at") or "")
+        import hashlib
+        workspace_identity = hashlib.sha256(selected_profile["host"].casefold().encode("utf-8")).hexdigest()
+        plan = self.materializations.plan(
+            workspace_identity=workspace_identity,
+            source_name=table_name, projection=columns,
+            predicate=str(body.get("predicate") or ""),
+            source_version=source_version,
+            max_rows=self._integer(body.get("max_rows", 100_000), "row bound", 1, 1_000_000),
+            max_bytes=self._integer(body.get("max_bytes", 512 * 1024 * 1024), "byte bound",
+                                     1024 * 1024, 1024 * 1024 * 1024),
+            estimated_bytes=None,
+            full_table_confirmed=body.get("full_table_confirmed") is True,
+            force_refresh=body.get("force_refresh") is True)
+        existing = self.store.operation_get(plan.operation_id)
+        if existing and existing.state in {MaterializationState.READY, MaterializationState.RUNNING,
+                                           MaterializationState.PLANNED}:
+            return self.materializations.status(plan.operation_id)
+        principal = self.me()["name"]
+        operation_payload = {"plan": plan.as_dict(), "warehouse_id": warehouse_id,
+                             "profile": profile or "", "principal": principal}
+        self.store.operation_put(OperationRecord(plan.operation_id, "MATERIALIZATION",
+                                                  MaterializationState.PLANNED,
+                                                  operation_payload, {"chunks": [], "phase": "PLANNED"}))
+        with self._job_guard:
+            future = self._jobs.get(plan.operation_id)
+            if future and not future.done():
+                return self.materializations.status(plan.operation_id)
+            self._jobs[plan.operation_id] = self._executor.submit(
+                self.materializations.run, plan, warehouse_id, profile=profile,
+                principal=principal)
+        return self.materializations.status(plan.operation_id)
+
+    def materialization(self, operation_id: str) -> dict[str, Any]:
+        return self.materializations.status(operation_id)
+
+    def materializations_recent(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        return self.materializations.recent(limit=limit)
+
+    def cancel_materialization(self, operation_id: str) -> dict[str, Any]:
+        return self.materializations.cancel(operation_id)
+
+    def resume_materialization(self, operation_id: str) -> dict[str, Any]:
+        with self._job_guard:
+            current = self._jobs.get(operation_id)
+            if current and not current.done():
+                return self.materializations.status(operation_id)
+            self._jobs[operation_id] = self._executor.submit(self.materializations.resume, operation_id)
+        return self.materializations.status(operation_id)
+
+    def ask_anvil(self, prompt: str, *, context: dict[str, Any] | None = None,
+                  deep_investigation: bool = False,
+                  event: Callable[[str, dict[str, Any]], None] | None = None,
+                  timeout: int = 300) -> dict[str, Any]:
+        question = prompt.strip()
+        if not question or len(question) > MAX_CHAT_CHARS:
+            raise ValidationError("Ask Anvil requires a question under 16,000 characters")
+        if not self._chat_lock.acquire(blocking=False):
+            raise ConflictError("Anvil is finishing another Analytics chat response", code="SESSION_BUSY")
+        try:
+            if event:
+                event("status", {"state": "starting", "message": "Preparing the Analytics session"})
+            canonical = self.sessions.ensure_canonical()
+            canonical_id = canonical["session_id"]
+            adapter = self.runtime.adapter
+            session_id = canonical_id
+            task_id = ""
+            if deep_investigation:
+                task = self.sessions.create_task_session("Analytics investigation")
+                session_id = task["session_id"]
+                task_id = session_id
+            query_context = self._chat_context(context or {})
+            persistent = self.sessions.context.rehydration_text()
+            full_prompt = ("You are answering from Anvil's global Analytics workspace.\n\n"
+                           "Relevant durable context:\n" + persistent + "\n\n"
+                           "Current UI context (only use as helpful context; do not assume it is complete):\n"
+                           + query_context + "\n\nUser question:\n" + question)
+            if event:
+                event("status", {"state": "thinking", "message": "Asking Anvil in the canonical Analytics session"})
+            result = adapter.prompt(session_id, full_prompt)
+            if getattr(adapter, "generation", 1) == 2:
+                result = adapter.wait_for_response(session_id, timeout=timeout)
+            answer = self._assistant_text(result)
+            if not answer:
+                raise ProviderError("OpenCode returned an empty Analytics response",
+                                    code="OPENCODE_RESPONSE_EMPTY", retryable=True)
+            answer = answer[:60_000]
+            if task_id:
+                self.sessions.finish_task_session(task_id, summary=answer[:6000])
+                adapter.add_context(canonical_id, "Completed Analytics investigation summary:\n" + answer[:6000])
+            if event:
+                event("result", {"text": answer, "session": "canonical" if not task_id else "investigation"})
+                event("done", {"state": "completed"})
+            return {"text": answer, "session": "canonical" if not task_id else "investigation"}
+        except AnalyticsError:
+            raise
+        except Exception as exc:
+            raise UnavailableError("Anvil could not complete the Analytics chat request",
+                                   code="ASK_ANVIL_FAILED", retryable=True) from exc
+        finally:
+            self._chat_lock.release()
+
+    def _profile_selection(self) -> dict[str, str]:
+        try:
+            shared = _shared_module()
+            name, host, _profiles = shared.resolve_profile()
+            return {"name": name, "host": host}
+        except Exception:
+            return {}
+
+    def _data_bytes(self) -> int:
+        total = 0
+        if not self.paths.datasets.exists() or self.paths.datasets.is_symlink():
+            return total
+        for path in self.paths.datasets.rglob("*"):
+            if path.is_symlink():
+                continue
+            if path.is_file():
+                try:
+                    total += path.stat().st_size
+                except OSError:
+                    continue
+        return total
+
+    @staticmethod
+    def _integer(value: Any, label: str, minimum: int, maximum: int) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+            raise ValidationError(f"Materialization {label} must be between {minimum} and {maximum}")
+        return value
+
+    @staticmethod
+    def _chat_context(value: dict[str, Any]) -> str:
+        allowed: dict[str, Any] = {}
+        for key in ("table", "route", "sql"):
+            item = value.get(key)
+            if isinstance(item, str):
+                allowed[key] = item[:4096]
+        columns = value.get("columns")
+        if isinstance(columns, list):
+            allowed["columns"] = [str(item)[:256] for item in columns[:100] if isinstance(item, str)]
+        preview = value.get("preview")
+        if isinstance(preview, dict) and isinstance(preview.get("columns"), list) and isinstance(preview.get("rows"), list):
+            allowed["preview"] = {"columns": preview["columns"][:50],
+                                  "rows": preview["rows"][:10]}
+        text = json.dumps(allowed, ensure_ascii=False, separators=(",", ":"), default=str)
+        return text[:MAX_ACTIVE_CONTEXT_CHARS]
+
+    @staticmethod
+    def _assistant_text(message: Any) -> str:
+        if not isinstance(message, dict):
+            return ""
+        parts = message.get("parts")
+        if not isinstance(parts, list):
+            data = message.get("data")
+            parts = data.get("parts") if isinstance(data, dict) else []
+        text_parts: list[str] = []
+        for part in parts if isinstance(parts, list) else []:
+            if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+                text_parts.append(part["text"])
+        if text_parts:
+            return "\n".join(text_parts).strip()
+        for key in ("text", "content", "message"):
+            value = message.get(key)
+            if isinstance(value, str):
+                return value.strip()
+        return ""

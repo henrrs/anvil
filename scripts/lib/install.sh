@@ -12,6 +12,10 @@ anvil_build_config() {
   cp -R -- "$ANVIL_ROOT/config/skills" "$destination/skills"
   if [[ "$major" == 2 ]]; then
     cp -R -- "$ANVIL_ROOT/config/plugins" "$destination/plugins"
+  else
+    mkdir -p -- "$destination/plugins"
+    install -m 0600 -- "$ANVIL_ROOT/config/plugins-v1/anvil-core.ts" \
+      "$destination/plugins/anvil-core-v1.ts"
   fi
   local build_args=(build --source "$ANVIL_ROOT/config" --destination "$destination" --major "$major")
   if [[ -n "$prior_config" ]]; then
@@ -50,6 +54,14 @@ anvil_build_config() {
   find "$destination/scripts/analysis" -type d -name __pycache__ -prune -exec rm -rf -- {} +
   find "$destination/scripts/analysis" -type f -name '*.pyc' -delete
   find "$destination/scripts/analysis" -type f -exec chmod 600 -- {} +
+  rm -rf -- "$destination/scripts/analytics" "$destination/web/analytics"
+  cp -R -- "$ANVIL_ROOT/scripts/analytics" "$destination/scripts/analytics"
+  mkdir -p -- "$destination/web"
+  mkdir -p -- "$destination/web/analytics"
+  find "$ANVIL_ROOT/web/analytics" -mindepth 1 -maxdepth 1 -type f -exec cp -- {} "$destination/web/analytics/" \;
+  find "$destination/scripts/analytics" "$destination/web/analytics" -type d -name __pycache__ -prune -exec rm -rf -- {} +
+  find "$destination/scripts/analytics" "$destination/web/analytics" -type f -name '*.pyc' -delete
+  find "$destination/scripts/analytics" "$destination/web/analytics" -type f -exec chmod 600 -- {} +
   if [[ -z "$source_version" && -f "$ANVIL_DATA_DIR/installation.json" ]]; then
     source_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
 import json,sys
@@ -148,11 +160,22 @@ anvil_apply_config() {
   for managed_script in memory.py source_registry.py runtime.py runtime_state.py databricks.py databricks_finops.py artifacts.py engineering.py public_errors.py analyze.py; do
     [[ ! -f "$ANVIL_CONFIG_DIR/scripts/$managed_script" ]] || chmod 700 -- "$ANVIL_CONFIG_DIR/scripts/$managed_script"
   done
-  for managed_tree in communication databricks_providers engineering analysis; do
+  for managed_tree in communication databricks_providers engineering analysis analytics; do
     if [[ -d "$ANVIL_CONFIG_DIR/scripts/$managed_tree" ]]; then
       find "$ANVIL_CONFIG_DIR/scripts/$managed_tree" -type f -exec chmod 600 -- {} +
     fi
   done
+  if [[ -d "$ANVIL_CONFIG_DIR/web/analytics" ]]; then
+    find "$ANVIL_CONFIG_DIR/web/analytics" -type f -exec chmod 600 -- {} +
+  fi
+  if [[ "${ANVIL_TEST_MODE:-0}" != 1 && -f "$ANVIL_ROOT/scripts/analytics_service.py" ]]; then
+    local systemd_dir="${XDG_CONFIG_HOME:-$ANVIL_HOME_DIR/.config}/systemd/user"
+    if ! python3 "$ANVIL_ROOT/scripts/analytics_service.py" sync \
+        --config-dir "$ANVIL_CONFIG_DIR" --home "$ANVIL_HOME_DIR" --systemd-dir "$systemd_dir" \
+        --port "${ANVIL_ANALYTICS_PORT:-8765}"; then
+      anvil_warn 'Analytics service configuration needs attention; the core Anvil config is installed.'
+    fi
+  fi
 }
 
 anvil_offer_databricks_setup() {

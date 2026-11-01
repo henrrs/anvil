@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "scenario": "SQLite context, privacy, WAL, migration and search",
+      "suite": "context_store",
+      "status": "PASS",
+      "evidence": [
+        "tests.analytics.test_store.AnalyticsContextStoreTests.test_catalog_knowledge_query_and_operations_are_durable",
+        "tests.analytics.test_store.AnalyticsContextStoreTests.test_catalog_search_reaches_nested_cached_tables_and_bounds_results",
+        "tests.analytics.test_store.AnalyticsContextStoreTests.test_failed_migration_rolls_back_all_schema_changes",
+        "tests.analytics.test_store.AnalyticsContextStoreTests.test_private_paths_are_outside_managed_config_and_sqlite_uses_wal",
+        "tests.analytics.test_store.AnalyticsContextStoreTests.test_rejects_symlinked_state_database",
+        "tests.analytics.test_store.AnalyticsContextStoreTests.test_validation_bounds_and_json_values"
+      ]
+    },
+    {
+      "scenario": "Shared Databricks capability, cached catalog and lazy hydration",
+      "suite": "catalog",
+      "status": "PASS",
+      "evidence": [
+        "tests.analytics.test_catalog.AnalyticsCatalogTests.test_catalog_hydration_is_scoped_lazy_paginated_and_cached",
+        "tests.analytics.test_catalog.AnalyticsCatalogTests.test_catalog_parameters_reject_unsafe_names",
+        "tests.analytics.test_catalog.AnalyticsCatalogTests.test_cli_provider_body_uses_private_temporary_file_not_process_argument",
+        "tests.analytics.test_catalog.AnalyticsCatalogTests.test_failed_refresh_keeps_cached_metadata_and_reports_browse_only",
+        "tests.analytics.test_catalog.AnalyticsCatalogTests.test_missing_provider_uses_cached_browse_state",
+        "tests.analytics.test_catalog.AnalyticsCatalogTests.test_repeated_page_token_fails_without_publishing_partial_cache",
+        "tests.analytics.test_catalog.AnalyticsCatalogTests.test_sdk_provider_uses_authenticated_api_client_for_catalog_requests",
+        "tests.analytics.test_catalog.AnalyticsCatalogTests.test_sdk_worker_submits_external_arrow_with_existing_workspace_client",
+        "tests.analytics.test_catalog.AnalyticsCatalogTests.test_shared_capability_routes_through_selected_provider_and_encodes_page",
+        "tests.analytics.test_catalog.AnalyticsCatalogTests.test_statement_transfer_uses_bounded_external_arrow_and_shared_provider_route",
+        "tests.analytics.test_catalog.AnalyticsCatalogTests.test_table_preview_runs_only_after_explicit_request_and_is_bounded"
+      ]
+    },
+    {
+      "scenario": "Read-only routing, coverage, Parquet snapshots and resumable transfer",
+      "suite": "query_materialization",
+      "status": "PASS",
+      "evidence": [
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_auto_falls_back_to_remote_for_mismatch_or_missing_duckdb",
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_coverage_requires_exact_filter_and_all_projected_columns",
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_explicit_remote_route_records_the_actual_route",
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_failed_refresh_keeps_the_previous_current_snapshot",
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_full_table_and_unsafe_materialization_plans_require_confirmation_or_fail",
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_interrupted_materialization_resumes_checkpoint_without_duplicate_query",
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_local_parser_accepts_simple_select_but_defers_joins_and_ctes",
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_local_routing_needs_proven_coverage_and_never_calls_remote",
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_materialization_downloads_arrow_chunks_and_atomically_publishes_parquet",
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_materialization_plan_is_minimum_sufficient_and_bounded",
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_materialization_service_uses_shared_plan_and_hides_provider_checkpoint_details",
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_missing_pyarrow_degrades_before_remote_query",
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_mutations_and_multiple_statements_are_rejected_before_provider_calls",
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_partial_snapshot_is_never_claimed_as_complete_local_coverage",
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_pointer_manifest_and_parquet_files_are_validated",
+        "tests.analytics.test_query_materialization.QueryCoverageTests.test_remote_results_are_bounded_even_when_adapter_returns_too_much"
+      ]
+    },
+    {
+      "scenario": "OpenCode 1/2 adapters, runtime warmup, canonical and task sessions",
+      "suite": "runtime_sessions",
+      "status": "PASS",
+      "evidence": [
+        "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_adapter_is_loopback_only_and_does_not_follow_redirects",
+        "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_ask_anvil_uses_global_context_canonical_session_and_distills_deep_work",
+        "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_concurrent_ensure_creates_one_canonical_session",
+        "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_crash_before_runtime_identity_persist_reconciles_by_title",
+        "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_ensure_canonical_is_idempotent_and_rehydrates_once",
+        "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_lost_canonical_is_recreated_and_sqlite_context_survives",
+        "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_open_code_adapters_select_v1_and_v2_routes_and_payloads",
+        "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_service_startup_warms_canonical_session_and_keeps_ui_usable_when_runtime_is_missing",
+        "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_task_sessions_are_children_and_distill_durable_findings"
+      ]
+    },
+    {
+      "scenario": "Loopback BFF, same-origin API, static UI and contextual SSE",
+      "suite": "http_ui",
+      "status": "PASS",
+      "evidence": [
+        "tests.analytics.test_http_ui.AnalyticsHTTPTests.test_api_is_same_origin_and_returns_json",
+        "tests.analytics.test_http_ui.AnalyticsHTTPTests.test_binds_loopback_only",
+        "tests.analytics.test_http_ui.AnalyticsHTTPTests.test_chat_rejects_invalid_shapes_and_non_json",
+        "tests.analytics.test_http_ui.AnalyticsHTTPTests.test_chat_uses_validated_json_and_streams_server_sent_events",
+        "tests.analytics.test_http_ui.AnalyticsHTTPTests.test_rejects_foreign_host_origin_and_path_traversal",
+        "tests.analytics.test_http_ui.AnalyticsHTTPTests.test_serves_local_assets_with_security_headers",
+        "tests.analytics.test_http_ui.AnalyticsHTTPTests.test_warehouse_discovery_and_recent_workspace_routes"
+      ]
+    },
+    {
+      "scenario": "OpenCode tool bridges, profile, lineage and route comparison",
+      "suite": "tools_service",
+      "status": "PASS",
+      "evidence": [
+        "tests.analytics.test_tools_service.AnalyticsServiceExtendedTests.test_compare_requires_complete_matching_result_sets",
+        "tests.analytics.test_tools_service.AnalyticsServiceExtendedTests.test_lineage_escapes_literals_and_caps_rows_on_shared_query_router",
+        "tests.analytics.test_tools_service.AnalyticsServiceExtendedTests.test_profile_is_bounded_and_never_returns_raw_sample_rows",
+        "tests.analytics.test_tools_service.AnalyticsToolBridgeTests.test_cli_does_not_contact_service_for_invalid_or_oversized_input",
+        "tests.analytics.test_tools_service.AnalyticsToolBridgeTests.test_cli_forwards_only_to_loopback_bff_and_returns_bounded_json",
+        "tests.analytics.test_tools_service.AnalyticsToolBridgeTests.test_dispatch_bounds_user_inputs_and_requires_full_table_confirmation_only_explicitly",
+        "tests.analytics.test_tools_service.AnalyticsToolBridgeTests.test_plugin_registers_all_shared_bff_tools_without_direct_runtime_or_credentials",
+        "tests.analytics.test_tools_service.AnalyticsToolBridgeTests.test_tool_dispatch_covers_all_registered_actions"
+      ]
+    },
+    {
+      "scenario": "Fresh install, 2.15→2.16 upgrade, idempotency, dry-run, rollback and user data preservation",
+      "suite": "lifecycle",
+      "status": "PASS",
+      "evidence": [
+        "lifecycle"
+      ]
+    },
+    {
+      "scenario": "Static frontend JavaScript syntax",
+      "suite": "frontend_syntax",
+      "status": "PASS",
+      "evidence": [
+        "frontend_syntax"
+      ]
+    },
+    {
+      "scenario": "Compile Analytics modules",
+      "suite": "python_syntax",
+      "status": "PASS",
+      "evidence": [
+        "python_syntax"
+      ]
+    }
+  ],
+  "limitations": [
+    "Live OpenCode prompt/tool execution and model quality were not measured.",
+    "Live Databricks permissions, authentication, SQL warehouse behavior, and Arrow CloudFetch were not measured.",
+    "Windows-to-WSL browser reachability is environment-specific and remains a host-side check.",
+    "DuckDB and PyArrow availability depends on the user's Python environment; missing optional packages are reported as degraded."
+  ]
+}

@@ -183,6 +183,25 @@ def downgrade_to_legacy_profile(paths: dict[str, pathlib.Path], version: str) ->
     if compare_versions(version, "2.13.0") == -1:
         shutil.rmtree(config_dir / "scripts" / "analysis", ignore_errors=True)
         (config_dir / "scripts" / "analyze.py").unlink(missing_ok=True)
+    if compare_versions(version, "2.16.0") == -1:
+        shutil.rmtree(config_dir / "scripts" / "analytics", ignore_errors=True)
+        shutil.rmtree(config_dir / "web" / "analytics", ignore_errors=True)
+        (config_dir / "plugins" / "anvil-core-v1.ts").unlink(missing_ok=True)
+        for profile in (config_dir / "opencode.jsonc",):
+            config = json.loads(profile.read_text(encoding="utf-8"))
+            permission = config.get("agent", {}).get("anvil", {}).get("permission", {})
+            for key in list(permission):
+                if key == "anvil_memory_search" or key.startswith("anvil_analytics_"):
+                    permission.pop(key, None)
+            write_json(profile, config)
+        profile = config_dir / "opencode.jsonc"
+        config = json.loads(profile.read_text(encoding="utf-8"))
+        anvil = config.get("agents", {}).get("anvil", {})
+        if isinstance(anvil.get("permissions"), list):
+            anvil["permissions"] = [rule for rule in anvil["permissions"]
+                                    if not (isinstance(rule, dict)
+                                            and rule.get("action", "").startswith("anvil_"))]
+            write_json(profile, config)
     installation_path = paths["anvil_data"] / "installation.json"
     try:
         installation = json.loads(installation_path.read_text(encoding="utf-8"))
@@ -392,7 +411,7 @@ def lifecycle_version_order_test() -> None:
     check(compare_versions("2.10.0", "2.9.9") == 1, "semantic version ordering compared minor releases lexically")
     check(compare_versions("2.08.0", "2.8.0") is None, "semantic version parser accepted a non-canonical leading zero")
     check(supported_migration("2.6.1", ANVIL_VERSION), "current release rejected the 2.6 source line retained by prior releases")
-    check(not supported_migration("2.5.9", ANVIL_VERSION), "source outside the nine-minor compatibility window was accepted")
+    check(not supported_migration("2.5.9", ANVIL_VERSION), "source outside the ten-minor compatibility window was accepted")
     check(not supported_migration("2.5.9", "2.10.0", minor_window=4), "2.10 historical source window changed")
     check(not supported_migration("2.12.0", "2.11.0"), "a newer installed release was treated as migratable")
     print("PASS semantic release ordering, supported source window, and downgrade rejection")

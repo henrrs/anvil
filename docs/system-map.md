@@ -1,6 +1,6 @@
 # Anvil System Map
 
-This map describes the Anvil 2.15.0 candidate. It follows the public Make targets through configuration, lifecycle, runtime, providers, persistent state, analytical helpers, and local verification. The companion [quality audit](quality-audit.md) records evidence, findings, and confidence.
+This map describes Anvil 2.16.0 and its Analytics Workspace. It follows the public Make targets through configuration, lifecycle, runtime, providers, persistent state, analytical helpers, and local verification. The companion [quality audit](quality-audit.md) records evidence, findings, and confidence.
 
 ## Shape and data flow
 
@@ -10,6 +10,7 @@ flowchart TD
     Make --> Life[Lifecycle shell entrypoints]
     Make --> Inspect[inspect / doctor / capabilities / stats]
     Make --> DB[Databricks CLI]
+    Make --> Analytics[Analytics Workspace service]
     Life --> State[lifecycle_state.py + semver.py]
     Life --> Runtime[runtime.py + runtime_state.py]
     Life --> Plan[configure.py + managed_config.py]
@@ -33,6 +34,13 @@ flowchart TD
     Resolver --> CLI[Databricks CLI]
     Resolver --> SDK[Isolated Python SDK]
     Resolver --> Workspace[Databricks workspace]
+    Analytics --> BFF[Loopback BFF and same-origin UI]
+    BFF --> Context[SQLite WAL context]
+    BFF --> Catalog[Cached Unity Catalog]
+    BFF --> Query[Read-only SQL router]
+    Query --> Resolver
+    BFF --> RuntimeSession[OpenCode V1/V2 adapter and canonical session]
+    BFF --> LocalData[DuckDB and local Parquet snapshots]
     Inspect --> Evidence[Local state and cached readiness]
     User --> Evaluation[Explicit analytical evaluation targets]
     Evaluation --> Fixtures[Versioned synthetic fixtures + hidden truth]
@@ -63,6 +71,7 @@ The repository contains Python and shell helpers under `scripts/`, offline Pytho
 | Databricks discovery/execution/FinOps | `scripts/databricks_providers/{resolver,discovery,process,sdk,sql_connector}.py`, `scripts/databricks_finops.py`, Databricks skills and SQL recipes | Read-only provider operations and bounded results → normalized workspace/resource/query/FinOps evidence | Optional provider state/cache; live workspace and optional specialized SDK/connector packages | Permission, timeout, result-size, mutation-policy, query-schema and evidence scenarios use fixtures; no live workspace execution was performed |
 | Communication and artifacts | `scripts/artifacts.py`, `scripts/communication/{inputs,contracts,quantitative,planning,editorial,materialize,diagrams,review}.py`, `anvil-communication`, `/review` | Named local inputs + evidence/plan → bounded extraction, analysis, editorial selection/critique, Markdown or accessible SVG | User-selected output files; no memory write or remote lookup | Size/type/symlink checks, provenance/recomputation, no-overwrite, appendix selection, advisory critique, SVG geometry validation; deterministic offline tests |
 | Intent and analytical intelligence | `scripts/analyze.py`, `scripts/analysis/{contracts,profiling,semantic,statistics,primitives,investigation,findings}.py`, communication-side `analysis_adapter.py`, existing lazy `anvil-communication` | Exact user request + explicitly named local table → bounded profile and semantic candidates → evidence-linked operations, claims and findings → direct answer or optional artifact adapter | Task-local only; no memory/state, network, package, or new runtime feature | Source SHA-256 pinning, source mutation detection, byte/row/group/output budgets, observation/entity/grain distinctions, claim and provenance checks, FAST/STANDARD/DEEP limits; offline fixtures and installed-helper lifecycle test |
+| Analytics Workspace | `scripts/analytics/`, `scripts/analytics_service.py`, `web/analytics/`, runtime-specific `config/plugins*/anvil-core*` | User-selected Databricks catalog/table/query and prompt → cached metadata, bounded read-only results, session response, or explicit local snapshot | Anvil XDG Analytics directory; SQLite WAL and Parquet are outside managed config/backups; optional DuckDB/PyArrow | Loopback-only BFF, same-origin UI, shared Databricks provider, V1/V2 plugin adapters, bounded SQL and materialization plans; offline unit and lifecycle fixtures |
 | Analytical evaluation harness | `evals/analytical/{fixtures,evaluator,contracts,model_runner,performance,review,semantic_certification}.py`, `make eval-analytical*` | Public synthetic inputs + evaluator-only ground truth → deterministic L1/L2 and semantic certification, opt-in blind model runs, human review, cost and gap artifacts | Explicit user state directory; model mode uses configured OpenCode/provider; no production state or user-config changes | Production modules do not import evals; blind workspace excludes truth/repository; versioned fixtures and prompt, structured metrics, metamorphic and mutation checks, repeated-run aggregation, immutable baseline, OpenCode 1/2 policy tests |
 | Inspect/doctor/capabilities/stats | `scripts/inspect_data.py`, `scripts/doctor_data.py`, `scripts/capabilities.py`, `scripts/stats.sh`, `scripts/stats.py` | Current HOME/XDG/runtime and optional cached provider state → human or JSON diagnostics | Read-only apart from temporary stats output, removed on exit | Public exit/output contracts, first-use/partial/corrupt states, no-runtime stats and structured formatter fixtures |
 | Adaptive engineering and continuity | `scripts/engineering.py`, `scripts/engineering/`, task-local assessment, lazy engineering/system-design and deep Spark skills | Current task evidence → direct action or selected requirements/architecture/work/domain branch → proportional checks | Optional XDG task generations; local work leaves unrelated active project state dormant | No repo-size activation; path-scoped stale evidence; milestone checkpoint reuses valid invariants; atomic resume/coverage gates and paired offline replays |
@@ -90,6 +99,9 @@ The repository contains Python and shell helpers under `scripts/`, offline Pytho
 | `make eval-analytical-full MODEL=provider/model [RUNS=N]` | Run deterministic and model-backed evaluation | Yes, selected provider may be contacted | Temporary isolated workspaces and local result artifacts |
 | `make eval-analytical-baseline` | Freeze the complete deterministic 2.14 baseline once | No | Adds one immutable repository baseline file |
 | `make eval-analytical-review REPORT=... REVIEW=...` | Apply structured human review as a new artifact | No | New local review artifacts only |
+| `make analytics` | Start the optional loopback Analytics Workspace service | No | Starts an Anvil-owned local service |
+| `make analytics-status` / `make analytics-stop` | Inspect or stop the Analytics service | No | Status is read-only; stop affects only the Anvil unit |
+| `make eval-analytics` | Generate Analytics offline certification artifacts | No | Writes local artifacts under `artifacts/analytics-certification/` |
 
 There is no `make setup` target. `make` prints help; fresh installation uses the documented `make reforge` journey. Supported external-cwd invocation is `make -C /path/to/anvil TARGET`; recipes use repository-relative paths after Make changes into that directory.
 
@@ -106,6 +118,7 @@ There is no `make setup` target. `make` prints help; fresh installation uses the
 | Anvil memory, knowledge, sources | `$XDG_DATA_HOME/anvil/{memory,knowledge,sources}` | Separate user data; Markdown remains memory source of truth. Upgrade/reforge preserve it. |
 | Databricks profile/provider state | `$XDG_CONFIG_HOME/anvil/databricks/` and `anvil/databricks.json` | Anvil-owned profile and non-secret readiness metadata; external Databricks profiles are read-only diagnostics and are not adopted. |
 | Databricks client installs | Under Anvil XDG data | Explicit setup may install a user-local CLI or isolated SDK; general Anvil lifecycle does not. Provider-native credential storage handles secrets. |
+| Analytics context and local workspace | `$XDG_DATA_HOME/anvil/analytics/` and `$XDG_STATE_HOME/anvil/analytics/` | Anvil-owned SQLite context, cached catalog metadata, local datasets and session identity; preserved by config/runtime lifecycle operations and rollback. |
 
 All lifecycle integration tests use isolated HOME and XDG roots. File manifests reject unsafe relative paths and symlinks at Anvil-owned paths; unowned config entries are inventoried without following symlinks, excluded from Anvil hashes, and preserved during migration. Snapshot restore verifies archive contents before activation. Runtime process matching is scoped to the validated executable, current user, and configured OpenCode data roots.
 

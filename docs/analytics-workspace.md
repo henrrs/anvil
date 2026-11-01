@@ -1,0 +1,64 @@
+# Anvil Analytics Workspace
+
+Anvil Analytics is a personal, global workspace for exploring Unity Catalog metadata, querying Databricks, and progressively making selected data available locally. This global Analytics Workspace is installed by default by `make reforge` and `make upgrade`; it does not depend on the current Git repository.
+
+## Start here
+
+```bash
+make upgrade DRY_RUN=1
+make upgrade
+make analytics-status
+make analytics
+```
+
+Open [http://anvil.localhost:8765](http://anvil.localhost:8765). When a per-user systemd manager is available, config activation enables the `anvil-analytics.service` user unit. Otherwise, `make analytics` starts the server in the foreground; press Ctrl-C to stop it. Set `ANALYTICS_PORT=9000` on a Make invocation or export `ANVIL_ANALYTICS_PORT=9000` to use another port.
+
+Use `make doctor` for Anvil, runtime, Databricks and Analytics status; `make capabilities` shows local availability. `make inspect` reports installed package files and private state paths without reading their contents. The Analytics service binds to `127.0.0.1` only and serves both the UI and same-origin API.
+
+## Explore data
+
+1. Configure the existing Anvil-owned Databricks profile with `make databricks-setup` if needed. Analytics reuses that profile and provider resolution; it does not create a second login or credential store.
+2. Open the catalog. Cached catalog metadata appears first, then the UI refreshes the catalog list. Expand a catalog and schema to list children; each level is paginated so large workspaces do not create thousands of browser nodes at once. Search queries the local metadata cache.
+3. Select a table to inspect cached metadata. Use **Preview rows** to run a user-requested sample query through a selected SQL warehouse. The SQL workspace discovers warehouses through Anvil's shared Databricks capability; choose a warehouse from the selector and refresh it when access changes. Warehouse IDs are not entered manually, and Anvil does not start stopped warehouses.
+4. Run one read-only SQL statement. `AUTO` selects local DuckDB only when Anvil proves that the current snapshot covers the source, columns and filter. Otherwise it uses the selected Databricks SQL warehouse. `LOCAL` fails clearly when coverage is incomplete; `DATABRICKS` explicitly uses the remote provider.
+5. Use **Make local** to choose projected columns, an optional supported filter, row bound and byte bound. A full table projection requires checking the explicit full-copy confirmation. Anvil checks available disk space, fetches bounded Arrow chunks directly to the local data plane, validates them, writes Parquet, and switches the current snapshot only after success.
+6. Ask Anvil about the current table, selected columns, SQL and small preview context. Deep investigation creates a child OpenCode session and distills a compact result into the durable Analytics context store.
+
+The UI includes a recent-work Home, closable table and query workspaces, Catalog search with All/Favorites/Local filters, table details, SQL, Ask Anvil, local coverage and materialization progress. Catalog and Ask Anvil panels can be resized or collapsed; layout and the selected warehouse ID are stored only in browser-local preferences. It has no third-party browser assets. Request and response limits are described in the [data-plane guide](analytics-workspace-data-plane.md).
+
+## Developer mock preview
+
+For frontend work on a machine without Anvil, OpenCode or Databricks, start the static mock preview from the repository:
+
+```bash
+make analytics-ui-mock
+make analytics-ui-mock SCENARIO=degraded
+```
+
+Open the printed `http://127.0.0.1:8766/dev/` URL. Visual scenarios include `home-populated`, `table-remote`, `table-local`, `query-results`, `ask-anvil`, `large-catalog`, `active-operation`, and `degraded`. Provider edge cases remain available as `offline`, `materializing`, `single-warehouse`, `no-warehouses`, and `warehouse-disappeared`. The preview serves local static files only and uses a development-only `MockAnalyticsApi`; it does not start the Analytics BFF, OpenCode, Databricks, or model requests. `SCENARIO` defaults to `healthy`, and `ANALYTICS_PORT` can override the preview port. Stop the server with Ctrl-C.
+
+With Firefox and geckodriver installed, run `python3 scripts/analytics_ui_visual_check.py` to check the four principal views at 1366×768, 1920×1080, 2560×1440, and 3840×2160. It also checks Catalog favorites and local filters, icon rendering, panel collapse, tab overflow, the health details panel, and effective 125%/150% display scaling. Review the PNGs in `artifacts/analytics-responsive/final/`; this local visual check is separate from `make test` because the offline test suite does not require a browser.
+
+The mock source is kept under `web/analytics/dev/`. Lifecycle packaging and the production static server exclude that directory; the installed UI always uses `HttpAnalyticsApi` and the local same-origin Analytics BFF.
+
+## Data and degradation
+
+Private state is under `~/.anvil/analytics/`; the global workspace is `~/.anvil/workspaces/analytics/`. SQLite WAL stores metadata, query history, knowledge, operations and session identity. Local datasets are stored separately as Parquet snapshots. These locations are outside the managed OpenCode config and Anvil lifecycle snapshots. An Anvil rollback can remove the installed feature package and service unit while preserving the user's Analytics state and data.
+
+OpenCode and Databricks are optional for different parts of the feature. Without OpenCode, cached catalog browsing, remote SQL and local SQL can still work; Ask Anvil reports degraded. Without a Databricks profile or workspace access, cached browsing and covered local SQL remain available. DuckDB and PyArrow are optional Python dependencies: DuckDB enables local SQL, and PyArrow enables Parquet materialization. Missing packages are shown as degraded rather than silently replacing the requested execution route.
+
+In WSL, use the Windows browser at `http://anvil.localhost:8765`. The app does not require a WSL IP or hosts-file entry. `make doctor` reports host-side browser reachability as `NOT_CHECKED`, because only the Windows host can validate its browser route. Microsoft documents Windows-to-WSL access through localhost forwarding; [WSL networking](https://learn.microsoft.com/en-us/windows/wsl/networking) describes the host forwarding behavior.
+
+## Anvil tools
+
+Ask Anvil can call bounded tools for cached catalog search, describe/preview, read-only query and route explanation, local coverage, materialization, metadata/local refresh, profiling, lineage, local query history and bounded remote/local comparison. OpenCode 1 and 2 use separate plugin adapters. The materialization tool requires OpenCode user approval; a full-table copy also requires explicit confirmation in the request. Tools call the local BFF and shared Anvil Databricks capability.
+
+## Certification
+
+```bash
+make eval-analytics
+```
+
+This runs offline fixtures and writes `summary.md`, `report.json`, `scenarios.json` and JUnit-compatible `pytest.xml` under `artifacts/analytics-certification/`. `make test` runs the Analytics contracts and lifecycle regressions as part of the full offline suite. Neither command contacts a live Databricks workspace or model provider; see the generated certification summary for the exact run and its limits.
+
+See [architecture](analytics-workspace-architecture.md), [operations](analytics-workspace-operations.md), and [data plane](analytics-workspace-data-plane.md).

@@ -267,6 +267,9 @@ for result in data["long_horizon_replay_comparison"].values():
 PY
 pass 'Adaptive activation separates task risk from project size and reuses valid scoped architecture evidence'
 python3 "$ROOT/tests/lifecycle.py" "$ROOT" "$candidate_v2" "$version_v2" "$candidate_v1" "$version_v1" "$tmp_root" || fail 'upgrade/reforge/migrate-runtime/rollback lifecycle integration'
+python3 "$ROOT/tests/analytics_lifecycle.py" || fail 'Analytics fresh install, upgrade, dry-run and rollback integration'
+PYTHONPATH="$ROOT:$ROOT/tests/fixtures/network-denied" python3 -m unittest discover -s "$ROOT/tests/analytics" -p 'test_*.py' || fail 'Analytics runtime, catalog, query, transfer, BFF and tool regressions'
+pass 'Analytics offline contracts and failure paths'
 
 python3 - "$ROOT" "$tmp_root/stats-sample.json" <<'PY' || fail 'native stats formatter'
 import json,sys

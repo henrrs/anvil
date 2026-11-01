@@ -48,6 +48,7 @@ SKILL_INTRODUCED, COMMAND_INTRODUCED = _load_inventory()
 COMMUNICATION_VERSION = SKILL_INTRODUCED.get("anvil-communication", (2, 7, 0))
 ENGINEERING_VERSION = SKILL_INTRODUCED.get("anvil-engineering", (2, 9, 0))
 ANALYSIS_INTELLIGENCE_VERSION = (2, 13, 0)
+ANALYTICS_WORKSPACE_VERSION = (2, 16, 0)
 DATABRICKS_PROVIDER_VERSION = (2, 3, 0)
 USER_PREFERENCES = {"cli.json", "tui.json", "tui.jsonc"}
 SHARED_PROFILE_KEYS = {
@@ -58,6 +59,16 @@ BASE_REQUIRED_SCRIPTS = {
     "scripts/memory.py", "scripts/source_registry.py", "scripts/runtime.py", "scripts/runtime_state.py",
 }
 DATABRICKS_SCRIPTS = {"scripts/databricks.py", "scripts/databricks_finops.py"}
+OPTIONAL_MANAGED_PREFIXES = ("scripts/analytics/", "web/analytics/")
+
+
+def _analytics_workspace_files() -> set[str]:
+    return (_shipped_package("scripts/analytics", "scripts/analytics")
+            | _shipped_package("web/analytics", "web/analytics", exclude_dirs={"dev"}))
+
+
+def _is_optional_managed_file(relative: str) -> bool:
+    return any(relative.startswith(prefix) for prefix in OPTIONAL_MANAGED_PREFIXES)
 
 
 class ManagedConfigError(ValueError):
@@ -68,13 +79,17 @@ def _is_user_preference(relative: str) -> bool:
     return relative in USER_PREFERENCES
 
 
-def _shipped_package(prefix: str, repository_dir: str) -> set[str]:
+def _shipped_package(prefix: str, repository_dir: str, *,
+                     exclude_dirs: set[str] | None = None) -> set[str]:
     root = ROOT / repository_dir
     return {f"{prefix}/{path.relative_to(root).as_posix()}" for path in root.rglob("*")
-            if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"}
+            if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+            and not (set(path.relative_to(root).parts) & (exclude_dirs or set()))}
 
 
-def _shipped_plugin_paths() -> set[str]:
+def _shipped_plugin_paths(major: int = 2) -> set[str]:
+    if major == 1:
+        return {"plugins/anvil-core-v1.ts"}
     return _shipped_package("plugins/anvil-core", "config/plugins/anvil-core")
 
 
@@ -226,7 +241,9 @@ def _legacy_owned(root: Path, source_version: str | None, *, allow_missing: bool
     if version and version >= DATABRICKS_PROVIDER_VERSION:
         required.update(DATABRICKS_SCRIPTS)
     if major == 2:
-        required.update(_shipped_plugin_paths())
+        required.update(_shipped_plugin_paths(2))
+    if major == 1 and version and version >= ANALYTICS_WORKSPACE_VERSION:
+        required.update(_shipped_plugin_paths(1))
     if version and version >= COMMUNICATION_VERSION:
         required.update({"scripts/artifacts.py", "skills/anvil-communication/SKILL.md", "commands/review.md"})
     if version and version >= ENGINEERING_VERSION:
@@ -257,6 +274,9 @@ def _legacy_owned(root: Path, source_version: str | None, *, allow_missing: bool
     if version and version >= ANALYSIS_INTELLIGENCE_VERSION:
         owned.add("scripts/analyze.py")
         owned.update(_shipped_package("scripts/analysis", "scripts/analysis"))
+    if version and version >= ANALYTICS_WORKSPACE_VERSION:
+        owned.update(path for path in _analytics_workspace_files()
+                     if path in actual or path in symlinks or path in other)
     for skill in skills:
         introduced = SKILL_INTRODUCED.get(skill)
         if version is not None and introduced is not None and version < introduced:
@@ -265,7 +285,9 @@ def _legacy_owned(root: Path, source_version: str | None, *, allow_missing: bool
         if shipped_skill.is_dir():
             owned.update(_shipped_package(f"skills/{skill}", f"config/skills/{skill}"))
     if major == 2:
-        owned.update(_shipped_plugin_paths())
+        owned.update(_shipped_plugin_paths(2))
+    if major == 1 and version and version >= ANALYTICS_WORKSPACE_VERSION:
+        owned.update(_shipped_plugin_paths(1))
     owned.update(path for path in actual if path in {"AGENTS.md", "opencode.jsonc"}
                  or (path.startswith("commands/") and Path(path).stem in commands))
     owned.update(path for path in symlinks | other
@@ -351,7 +373,7 @@ def inspect_source(root: Path, source_version: str | None = None,
                     continue
                 raise ManagedConfigError(f"Anvil-managed path is not a regular file: {normalized}")
             if normalized not in actual:
-                if recover_managed:
+                if recover_managed or _is_optional_managed_file(normalized):
                     continue
                 raise ManagedConfigError(f"Anvil-managed file is missing: {normalized}")
             if expected is None and normalized == "opencode.jsonc":

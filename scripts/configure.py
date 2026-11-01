@@ -22,6 +22,15 @@ SKILLS = BASELINE_SKILLS | {"anvil-communication", "anvil-engineering", "anvil-s
 COMMANDS = {"remember", "recall", "distill", "review"}
 BUILTINS = {"build", "plan", "general", "explore"}
 ANVIL_PLUGIN = "./plugins/anvil-core"
+ANALYTICS_TOOL_ACTIONS = (
+    "anvil_analytics_search_catalog", "anvil_analytics_describe_table",
+    "anvil_analytics_preview_table", "anvil_analytics_run_query",
+    "anvil_analytics_explain_query", "anvil_analytics_local_coverage",
+    "anvil_analytics_materialize", "anvil_analytics_refresh_metadata",
+    "anvil_analytics_refresh_local", "anvil_analytics_profile_table",
+    "anvil_analytics_lineage", "anvil_analytics_query_history",
+    "anvil_analytics_compare_routes",
+)
 STRUCTURED_SHARED_KEYS = {
     "provider", "providers", "plugin", "plugins", "mcp", "references",
     "compaction", "tool_output", "watcher", "agent", "agents",
@@ -631,6 +640,11 @@ def _audit_v1(path: Path, *, source_compatible: bool = False) -> list[str]:
                     if source_compatible else SKILLS <= allowed_skills and custom_skills_present)
     if not isinstance(skill, dict) or skill.get("*") != "deny" or not skills_valid:
         errors.append("V1 skill allowlist does not match a supported Anvil profile")
+    expected_tool_permissions = {name: ("ask" if name == "anvil_analytics_materialize" else "allow")
+                                 for name in ("anvil_memory_search", *ANALYTICS_TOOL_ACTIONS)}
+    if not source_compatible and any(permission.get(name) != effect
+                                     for name, effect in expected_tool_permissions.items()):
+        errors.append("V1 Anvil plugin tool permissions are incomplete")
     if data.get("mcp") is not None and not isinstance(data.get("mcp"), dict):
         errors.append("V1 MCP configuration must be an object")
     if data.get("plugin") is not None and not isinstance(data.get("plugin"), (list, dict)):
@@ -686,7 +700,9 @@ def audit(path: Path, *, source_compatible: bool = False) -> list[str]:
         errors.append("Anvil does not preserve sensitive .env read prompts")
     if rules.get(("shell", "*")) != "allow" or any(rules.get(("shell", pattern)) != "ask" for pattern in PROTECTED_SHELL):
         errors.append("Anvil does not ask before destructive Git shell commands")
-    core_actions = ("read", "glob", "grep", "edit", "shell", "webfetch", "websearch", "question", "anvil_memory_search")
+    core_actions = ("read", "glob", "grep", "edit", "shell", "webfetch", "websearch", "question",
+                    "anvil_memory_search", *[name for name in ANALYTICS_TOOL_ACTIONS
+                                               if name != "anvil_analytics_materialize"])
     required_actions = ("read", "edit", "shell") if source_compatible else core_actions
     for action in required_actions:
         if rules.get((action, "*")) != "allow":
@@ -699,6 +715,8 @@ def audit(path: Path, *, source_compatible: bool = False) -> list[str]:
                     if source_compatible else SKILLS <= allowed_skills and custom_skills_present)
     if rules.get(("skill", "*")) != "deny" or not skills_valid:
         errors.append("Anvil skill allowlist does not match a supported Anvil profile")
+    if not source_compatible and rules.get(("anvil_analytics_materialize", "*")) != "ask":
+        errors.append("Analytics materialization must require explicit tool approval")
     mcp = data.get("mcp", {})
     if not isinstance(mcp, dict) or ("servers" in mcp and not isinstance(mcp["servers"], dict)):
         errors.append("native V2 MCP configuration has an invalid shape")

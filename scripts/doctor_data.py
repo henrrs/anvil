@@ -15,6 +15,7 @@ import memory
 import managed_config
 import runtime
 import source_registry
+from inspect_data import analytics_workspace
 
 
 EXPECTED_SKILLS = {
@@ -143,6 +144,11 @@ def main() -> int:
             problems.append(f"managed configuration integrity check failed: {exc}")
     if runtime_major == 2 and (not plugin_file.is_file() or "anvil_memory_search" not in plugin_file.read_text(encoding="utf-8", errors="replace")):
         problems.append("anvil-core memory search plugin entrypoint is missing")
+    v1_plugin = args.config_dir / "plugins" / "anvil-core-v1.ts"
+    installed_version = managed_config.parse_version(installation.get("anvil_version"))
+    if (runtime_major == 1 and installed_version is not None
+            and installed_version >= managed_config.ANALYTICS_WORKSPACE_VERSION and not v1_plugin.is_file()):
+        problems.append("Anvil 1.x-compatible tool plugin entrypoint is missing")
     if memory_audit["invalid"]:
         warnings.append(f"invalid Markdown memory files: {memory_audit['invalid']}")
     if registry_audit["invalid"]:
@@ -168,7 +174,8 @@ def main() -> int:
     denied_subagents = rules.get(("task", "*")) == "deny" if runtime_major == 1 else rules.get(("subagent", "*")) == "deny"
     print(f"  subagents denied       {'yes' if denied_subagents else 'no'}")
     print(f"  primary agents         {1 if anvil.get('mode') == 'primary' else 0}")
-    print(f"  anvil-core configured  {'yes' if runtime_major == 2 and './plugins/anvil-core' in plugin_entries and plugin_file.is_file() else 'no (runtime fallback)'}")
+    configured_plugin = (runtime_major == 2 and './plugins/anvil-core' in plugin_entries and plugin_file.is_file()) or (runtime_major == 1 and v1_plugin.is_file())
+    print(f"  anvil-core configured  {'yes' if configured_plugin else 'no (runtime fallback)'}")
     print("Capabilities")
     print(f"  /remember              {'YES' if commands >= {'remember'} else 'NO'}")
     print(f"  /recall                {'YES' if commands >= {'recall'} else 'NO'}")
@@ -198,6 +205,8 @@ def main() -> int:
     print("Migration and workspace")
     print(f"  previous Anvil version {installation.get('previous_anvil_version') or migration.get('from_anvil') or 'unknown'}")
     print(f"  migration state        {migration.get('status', 'not recorded')}")
+    print()
+    analytics_workspace(args.config_dir, Path.home())
     print("Project overrides")
     print(f"  active                 {', '.join(overrides) if overrides else 'none'}")
     print("Version documentation")

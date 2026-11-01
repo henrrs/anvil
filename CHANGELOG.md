@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.16.0] - 2026-10-31 (candidate; live workspace and model checks remain environment-specific)
+
+- Refined Analytics into a useful Home workspace with closable table/query tabs, a paginated catalog, local-state cues, resizable/collapsible side panels, SQL route states, and contextual Ask Anvil actions; removed the footer's external brand navigation.
+- Added shared-capability SQL warehouse discovery, safe metadata caching and refresh, persisted selection, explicit unavailable/stale states and no silent compute startup. The UI uses a warehouse selector instead of manual identifiers.
+- Added the static `make analytics-ui-mock` development preview with healthy, offline, degraded, materializing and large-catalog fixtures. The mock API and assets are excluded from the production static allowlist and lifecycle package.
+- Exposed recent operations and completed investigations from the existing SQLite context store for the Analytics Home workspace.
+- Added the default-installed, architecturally optional Anvil Analytics Workspace with a global cached catalog, lazy metadata hydration, explicit table previews, bounded read-only SQL, contextual Ask Anvil, and a local-first UI.
+- Reused the existing Anvil Databricks capability and authentication for Unity Catalog, SQL warehouses and bounded Arrow transfers; no second credential store or ad hoc provider was added.
+- Added a private SQLite WAL context store, a dedicated OpenCode 1/2 runtime adapter, race-safe canonical Analytics sessions, recoverable task sessions, bounded rehydration and durable distillation.
+- Added exact-coverage query routing, optional DuckDB execution, bounded resumable Parquet materialization, checksummed chunks, disk-space checks, atomic snapshot publication and preservation of the prior snapshot on failure.
+- Integrated the service, frontend, V1/V2 tool adapters, inspect/doctor/capabilities and default install/upgrade/reforge/runtime migration packaging. User Analytics data remains outside managed-config snapshots and is retained by Anvil rollback.
+- Added offline runtime, session, provider, catalog, SQL, transfer, BFF, plugin bridge and install/upgrade/dry-run/rollback regressions, plus `make eval-analytics` certification artifacts.
+- The offline contract suite passed in local fixtures. Live Databricks permissions/Arrow behavior, live model quality, installed OpenCode plugin execution, optional dependency availability and Windows-to-WSL browser reachability were not measured here.
+
 ## [2.15.0] - 2026-10-31 (candidate; model-quality release gate pending)
 
 - Hardened the production semantic profile with an additive schema-v2 evidence model that separates observations, persistent entities/entity keys, events/event keys, technical keys, dimensions, time roles, measures, candidate keys, relationships and observation grain. Confidence, supporting/contradicting evidence and ambiguity are explicit; insufficient evidence can remain `UNKNOWN`.
@@ -7,7 +21,7 @@
 - Added optional schema-v1 semantic metadata for field roles, entity/event keys, uniqueness constraints and grain. Metadata is fingerprinted in the semantic profile; declared database keys remain distinct from analytical entities.
 - Added `make eval-analytical-semantic`, an isolated 24-case A–X certification report with precision/recall, confidence/abstention, role and grain metrics, metamorphic and adversarial checks, sensitivity/ablation results, evaluator mutations and FAST/STANDARD/DEEP comparison to the immutable 2.14 baseline.
 - Preserved all 2.14 numerical and semantic baseline artifacts. Deterministic certification is ready for subsequent L3–L5 model evaluation; model quality, communication fidelity and product release readiness remain unmeasured.
-- No runtime, external dependency, persisted user data or OpenCode configuration migration is required. The source migration window expands to nine prior minor releases to retain supported 2.6.x installations.
+- No runtime, external dependency, persisted user data or OpenCode configuration migration is required. The source migration window expands to ten prior minor releases to retain supported 2.6.x installations.
 
 ## [2.14.0] - 2026-10-31 (candidate; release gate pending)
 

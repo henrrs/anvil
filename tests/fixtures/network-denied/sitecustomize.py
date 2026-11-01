@@ -69,9 +69,14 @@ socket.socket.connect_ex = _guarded_connect_ex
 if HTTP_403:
     import urllib.error
     import urllib.request
+    from urllib.parse import urlparse
+
+    _urlopen = urllib.request.urlopen
 
     def _github_403(url: object, *args: object, **kwargs: object):
         target = getattr(url, "full_url", str(url))
+        if _local(urlparse(str(target)).hostname):
+            return _urlopen(url, *args, **kwargs)
         if LOG:
             with open(LOG, "a", encoding="utf-8") as stream:
                 stream.write(f"HTTP_403 {target}\n")

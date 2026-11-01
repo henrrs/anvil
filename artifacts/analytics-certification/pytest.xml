@@ -1,0 +1,81 @@
+<?xml version='1.0' encoding='utf-8'?>
+<testsuites tests="60" failures="0" errors="0" skipped="0" time="7.410">
+  <testsuite name="context_store" tests="6" failures="0" errors="0" skipped="0" time="0.024">
+    <testcase classname="context_store" name="test_catalog_knowledge_query_and_operations_are_durable" time="0" />
+    <testcase classname="context_store" name="test_catalog_search_reaches_nested_cached_tables_and_bounds_results" time="0" />
+    <testcase classname="context_store" name="test_failed_migration_rolls_back_all_schema_changes" time="0" />
+    <testcase classname="context_store" name="test_private_paths_are_outside_managed_config_and_sqlite_uses_wal" time="0" />
+    <testcase classname="context_store" name="test_rejects_symlinked_state_database" time="0" />
+    <testcase classname="context_store" name="test_validation_bounds_and_json_values" time="0" />
+  </testsuite>
+  <testsuite name="catalog" tests="11" failures="0" errors="0" skipped="0" time="0.060">
+    <testcase classname="catalog" name="test_catalog_hydration_is_scoped_lazy_paginated_and_cached" time="0" />
+    <testcase classname="catalog" name="test_catalog_parameters_reject_unsafe_names" time="0" />
+    <testcase classname="catalog" name="test_cli_provider_body_uses_private_temporary_file_not_process_argument" time="0" />
+    <testcase classname="catalog" name="test_failed_refresh_keeps_cached_metadata_and_reports_browse_only" time="0" />
+    <testcase classname="catalog" name="test_missing_provider_uses_cached_browse_state" time="0" />
+    <testcase classname="catalog" name="test_repeated_page_token_fails_without_publishing_partial_cache" time="0" />
+    <testcase classname="catalog" name="test_sdk_provider_uses_authenticated_api_client_for_catalog_requests" time="0" />
+    <testcase classname="catalog" name="test_sdk_worker_submits_external_arrow_with_existing_workspace_client" time="0" />
+    <testcase classname="catalog" name="test_shared_capability_routes_through_selected_provider_and_encodes_page" time="0" />
+    <testcase classname="catalog" name="test_statement_transfer_uses_bounded_external_arrow_and_shared_provider_route" time="0" />
+    <testcase classname="catalog" name="test_table_preview_runs_only_after_explicit_request_and_is_bounded" time="0" />
+  </testsuite>
+  <testsuite name="query_materialization" tests="16" failures="0" errors="0" skipped="0" time="0.096">
+    <testcase classname="query_materialization" name="test_auto_falls_back_to_remote_for_mismatch_or_missing_duckdb" time="0" />
+    <testcase classname="query_materialization" name="test_coverage_requires_exact_filter_and_all_projected_columns" time="0" />
+    <testcase classname="query_materialization" name="test_explicit_remote_route_records_the_actual_route" time="0" />
+    <testcase classname="query_materialization" name="test_failed_refresh_keeps_the_previous_current_snapshot" time="0" />
+    <testcase classname="query_materialization" name="test_full_table_and_unsafe_materialization_plans_require_confirmation_or_fail" time="0" />
+    <testcase classname="query_materialization" name="test_interrupted_materialization_resumes_checkpoint_without_duplicate_query" time="0" />
+    <testcase classname="query_materialization" name="test_local_parser_accepts_simple_select_but_defers_joins_and_ctes" time="0" />
+    <testcase classname="query_materialization" name="test_local_routing_needs_proven_coverage_and_never_calls_remote" time="0" />
+    <testcase classname="query_materialization" name="test_materialization_downloads_arrow_chunks_and_atomically_publishes_parquet" time="0" />
+    <testcase classname="query_materialization" name="test_materialization_plan_is_minimum_sufficient_and_bounded" time="0" />
+    <testcase classname="query_materialization" name="test_materialization_service_uses_shared_plan_and_hides_provider_checkpoint_details" time="0" />
+    <testcase classname="query_materialization" name="test_missing_pyarrow_degrades_before_remote_query" time="0" />
+    <testcase classname="query_materialization" name="test_mutations_and_multiple_statements_are_rejected_before_provider_calls" time="0" />
+    <testcase classname="query_materialization" name="test_partial_snapshot_is_never_claimed_as_complete_local_coverage" time="0" />
+    <testcase classname="query_materialization" name="test_pointer_manifest_and_parquet_files_are_validated" time="0" />
+    <testcase classname="query_materialization" name="test_remote_results_are_bounded_even_when_adapter_returns_too_much" time="0" />
+  </testsuite>
+  <testsuite name="runtime_sessions" tests="9" failures="0" errors="0" skipped="0" time="1.598">
+    <testcase classname="runtime_sessions" name="test_adapter_is_loopback_only_and_does_not_follow_redirects" time="0" />
+    <testcase classname="runtime_sessions" name="test_ask_anvil_uses_global_context_canonical_session_and_distills_deep_work" time="0" />
+    <testcase classname="runtime_sessions" name="test_concurrent_ensure_creates_one_canonical_session" time="0" />
+    <testcase classname="runtime_sessions" name="test_crash_before_runtime_identity_persist_reconciles_by_title" time="0" />
+    <testcase classname="runtime_sessions" name="test_ensure_canonical_is_idempotent_and_rehydrates_once" time="0" />
+    <testcase classname="runtime_sessions" name="test_lost_canonical_is_recreated_and_sqlite_context_survives" time="0" />
+    <testcase classname="runtime_sessions" name="test_open_code_adapters_select_v1_and_v2_routes_and_payloads" time="0" />
+    <testcase classname="runtime_sessions" name="test_service_startup_warms_canonical_session_and_keeps_ui_usable_when_runtime_is_missing" time="0" />
+    <testcase classname="runtime_sessions" name="test_task_sessions_are_children_and_distill_durable_findings" time="0" />
+  </testsuite>
+  <testsuite name="http_ui" tests="7" failures="0" errors="0" skipped="0" time="3.536">
+    <testcase classname="http_ui" name="test_api_is_same_origin_and_returns_json" time="0" />
+    <testcase classname="http_ui" name="test_binds_loopback_only" time="0" />
+    <testcase classname="http_ui" name="test_chat_rejects_invalid_shapes_and_non_json" time="0" />
+    <testcase classname="http_ui" name="test_chat_uses_validated_json_and_streams_server_sent_events" time="0" />
+    <testcase classname="http_ui" name="test_rejects_foreign_host_origin_and_path_traversal" time="0" />
+    <testcase classname="http_ui" name="test_serves_local_assets_with_security_headers" time="0" />
+    <testcase classname="http_ui" name="test_warehouse_discovery_and_recent_workspace_routes" time="0" />
+  </testsuite>
+  <testsuite name="tools_service" tests="8" failures="0" errors="0" skipped="0" time="0.531">
+    <testcase classname="tools_service" name="test_compare_requires_complete_matching_result_sets" time="0" />
+    <testcase classname="tools_service" name="test_lineage_escapes_literals_and_caps_rows_on_shared_query_router" time="0" />
+    <testcase classname="tools_service" name="test_profile_is_bounded_and_never_returns_raw_sample_rows" time="0" />
+    <testcase classname="tools_service" name="test_cli_does_not_contact_service_for_invalid_or_oversized_input" time="0" />
+    <testcase classname="tools_service" name="test_cli_forwards_only_to_loopback_bff_and_returns_bounded_json" time="0" />
+    <testcase classname="tools_service" name="test_dispatch_bounds_user_inputs_and_requires_full_table_confirmation_only_explicitly" time="0" />
+    <testcase classname="tools_service" name="test_plugin_registers_all_shared_bff_tools_without_direct_runtime_or_credentials" time="0" />
+    <testcase classname="tools_service" name="test_tool_dispatch_covers_all_registered_actions" time="0" />
+  </testsuite>
+  <testsuite name="lifecycle" tests="1" failures="0" errors="0" skipped="0" time="1.291">
+    <testcase classname="lifecycle" name="lifecycle" time="0" />
+  </testsuite>
+  <testsuite name="frontend_syntax" tests="1" failures="0" errors="0" skipped="0" time="0.117">
+    <testcase classname="frontend_syntax" name="frontend_syntax" time="0" />
+  </testsuite>
+  <testsuite name="python_syntax" tests="1" failures="0" errors="0" skipped="0" time="0.098">
+    <testcase classname="python_syntax" name="python_syntax" time="0" />
+  </testsuite>
+</testsuites>

@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0b0c0d">
+  <title>Anvil Analytics</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/api.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="shell" id="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Anvil Analytics home">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <span class="brand-copy"><strong>Anvil Analytics</strong></span>
+      </a>
+      <div class="header-context" aria-label="Workspace status">
+        <span class="environment-pill"><span class="status-dot" id="connection-dot"></span><span id="environment-name">WORKSPACE</span></span>
+      </div>
+      <div class="topbar-right">
+        <span class="visually-hidden" id="service-status">CONNECTING</span>
+        <span class="avatar" id="user-avatar" aria-hidden="true">A</span>
+        <span class="user-name" id="user-name">Anvil user</span>
+      </div>
+    </header>
+
+    <main class="workspace-grid" id="workspace-grid">
+      <aside class="panel catalog-panel" id="catalog-panel" aria-label="Data catalog">
+        <div class="panel-heading catalog-heading">
+          <div class="panel-title"><span class="eyebrow">EXPLORE</span><h1>Catalog</h1></div>
+          <div class="heading-actions">
+            <button class="icon-button" id="refresh-catalog" title="Refresh catalog" aria-label="Refresh catalog">↻</button>
+            <button class="icon-button collapse-button" id="collapse-catalog" title="Collapse catalog" aria-label="Collapse catalog" aria-expanded="true">‹</button>
+          </div>
+        </div>
+        <label class="search-box"><span aria-hidden="true">⌕</span>
+          <input id="catalog-search" type="search" placeholder="Search tables and views" autocomplete="off" aria-label="Search catalog">
+          <kbd>/</kbd>
+        </label>
+        <div class="catalog-filters" role="group" aria-label="Catalog filter">
+          <button class="catalog-filter active" type="button" data-catalog-filter="all" aria-pressed="true">All</button>
+          <button class="catalog-filter" type="button" data-catalog-filter="favorites" aria-pressed="false">Favorites</button>
+          <button class="catalog-filter" type="button" data-catalog-filter="local" aria-pressed="false">Local</button>
+        </div>
+        <div class="catalog-tree-heading"><span>Unity Catalog</span><span class="freshness" id="catalog-state" title="Catalog metadata status">LOCAL CACHE</span></div>
+        <div id="catalog-tree" class="catalog-tree" aria-live="polite">
+          <div class="empty-state compact"><span class="spinner"></span><p>Loading catalog…</p></div>
+        </div>
+        <div class="catalog-footer"><span class="mini-led" id="catalog-led"></span><span id="catalog-count">Cached objects</span></div>
+      </aside>
+
+      <div class="resize-handle" id="catalog-resize" role="separator" aria-label="Resize catalog panel" aria-orientation="vertical" tabindex="0" data-panel="catalog"></div>
+
+      <section class="center-column" aria-label="Analytics workspace">
+        <div class="workspace-tabbar">
+          <div class="workspace-tabs" id="workspace-tabs" role="tablist" aria-label="Open workspaces">
+            <button class="workspace-tab active" type="button" data-workspace="home" role="tab" aria-selected="true" title="Analytics home">
+              <span class="home-tab-icon" aria-hidden="true">⌂</span><span>Home</span>
+            </button>
+          </div>
+          <button class="new-query-button" id="new-query" type="button" title="Create a SQL query">＋ <span>New query</span></button>
+        </div>
+
+        <section class="workspace-page home-page" id="analytics-home" aria-label="Analytics home">
+          <div class="home-intro">
+            <div><h1>Good to see you, <span id="greeting-name">there</span></h1>
+              <p>Pick up your work or explore the catalog.</p></div>
+            <button class="button secondary" id="home-refresh" type="button"><span aria-hidden="true">↻</span> Refresh workspace</button>
+          </div>
+          <div class="home-grid">
+            <section class="home-section" id="home-continue-section">
+              <div class="home-card-heading"><h2>Continue working</h2><button class="text-button" id="home-new-query" type="button">New query +</button></div>
+              <div class="home-work-group" id="home-recent-tables-group"><h3>Tables <span id="home-recent-count">0</span></h3><div class="home-list" id="home-recent-tables"></div></div>
+              <div class="home-work-group" id="home-recent-queries-group"><h3>Queries</h3><div class="home-list" id="home-recent-queries"></div></div>
+              <div class="home-work-group" id="home-investigations-group"><h3>Analysis <span id="home-investigation-count">0</span></h3><div class="home-list" id="home-investigations"></div></div>
+              <p class="home-empty hidden" id="home-continue-empty">Open a table or start a query to begin.</p>
+            </section>
+            <section class="home-section hidden" id="home-pinned-section">
+              <div class="home-card-heading"><h2>Pinned</h2><span class="card-count" id="home-favorite-count">0</span></div>
+              <div class="home-list" id="home-favorites"></div>
+            </section>
+            <section class="home-section hidden" id="home-local-section">
+              <div class="home-card-heading"><h2>Local data</h2><span class="card-count" id="home-dataset-count">0</span></div>
+              <div class="home-list" id="home-local-datasets"></div>
+            </section>
+            <section class="home-section hidden" id="home-operations-section">
+              <div class="home-card-heading"><h2>Active operations</h2><span class="card-count" id="home-operation-count">0</span></div>
+              <div class="home-list" id="home-operations"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="workspace-page table-page hidden" id="table-workspace" aria-label="Table workspace">
+          <div class="table-workspace-heading">
+            <div class="table-heading-copy"><span class="eyebrow" id="table-breadcrumb">CATALOG</span><h1 id="table-title">Table</h1><p id="table-comment">Table metadata</p></div>
+            <div class="table-actions">
+              <button class="icon-button" id="favorite-table" type="button" title="Add to favorites" aria-label="Add to favorites">☆</button>
+              <button class="button secondary" id="table-new-query" type="button">Query table</button>
+              <button class="button primary" id="table-make-local" type="button">Make data local</button>
+            </div>
+          </div>
+          <nav class="table-tabs" id="table-tabs" role="tablist" aria-label="Table sections">
+            <button class="table-tab active" type="button" data-section="overview" role="tab" aria-selected="true"><span class="table-tab-content">Overview</span></button>
+            <button class="table-tab" type="button" data-section="columns" role="tab" aria-selected="false"><span class="table-tab-content">Columns</span></button>
+            <button class="table-tab" type="button" data-section="preview" role="tab" aria-selected="false"><span class="table-tab-content">Preview</span></button>
+            <button class="table-tab" type="button" data-section="lineage" role="tab" aria-selected="false"><span class="table-tab-content">Lineage</span></button>
+            <button class="table-tab" type="button" data-section="local" role="tab" aria-selected="false"><span class="table-tab-content">Local data</span></button>
+          </nav>
+          <div class="table-section-content" id="table-section-content" aria-live="polite"></div>
+        </section>
+
+        <section class="workspace-page query-page hidden" id="query-workspace" aria-label="SQL query workspace">
+          <div class="query-page-heading"><div><span class="eyebrow">SQL WORKSPACE</span><h1 id="query-title">Query</h1></div>
+            <div class="query-controls">
+              <label class="route-select"><span>ROUTE</span><select id="query-route" aria-label="Query execution route"><option value="AUTO">AUTO</option><option value="LOCAL">LOCAL</option><option value="DATABRICKS">DATABRICKS</option></select></label>
+              <label class="warehouse-control"><span class="subtle-label">SQL WAREHOUSE</span>
+                <select id="warehouse-select" aria-label="SQL Warehouse"><option value="">Loading warehouses…</option></select></label>
+              <button class="icon-button" id="refresh-warehouses" type="button" title="Refresh SQL Warehouses" aria-label="Refresh SQL Warehouses">↻</button>
+              <button class="button primary" id="run-query" type="button"><span aria-hidden="true">▶</span> Run query</button>
+            </div>
+          </div>
+          <div class="warehouse-message hidden" id="warehouse-message" role="status"></div>
+          <div class="editor-toolbar"><span class="editor-file-icon" aria-hidden="true">⌘</span><span id="query-file-name">query.sql</span><span class="editor-readonly">READ ONLY</span><span class="editor-toolbar-spacer"></span><span id="query-status-label" class="query-state idle">READY</span></div>
+          <div class="editor-wrap"><div class="editor-gutter" id="editor-gutter" aria-hidden="true">1</div>
+            <textarea id="sql-editor" spellcheck="false" aria-label="SQL query editor" autocomplete="off" autocapitalize="off" placeholder="SELECT order_id, status&#10;FROM catalog.schema.table&#10;WHERE status = 'failed'&#10;LIMIT 100"></textarea></div>
+          <div class="result-heading"><div><span class="eyebrow">RESULTS</span><span class="route-badge" id="route-badge">AUTO</span><span id="query-message">Read-only SQL. Results are capped for safety.</span></div><span id="query-metrics" class="muted"></span></div>
+          <div id="query-results" class="results-area" aria-live="polite"><div class="results-placeholder"><span>⌁</span><p>Run a query to inspect results</p></div></div>
+        </section>
+      </section>
+
+      <div class="resize-handle" id="assistant-resize" role="separator" aria-label="Resize Ask Anvil panel" aria-orientation="vertical" tabindex="0" data-panel="assistant"></div>
+
+      <aside class="panel assistant-panel" id="assistant-panel" aria-label="Ask Anvil">
+        <div class="panel-heading assistant-heading">
+          <div class="assistant-title"><span class="assistant-mark">✳</span><div><span class="eyebrow">ASSISTANT</span><h2>Ask Anvil</h2></div></div>
+          <div class="heading-actions"><button class="icon-button" id="clear-chat" type="button" title="Clear conversation" aria-label="Clear conversation" aria-haspopup="true" aria-expanded="false" aria-controls="clear-chat-confirm"><span class="visually-hidden">Clear conversation</span></button>
+            <div class="clear-chat-confirm" id="clear-chat-confirm" role="group" aria-labelledby="clear-chat-confirm-title" hidden>
+              <p id="clear-chat-confirm-title">Clear the visible conversation? The canonical Analytics session remains available.</p>
+              <div class="clear-chat-confirm-actions"><button class="button secondary" id="cancel-clear-chat" type="button">Cancel</button><button class="button primary" id="confirm-clear-chat" type="button">Clear</button></div>
+            </div>
+            <button class="icon-button collapse-button" id="collapse-assistant" type="button" title="Collapse Ask Anvil" aria-label="Collapse Ask Anvil" aria-expanded="true">›</button></div>
+        </div>
+        <div class="context-heading"><span class="context-heading-label">Context</span></div>
+        <div class="context-card" id="context-card"><div><strong>General question</strong><small>Select a table or query for context.</small></div></div>
+        <div class="assistant-actions" id="assistant-actions" aria-label="Contextual actions"></div>
+        <div class="chat-thread" id="chat-thread" aria-live="polite" aria-label="Conversation">
+          <div class="welcome-message"><div class="assistant-mark small">✳</div><p>Ask a general question, or open a table or query to give Anvil context.</p>
+            <button class="suggestion" data-prompt="How should I start exploring this workspace?" type="button">How should I start exploring?</button>
+            <button class="suggestion" data-prompt="Explain how local and Databricks query routing works." type="button">Explain query routing</button></div>
+        </div>
+          <div class="chat-compose"><textarea id="chat-input" rows="3" placeholder="Ask about your analytics…" aria-label="Ask Anvil" autocomplete="off"></textarea>
+          <div class="compose-footer"><details class="chat-options"><summary>Options</summary><label class="deep-toggle"><input id="deep-investigation" type="checkbox"><span class="toggle-track"></span><span>Deep investigation</span></label></details>
+            <button class="send-button" id="send-chat" type="button" aria-label="Send message">↑</button></div></div>
+        <div class="chat-footnote"><span class="lock-icon">⌑</span>Context is sent to your configured model when you ask.</div>
+      </aside>
+    </main>
+
+    <footer class="statusbar" aria-label="System status">
+      <details class="health-menu" id="health-menu"><summary id="health-summary"><span class="status-dot small-dot" id="health-summary-dot"></span><span id="health-summary-label">Checking systems</span></summary><div class="health-details" aria-label="System details"><p id="workspace-label">Global workspace</p><p id="catalog-freshness">Catalog not synced</p><p id="storage-label">0 B local</p><div class="status-items">
+        <span class="status-item" id="status-anvil" title="Analytics workspace service"><span class="status-dot small-dot"></span><span>Analytics</span><b>READY</b></span>
+        <span class="status-item" id="status-opencode" title="OpenCode runtime"><span class="status-dot small-dot"></span><span>OpenCode</span><b>UNKNOWN</b></span>
+        <span class="status-item" id="status-databricks" title="Databricks identity and provider"><span class="status-dot small-dot"></span><span>Databricks</span><b>UNKNOWN</b></span>
+        <span class="status-item" id="status-duckdb" title="Local SQL engine"><span class="status-dot small-dot"></span><span>DuckDB</span><b>UNKNOWN</b></span>
+      </div></div></details>
+      <div class="status-summary"><span id="operations-label" class="hidden">No active operations</span></div>
+    </footer>
+  </div>
+
+  <dialog id="materialize-dialog" class="dialog-card">
+    <form method="dialog" id="materialize-form">
+      <div class="dialog-heading"><div><span class="eyebrow">LOCAL DATA PLANE</span><h2>Make data local</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+      <p class="dialog-copy">Fetch only selected columns and filters. The current snapshot stays active until the new data is validated.</p>
+      <label class="field-label">Columns <span>comma separated</span><input id="materialize-columns" type="text" required placeholder="order_id, status, created_at"></label>
+      <label class="confirm-full-table"><input id="confirm-full-table" type="checkbox"><span>I explicitly confirm copying all table columns</span></label>
+      <label class="field-label">Filter <span>optional</span><input id="materialize-filter" type="text" placeholder="created_at &gt;= DATE '2026-01-01'"></label>
+      <label class="field-label">Row limit<input id="materialize-rows" type="number" min="1" max="1000000" value="100000"></label>
+      <label class="field-label">Maximum transfer size (MiB)<input id="materialize-mib" type="number" min="1" max="1024" value="512"></label>
+      <div id="materialize-feedback" class="inline-feedback" aria-live="polite"></div>
+      <div class="dialog-actions"><button class="button secondary" value="cancel">Close</button><button class="button secondary" id="cancel-materialization" type="button" disabled>Cancel transfer</button><button class="button primary" id="confirm-materialize" type="button">Start materialization</button></div>
+    </form>
+  </dialog>
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+</body>
+</html>

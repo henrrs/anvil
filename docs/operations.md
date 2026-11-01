@@ -80,3 +80,7 @@ Anvil changes only the managed user/global config boundary. It does not edit rep
 ## Engineering task continuity
 
 Large-task progress belongs to the separate XDG state engineering store, not the installation lifecycle or durable memory. Ask Anvil to resume a named repository/task ID, or use the installed `engineering.py list`/`resume` helper. Status/resume are read-only and do not execute work. For WORK_STATE_STALE inspect changed evidence, revalidate unaffected assumptions and replan changed specifications. For interrupted ACTIVE work inspect partial effects before reconciliation. WORK_STATE_CORRUPTED leaves the task file intact; explicit recovery from an inspected prior generation invalidates verification. Do not run reforge merely because one task's state is invalid. See [the engineering guide](engineering.md).
+
+## Analytics Workspace
+
+The Analytics Workspace is included by `make reforge` and `make upgrade` on both OpenCode runtime generations. Check `make analytics-status`, start it with `make analytics`, and open `http://anvil.localhost:8765`. `make analytics-stop` affects only Anvil's service. The UI is served locally; its Databricks operations reuse the configured Anvil-owned provider. Run `make eval-analytics` for offline certification artifacts. See the [Analytics operations guide](analytics-workspace-operations.md) for service fallback, readiness, materialization, and recovery behavior.

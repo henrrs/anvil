@@ -9,6 +9,7 @@ CAPABILITY_ORDER: dict[str, tuple[str, ...]] = {
     "auth.status": ("cli", "sdk"),
     "auth.profiles": ("cli", "sdk"),
     "workspace.list": ("cli", "sdk"),
+    "catalog.read": ("cli", "sdk"),
     "compute.list": ("cli", "sdk"),
     "compute.get": ("cli", "sdk"),
     "warehouse.list": ("cli", "sdk"),
@@ -27,6 +28,7 @@ CAPABILITY_ORDER: dict[str, tuple[str, ...]] = {
 PROVIDER_CAPABILITIES = {
     "cli": set(CAPABILITY_ORDER),
     "sdk": {"auth.status", "auth.profiles", "workspace.list", "compute.list", "compute.get",
+            "catalog.read",
             "warehouse.list", "warehouse.get", "python.execute", "sql.execute",
             "system_tables.query", "jobs.list", "jobs.get", "pipelines.list", "pipelines.get"},
     "sql_connector": {"sql.execute", "system_tables.query"},

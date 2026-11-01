@@ -4,7 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import os
+import sqlite3
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from configure import parse_jsonc
@@ -33,6 +38,58 @@ def files(directory: Path, names: tuple[str, ...]) -> list[str]:
 
 def safe_names(values: list[str]) -> str:
     return ", ".join(values) if values else "none"
+
+
+def analytics_workspace(config_dir: Path, home: Path) -> None:
+    package = config_dir / "scripts" / "analytics"
+    web_root = config_dir / "web" / "analytics"
+    root = home / ".anvil"
+    state = root / "analytics"
+    runtime_path = state / "runtime.json"
+    database = state / "context.db"
+    try:
+        port = int(os.environ.get("ANVIL_ANALYTICS_PORT", "8765"))
+        if not 1 <= port <= 65535:
+            port = 8765
+    except ValueError:
+        port = 8765
+    unit = config_dir.parent / "systemd" / "user" / "anvil-analytics.service"
+    runtime: dict = {}
+    if runtime_path.is_file() and not runtime_path.is_symlink():
+        try:
+            value = json.loads(runtime_path.read_text(encoding="utf-8"))
+            runtime = value if isinstance(value, dict) else {}
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            runtime = {}
+    server_ready = False
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/health",
+            headers={"Host": f"127.0.0.1:{port}", "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=0.4) as response:
+            server_ready = response.status == 200 and b'"status":"OK"' in response.read(4096)
+    except (OSError, urllib.error.URLError, TimeoutError):
+        pass
+    assets_ready = all((web_root / name).is_file() and not (web_root / name).is_symlink()
+                       for name in ("index.html", "app.js", "styles.css"))
+    print("Analytics Workspace")
+    print(f"  installed             {'YES' if package.is_dir() and not package.is_symlink() else 'NO'}")
+    print(f"  UI assets             {'READY' if assets_ready else 'MISSING'}")
+    print(f"  service               {'READY' if server_ready else 'CONFIGURED' if unit.is_file() else 'STOPPED'}")
+    print(f"  configured URL        http://anvil.localhost:{port}")
+    print(f"  workspace             {root / 'workspaces' / 'analytics'}")
+    print(f"  Context Store         {'SQLite WAL' if database.is_file() and not database.is_symlink() else 'NOT CREATED'}")
+    generation = runtime.get("runtime_generation") or runtime.get("generation")
+    print(f"  OpenCode runtime      {generation if generation in (1, 2) else 'NOT CONFIGURED'}")
+    print(f"  canonical session     {'PRESENT' if runtime.get('canonical_session_id') else 'NOT CREATED'}")
+    print(f"  SQLite module         {'AVAILABLE' if sqlite3.sqlite_version else 'UNAVAILABLE'}")
+    try:
+        duckdb = importlib.util.find_spec("duckdb") is not None
+    except (ImportError, ValueError):
+        duckdb = False
+    print(f"  DuckDB                {'AVAILABLE' if duckdb else 'DEGRADED (optional dependency missing)'}")
+    print("  WSL host reachability NOT_CHECKED (requires a Windows browser-side check)")
 
 
 def main() -> int:
@@ -80,6 +137,8 @@ def main() -> int:
     print(f"  legacy root skills   {safe_names(legacy_skills)}")
     print(f"  legacy root plugins  {safe_names(legacy_plugins)}")
     print(f"  Claude-compatible skills {safe_names(claude_skills)}")
+    print()
+    analytics_workspace(config_dir, args.home)
 
     project_root = args.cwd.resolve()
     git_root = next((parent for parent in (project_root, *project_root.parents) if (parent / ".git").exists()), None)

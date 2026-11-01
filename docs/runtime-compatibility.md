@@ -1,21 +1,21 @@
 # Anvil runtime compatibility
 
-**Official runtime release metadata and candidate profiles last checked:** 2026-10-27
-**Anvil release:** `2.9.0`
+**Official runtime release metadata last checked:** 2026-10-27
+**Anvil release:** `2.16.0`
 **Policy:** OpenCode 1.x and 2.x supported; default major `1`; automatic major upgrade disabled.
 
 | Anvil | OpenCode runtime | Minimum | Offline profile fixture | Adapter | Support |
 |---|---|---:|---:|---|---|
-| 2.9.x | 1.x | 1.18.18 | 1.18.18 | `opencode-v1` | Supported |
-| 2.9.x | 2.x | 2.0.0 | 2.0.0 | `opencode-v2` | Supported |
+| 2.16.x | 1.x | 1.18.18 | 1.18.18 | `opencode-v1` | Supported |
+| 2.16.x | 2.x | 2.0.0 | 2.0.0 | `opencode-v2` | Supported |
 
-The 2.9.0 mandatory suite uses offline OpenCode 1/2 profile fixtures and isolated lifecycle, memory, Databricks, communication and engineering regressions. Separately, on 2026-10-27 official digest-verified OpenCode 1 `1.19.3` and OpenCode 2 `2.0.31` binaries validated generated candidate config/agent/command/skill discovery; V2 plugin and knowledge Reference also passed. Those native smoke checks do not exercise a model or live workspace. Minimum supported versions are unchanged; their mandatory validation remains through offline profile fixtures.
+The 2.16.0 mandatory suite uses offline OpenCode 1/2 profile fixtures and isolated lifecycle, memory, Databricks, communication, engineering and Analytics regressions. Separately, on 2026-10-27 official digest-verified OpenCode 1 `1.19.3` and OpenCode 2 `2.0.31` binaries validated generated candidate config/agent/command/skill discovery; those native smoke checks do not exercise a model or live workspace. Minimum supported versions are unchanged. Analytics V1/V2 plugin contracts are source-tested, but live plugin loading and runtime chat were not exercised for 2.16.0.
 
 ## Common and runtime-specific capabilities
 
-Both profiles provide the single Anvil agent, Markdown commands and skills, file memory, `/remember`, `/recall`, `/distill`, `/review`, source registry, explicit reconciliation, Databricks provider capability, and Anvil's model-independent communication/artifact workflow through shared scripts. The communication capability does not require an OpenCode 2 plugin/API, MCP, or a runtime-specific tool feature. Databricks does not require an OpenCode plugin, MCP, or a V2-only permission/tool API.
+Both profiles provide the single Anvil agent, Markdown commands and skills, file memory, `/remember`, `/recall`, `/distill`, `/review`, source registry, explicit reconciliation, Databricks provider capability, Anvil's model-independent communication/artifact workflow, and Analytics tools through their generation-specific plugins. The Analytics tools use the same bounded local BFF actions; V1 uses the official V1 tool API and V2 uses its native plugin API. Databricks access does not require MCP or a V2-only provider API.
 
-OpenCode 1 uses its singular `agent`/`permission` config shape. It has no Anvil native memory-search tool or native Knowledge Reference, so shared Python file search and named-file reads are used. Its native stats command produces terminal text. OpenCode 2 uses plural `agents`/`plugins`, ordered permissions, the local read-only `anvil-core` search tool, `anvil-knowledge` Reference, and structured stats JSON. Shared commands, skills, memory, and Databricks integration remain the same.
+OpenCode 1 uses its singular `agent`/`permission` config shape and Anvil's `anvil-core-v1` custom tool plugin. It has no Anvil native memory-search tool or native Knowledge Reference, so shared Python file search and named-file reads are used. Its native stats command produces terminal text. OpenCode 2 uses plural `agents`/`plugins`, ordered permissions, the local `anvil-core` search and Analytics tools, `anvil-knowledge` Reference, and structured stats JSON. Shared commands, skills, memory, Databricks integration and Analytics service remain the same.
 
 Runtime behavior is exposed through `scripts/runtime.py`. `make capabilities` combines runtime capability data with the current non-secret Databricks CLI/profile/compute state and Anvil communication/artifact support. `FORMAT=json make capabilities` emits one JSON object with `runtime`, `databricks`, `databricks_capabilities`, and `communication` keys.
 

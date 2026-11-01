@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
-.PHONY: help inspect test reforge upgrade update-runtime migrate-runtime doctor capabilities stats databricks-setup rollback eval-analytical eval-analytical-semantic eval-analytical-model eval-analytical-full eval-analytical-baseline eval-analytical-review
+.PHONY: help inspect test reforge upgrade update-runtime migrate-runtime doctor capabilities stats databricks-setup rollback analytics analytics-status analytics-stop analytics-ui-mock eval-analytics eval-analytical eval-analytical-semantic eval-analytical-model eval-analytical-full eval-analytical-baseline eval-analytical-review
 
 VERSION := $(shell cat VERSION 2>/dev/null || printf 'unknown')
 
@@ -17,6 +17,11 @@ help:
 	  'make migrate-runtime OPENCODE_MAJOR=2  Explicitly migrate OpenCode major.' \
 	  'make doctor     Check Anvil, runtime, memory, knowledge and project state.' \
 	  'make capabilities  Show features available on the detected runtime.' \
+	  'make analytics  Start Anvil Analytics at http://anvil.localhost:8765.' \
+	  'make analytics-ui-mock  Preview the UI without Anvil/OpenCode/Databricks (SCENARIO=healthy).' \
+	  'make analytics-status  Show Analytics service and URL status.' \
+	  'make analytics-stop  Stop the systemd user service when configured.' \
+	  'make eval-analytics  Run offline Analytics certification and write report artifacts.' \
 	  'make stats      Show native stats, or an honest runtime fallback.' \
 	  'make databricks-setup  Configure Databricks; attempts safe CLI install, then SDK fallback.' \
 	  'make eval-analytical  Run offline analytical fixtures, scoring and performance evaluation.' \
@@ -60,6 +65,21 @@ doctor:
 
 capabilities:
 	@python3 scripts/capabilities.py --format "$(if $(FORMAT),$(FORMAT),text)" $(if $(filter 1 true yes,$(VERBOSE)),--verbose,)
+
+analytics:
+	@python3 scripts/analytics_service.py start --port "$(if $(ANALYTICS_PORT),$(ANALYTICS_PORT),$${ANVIL_ANALYTICS_PORT:-8765})"
+
+analytics-status:
+	@python3 scripts/analytics_service.py status --port "$(if $(ANALYTICS_PORT),$(ANALYTICS_PORT),$${ANVIL_ANALYTICS_PORT:-8765})"
+
+analytics-stop:
+	@python3 scripts/analytics_service.py stop --port "$(if $(ANALYTICS_PORT),$(ANALYTICS_PORT),$${ANVIL_ANALYTICS_PORT:-8765})"
+
+analytics-ui-mock:
+	@python3 scripts/analytics_ui_mock.py --scenario "$(if $(SCENARIO),$(SCENARIO),healthy)" --port "$(if $(ANALYTICS_PORT),$(ANALYTICS_PORT),8766)"
+
+eval-analytics:
+	@python3 -m evals.analytics.certify $(if $(OUTPUT_DIR),--output "$(OUTPUT_DIR)",)
 
 stats:
 	@bash scripts/stats.sh

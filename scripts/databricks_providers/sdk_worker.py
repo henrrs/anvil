@@ -95,6 +95,15 @@ def main() -> int:
         if operation == "workspace.list":
             phase = "request"
             return emit(bounded_collection(workspace.workspace.list(path=payload.get("path") or "/"), "objects"))
+        if operation == "catalog.read":
+            phase = "request"
+            path = payload.get("path")
+            if not isinstance(path, str) or not path.startswith("/api/2.1/unity-catalog/"):
+                raise ValueError("catalog request path is outside the supported Unity Catalog API")
+            query = payload.get("query")
+            if not isinstance(query, dict):
+                raise ValueError("catalog request query must be an object")
+            return emit(workspace.api_client.do(method="GET", path=path, query=query))
         if operation == "python.execute":
             phase = "request"
             cluster_id = payload["cluster_id"]
@@ -137,6 +146,29 @@ def main() -> int:
                 time.sleep(1)
                 response = api.get_statement(response.statement_id)
             return emit(value_dict(response))
+        if operation == "sql.transfer.submit":
+            phase = "request"
+            response = workspace.statement_execution.execute_statement(
+                statement=payload["statement"], warehouse_id=payload["warehouse_id"],
+                wait_timeout="10s",
+                on_wait_timeout=sql_service.ExecuteStatementRequestOnWaitTimeout.CONTINUE,
+                disposition=sql_service.Disposition.EXTERNAL_LINKS,
+                format=sql_service.Format.ARROW_STREAM,
+                row_limit=payload["row_limit"], byte_limit=payload["byte_limit"],
+                parameters=payload.get("parameters"))
+            return emit(value_dict(response))
+        if operation == "sql.transfer.get":
+            phase = "request"
+            return emit(value_dict(workspace.statement_execution.get_statement(
+                statement_id=payload["statement_id"])))
+        if operation == "sql.transfer.chunk":
+            phase = "request"
+            return emit(workspace.api_client.do(method="GET", path=payload["path"],
+                                                 query=payload.get("query") or {}))
+        if operation == "sql.transfer.cancel":
+            phase = "request"
+            return emit({"cancelled": bool(workspace.statement_execution.cancel_execution(
+                payload["statement_id"]))})
         raise ValueError("unsupported SDK operation")
     except Exception as exc:
         exception_type = type(exc).__name__

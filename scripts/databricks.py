@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if SCRIPT_DIR not in sys.path:
@@ -406,7 +406,8 @@ def _auth_route(authentication_strategy: str | None = None,
 
 def _call_provider(capability: str, sdk_operation: str, cli_arguments: list[str], *,
                    profile: str, timeout: float | None = None, config_path: Path | None = None,
-                   payload: dict[str, Any] | None = None, providers: dict[str, dict[str, Any]] | None = None,
+                   payload: dict[str, Any] | None = None, cli_body: dict[str, Any] | None = None,
+                   providers: dict[str, dict[str, Any]] | None = None,
                    authentication_strategy: str | None = None,
                    preferred_provider: str | None = None) -> dict[str, Any]:
     inventory = providers or provider_snapshot()
@@ -428,9 +429,21 @@ def _call_provider(capability: str, sdk_operation: str, cli_arguments: list[str]
         try:
             if name == "cli":
                 args = list(cli_arguments)
+                temporary_dir = None
+                if cli_body is not None:
+                    temporary_dir = tempfile.TemporaryDirectory(prefix="anvil-databricks-")
+                    os.chmod(temporary_dir.name, 0o700)
+                    body_path = Path(temporary_dir.name) / "request.json"
+                    body_path.write_text(json.dumps(cli_body, separators=(",", ":")), encoding="utf-8")
+                    os.chmod(body_path, 0o600)
+                    args.extend(["--json", "@" + str(body_path)])
                 if "--output" not in args and "-o" not in args:
                     args.extend(["--output", "json"])
-                output = run_cli(args, profile=profile, timeout=timeout, config_path=config_path)
+                try:
+                    output = run_cli(args, profile=profile, timeout=timeout, config_path=config_path)
+                finally:
+                    if temporary_dir:
+                        temporary_dir.cleanup()
                 try:
                     value = json.loads(output)
                 except json.JSONDecodeError as exc:
@@ -600,6 +613,152 @@ def api_call(method: str, path: str, *, profile: str, body: dict[str, Any] | Non
         raise DatabricksError("API_RESPONSE_INVALID", "Databricks API response was not valid JSON") from exc
 
 
+def unity_catalog_page(operation: str, profile: str | None = None, *,
+                       catalog_name: str | None = None, schema_name: str | None = None,
+                       full_name: str | None = None, max_results: int = 100,
+                       page_token: str | None = None, timeout: float | None = None) -> dict[str, Any]:
+    """Read one paginated Unity Catalog metadata page through Anvil's selected provider."""
+    selected, _, _ = resolve_profile(profile)
+    if not 1 <= max_results <= 1000:
+        raise DatabricksError("INVALID_INPUT", "Unity Catalog page size must be between 1 and 1000")
+    query: dict[str, str] = {"max_results": str(max_results)}
+    if page_token:
+        if len(page_token) > 4096:
+            raise DatabricksError("INVALID_INPUT", "Unity Catalog page token exceeds the supported size")
+        query["page_token"] = page_token
+    if operation == "catalogs.list":
+        path = "/api/2.1/unity-catalog/catalogs"
+        collection = "catalogs"
+    elif operation == "schemas.list":
+        if not catalog_name or len(catalog_name) > 255:
+            raise DatabricksError("INVALID_INPUT", "catalog name is required")
+        path = "/api/2.1/unity-catalog/schemas"
+        query["catalog_name"] = catalog_name
+        collection = "schemas"
+    elif operation == "tables.list":
+        if not catalog_name or not schema_name or len(catalog_name) > 255 or len(schema_name) > 255:
+            raise DatabricksError("INVALID_INPUT", "catalog and schema names are required")
+        path = "/api/2.1/unity-catalog/tables"
+        query.update({"catalog_name": catalog_name, "schema_name": schema_name})
+        collection = "tables"
+    elif operation == "tables.get":
+        if (not full_name or len(full_name) > 1024 or len(full_name.split(".")) != 3
+                or any(not part for part in full_name.split("."))
+                or any(ord(char) < 32 or char in "/\\" for char in full_name)):
+            raise DatabricksError("INVALID_INPUT", "a safe fully qualified table name is required")
+        path = "/api/2.1/unity-catalog/tables/" + quote(full_name, safe="")
+        query = {}
+        collection = "table"
+    else:
+        raise DatabricksError("INVALID_INPUT", "unsupported Unity Catalog metadata operation")
+    cli_path = path + ("?" + urlencode(query) if query else "")
+    try:
+        outcome = _call_provider("catalog.read", operation, ["api", "get", cli_path],
+                                 profile=selected, timeout=timeout,
+                                 payload={"path": path, "query": query})
+        value = outcome["value"]
+        _record_runtime_outcome(selected, "catalog.read", provider=outcome["provider"],
+                                result=value, resolution={"catalog.read": outcome["provider"]})
+        if isinstance(value, list):
+            value = {collection: value}
+        if not isinstance(value, dict):
+            raise DatabricksError("API_RESPONSE_INVALID", "Unity Catalog returned an invalid metadata response")
+        return value
+    except DatabricksError as exc:
+        _record_runtime_outcome(selected, "catalog.read", error=exc)
+        raise
+
+
+def _validated_statement_id(value: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,128}", value):
+        raise DatabricksError("INVALID_INPUT", "Databricks statement identifier is invalid")
+    return value
+
+
+def start_sql_transfer(statement: str, warehouse_id: str, *, profile: str | None = None,
+                       max_rows: int = 100_000, max_bytes: int = 512 * 1024 * 1024,
+                       timeout: int = 120, parameters: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Submit a bounded read-only Arrow transfer; signed links stay in this process."""
+    selected, _, _ = resolve_profile(profile)
+    if len(statement.encode("utf-8")) > MAX_REMOTE_CODE_BYTES:
+        raise DatabricksError("STATEMENT_TOO_LARGE", "SQL statement exceeds Anvil's 1 MB limit")
+    normalized = statement.strip().rstrip(";").lstrip()
+    if ";" in normalized or not re.match(r"(?is)^(SELECT|WITH)\b", normalized) or sql_may_mutate(normalized):
+        raise DatabricksError("SQL_MUTATION_APPROVAL_REQUIRED", "materialization requires one read-only SELECT statement")
+    if not 1 <= max_rows <= 1_000_000:
+        raise DatabricksError("INVALID_INPUT", "transfer row bound must be between 1 and 1000000")
+    if not 1_048_576 <= max_bytes <= 1_073_741_824:
+        raise DatabricksError("INVALID_INPUT", "transfer byte bound must be between 1 MiB and 1 GiB")
+    if not 5 <= timeout <= 600:
+        raise DatabricksError("INVALID_INPUT", "transfer timeout must be between 5 and 600 seconds")
+    found = discover_warehouses(selected)
+    warehouse = next((item for item in found["running"] if item["warehouse_id"] == warehouse_id), None)
+    if warehouse is None:
+        raise DatabricksError("WAREHOUSE_STOPPED", "materialization requires a selected running SQL warehouse")
+    body: dict[str, Any] = {"statement": normalized, "warehouse_id": warehouse_id,
+        "wait_timeout": "10s", "on_wait_timeout": "CONTINUE", "disposition": "EXTERNAL_LINKS",
+        "format": "ARROW_STREAM", "row_limit": max_rows, "byte_limit": max_bytes}
+    if parameters:
+        body["parameters"] = parameters
+    path = "/api/2.0/sql/statements"
+    try:
+        outcome = _call_provider("sql.execute", "sql.transfer.submit", ["api", "post", path],
+                                 profile=selected, timeout=timeout, payload={**body}, cli_body=body)
+        value = outcome["value"]
+        if not isinstance(value, dict) or not value.get("statement_id"):
+            raise DatabricksError("API_RESPONSE_INVALID", "Databricks did not return a transfer identifier")
+        _record_runtime_outcome(selected, "sql.execute", provider=outcome["provider"], result=value)
+        return value
+    except DatabricksError as exc:
+        _record_runtime_outcome(selected, "sql.execute", error=exc)
+        raise
+
+
+def sql_transfer_status(statement_id: str, warehouse_id: str, *, profile: str | None = None,
+                        timeout: int = 120) -> dict[str, Any]:
+    selected, _, _ = resolve_profile(profile)
+    identifier = _validated_statement_id(statement_id)
+    if not warehouse_id or len(warehouse_id) > 256:
+        raise DatabricksError("INVALID_INPUT", "a valid SQL warehouse is required")
+    path = f"/api/2.0/sql/statements/{identifier}"
+    outcome = _call_provider("sql.execute", "sql.transfer.get", ["api", "get", path],
+        profile=selected, timeout=timeout,
+        payload={"statement_id": identifier, "warehouse_id": warehouse_id, "path": path})
+    if not isinstance(outcome["value"], dict):
+        raise DatabricksError("API_RESPONSE_INVALID", "Databricks returned an invalid transfer status")
+    return outcome["value"]
+
+
+def sql_transfer_chunk(statement_id: str, chunk_index: int, warehouse_id: str, *,
+                       profile: str | None = None, timeout: int = 60) -> dict[str, Any]:
+    selected, _, _ = resolve_profile(profile)
+    identifier = _validated_statement_id(statement_id)
+    if not isinstance(chunk_index, int) or not 0 <= chunk_index <= 100_000:
+        raise DatabricksError("INVALID_INPUT", "transfer chunk index is outside the supported range")
+    if not warehouse_id or len(warehouse_id) > 256:
+        raise DatabricksError("INVALID_INPUT", "a valid SQL warehouse is required")
+    path = f"/api/2.0/sql/statements/{identifier}/result/chunks/{chunk_index}"
+    query = {"warehouse_id": warehouse_id}
+    cli_path = path + "?" + urlencode(query)
+    outcome = _call_provider("sql.execute", "sql.transfer.chunk", ["api", "get", cli_path],
+        profile=selected, timeout=timeout,
+        payload={"statement_id": identifier, "chunk_index": chunk_index,
+                 "warehouse_id": warehouse_id, "path": path, "query": query})
+    if not isinstance(outcome["value"], dict):
+        raise DatabricksError("API_RESPONSE_INVALID", "Databricks returned an invalid transfer chunk")
+    return outcome["value"]
+
+
+def cancel_sql_transfer(statement_id: str, *, profile: str | None = None,
+                        timeout: int = 30) -> dict[str, Any]:
+    selected, _, _ = resolve_profile(profile)
+    identifier = _validated_statement_id(statement_id)
+    path = f"/api/2.0/sql/statements/{identifier}/cancel"
+    outcome = _call_provider("sql.execute", "sql.transfer.cancel", ["api", "post", path],
+        profile=selected, timeout=timeout, payload={"statement_id": identifier}, cli_body={})
+    return outcome["value"] if isinstance(outcome.get("value"), dict) else {"cancelled": True}
+
+
 def item_list(value: Any, *keys: str) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, dict)]
@@ -671,10 +830,24 @@ def discover_warehouses(profile: str | None = None, *, timeout: float | None = N
     stopped = [item for item in warehouses if item["state"] in {"STOPPED", "STOPPING"}]
     return {
         "profile": selected, "workspace_host": host, "running": running, "stopped": stopped,
+        "warehouses": warehouses,
         "selection_required": len(running) > 1,
         "approval_required_to_start": not running and bool(stopped),
         "sql_available": bool(running),
     }
+
+
+def get_warehouse(warehouse_id: str, profile: str | None = None, *,
+                  timeout: float | None = None) -> dict[str, Any]:
+    """Read one SQL warehouse through the shared CLI/SDK provider boundary."""
+    if (not isinstance(warehouse_id, str) or not warehouse_id or len(warehouse_id) > 256
+            or any(ord(char) < 32 for char in warehouse_id)):
+        raise DatabricksError("INVALID_INPUT", "a valid SQL warehouse ID is required")
+    selected, _, _ = resolve_profile(profile)
+    data = json_from_cli(["warehouses", "get", warehouse_id], profile=selected, timeout=timeout)
+    if not isinstance(data, dict) or not normalized_warehouse(data):
+        raise DatabricksError("API_RESPONSE_INVALID", "Databricks returned an invalid SQL warehouse")
+    return normalized_warehouse(data) or {}
 
 
 def bounded_result(value: Any, byte_limit: int = MAX_RESULT_BYTES) -> Any:
