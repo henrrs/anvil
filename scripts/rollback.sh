@@ -102,6 +102,11 @@ if not isinstance(value,dict): value={}
 print(value.get("anvil_version") or "")
 PY
 )"
+lifecycle_operation_id="${ANVIL_LIFECYCLE_OPERATION_ID:-}"
+if [[ -z "$lifecycle_operation_id" ]]; then
+  lifecycle_operation_id="$(python3 "$ROOT/scripts/lifecycle_transaction.py" inspect 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("operation_id") or "")' 2>/dev/null || true)"
+fi
 if (( ! internal )); then
   if ! python3 "$ROOT/scripts/active-opencode.py"; then
     anvil_error 'Close OpenCode before rollback so its data and state can be restored consistently.'
@@ -156,13 +161,33 @@ fi
 
 config_archive="$backup_real/config.tar.gz"
 if (( ! internal )); then python3 "$ROOT/scripts/lifecycle_transaction.py" phase restoring-config; fi
+baseline_file="$backup_real/lifecycle-baseline/pre-operation-state.json"
+if [[ -f "$baseline_file" ]]; then
+  baseline_binary="$(python3 - "$baseline_file" <<'PY'
+import json,sys
+try: value=json.load(open(sys.argv[1],encoding="utf-8"))
+except (OSError,ValueError): value={}
+runtime=value.get("opencode_runtime") if isinstance(value,dict) else {}
+print(runtime.get("executable") or "" if isinstance(runtime,dict) else "")
+PY
+)"
+  python3 "$ROOT/scripts/analytics_service.py" stop --config-dir "$ANVIL_CONFIG_DIR" \
+    --home "$ANVIL_HOME_DIR" --systemd-dir "${XDG_CONFIG_HOME:-$ANVIL_HOME_DIR/.config}/systemd/user" \
+    --port "${ANVIL_ANALYTICS_PORT:-8765}" >/dev/null 2>&1 || true
+  marker="$ANVIL_DATA_HOME/anvil/analytics/operations/$lifecycle_operation_id.json"
+  if [[ -n "$lifecycle_operation_id" && -f "$marker" && ! -L "$marker" ]]; then
+    python3 "$ROOT/scripts/analytics_dependencies.py" restore \
+      --data-root "$ANVIL_DATA_HOME" --operation-id "$lifecycle_operation_id" >/dev/null
+  fi
+fi
 umask 077
 rollback_stage="$(mktemp -d "$(dirname -- "$ANVIL_CONFIG_DIR")/.anvil-config-rollback-stage.XXXXXX")"
 rollback_config="$rollback_stage/$(basename -- "$ANVIL_CONFIG_DIR")"
 python3 "$ROOT/scripts/archive.py" restore "$config_archive" "$rollback_config" "$config_present"
 if [[ "$config_present" != yes ]]; then mkdir -m 700 -- "$rollback_config"; fi
 python3 "$ROOT/scripts/managed_config.py" restore-merge --source "$ANVIL_CONFIG_DIR" --target "$rollback_config" >/dev/null
-anvil_apply_config "$rollback_config" yes
+ANVIL_ROLLBACK_RESTORE=1 ANVIL_ANALYTICS_RUNTIME_STAGED=0 \
+  anvil_apply_config "$rollback_config" yes yes
 if [[ "$backup_scope" == runtime ]]; then
   installer_archive="$backup_real/opencode-root.tar.gz"
   python3 "$ROOT/scripts/archive.py" restore "$installer_archive" "$ANVIL_INSTALL_ROOT" "$installer_present"
@@ -214,6 +239,17 @@ if [[ -n "$runtime_state_file" && "$runtime_state_file" == "$ANVIL_DATA_DIR/runt
   fi
 fi
 
+if [[ -f "$baseline_file" ]]; then
+  baseline_args=(restore --backup "$backup_real" --config-dir "$ANVIL_CONFIG_DIR" \
+    --home "$ANVIL_HOME_DIR" --installation "$ANVIL_DATA_DIR/installation.json" \
+    --analytics-runtime-state "${ANVIL_HOME:-$ANVIL_HOME_DIR/.anvil}/analytics/runtime.json" \
+    --systemd-dir "${XDG_CONFIG_HOME:-$ANVIL_HOME_DIR/.config}/systemd/user" \
+    --port "${ANVIL_ANALYTICS_PORT:-8765}")
+  [[ -z "$baseline_binary" ]] || baseline_args+=(--binary "$baseline_binary")
+  [[ -z "$lifecycle_operation_id" ]] || baseline_args+=(--operation-id "$lifecycle_operation_id")
+  python3 "$ROOT/scripts/lifecycle_baseline.py" "${baseline_args[@]}" >/dev/null
+fi
+
 if [[ "$backup_scope" == runtime && -n "$old_version" ]]; then
   previous_path="$(read_manifest previous.executable_path)"
   if [[ -n "$previous_path" && -x "$previous_path" ]]; then
@@ -237,7 +273,28 @@ PY
   if [[ "$remaining_entries" == no ]]; then rmdir -- "$ANVIL_CONFIG_DIR"; fi
 fi
 if (( ! internal )); then python3 "$ROOT/scripts/lifecycle_transaction.py" phase verifying-restored-state; fi
-if [[ "$config_present" == yes && -f "$ANVIL_DATA_DIR/installation.json" ]]; then
+if [[ -f "$baseline_file" ]]; then
+  verification_args=(verify --backup "$backup_real" --config-dir "$ANVIL_CONFIG_DIR" \
+    --home "$ANVIL_HOME_DIR" --installation "$ANVIL_DATA_DIR/installation.json" \
+    --analytics-runtime-state "${ANVIL_HOME:-$ANVIL_HOME_DIR/.anvil}/analytics/runtime.json" \
+    --systemd-dir "${XDG_CONFIG_HOME:-$ANVIL_HOME_DIR/.config}/systemd/user" \
+    --port "${ANVIL_ANALYTICS_PORT:-8765}")
+  [[ -z "$baseline_binary" ]] || verification_args+=(--binary "$baseline_binary")
+  verification="$(python3 "$ROOT/scripts/lifecycle_baseline.py" "${verification_args[@]}")" || {
+    anvil_error "Baseline restoration verification failed. Primary lifecycle failure remains in effect. Verified snapshot: $backup_real"
+    exit 1
+  }
+  verification_status="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("status", "RESTORATION_FAILED"))' "$verification")"
+  printf 'Baseline restoration status  %s\n' "$verification_status"
+  if [[ "$verification_status" == RESTORED_DEGRADED_BASELINE ]]; then
+    anvil_ok 'Automatic restoration matched the pre-operation degraded baseline.'
+  elif [[ "$verification_status" == RESTORED ]]; then
+    anvil_ok 'Automatic restoration matched the pre-operation baseline.'
+  else
+    anvil_error 'Baseline restoration could not be verified against the captured state.'
+    exit 1
+  fi
+elif [[ "$config_present" == yes && -f "$ANVIL_DATA_DIR/installation.json" ]]; then
   restored_product_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
 import json,sys
 try: value=json.load(open(sys.argv[1],encoding="utf-8"))

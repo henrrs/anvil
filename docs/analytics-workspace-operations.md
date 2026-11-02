@@ -41,7 +41,7 @@ The default Anvil-owned Databricks profile and authentication remain the only su
 
 ## Data and rollback
 
-Analytics state lives outside managed OpenCode configuration and lifecycle backups. Upgrade/reforge do not copy it into snapshots. Rollback restores Anvil-owned config and removes only the Anvil-owned Analytics service unit when the target package lacks Analytics. It preserves SQLite, runtime.json, workspace files, Parquet datasets and snapshots. SQLite can be opened by a compatible later Analytics version; rollback does not downgrade user data.
+Analytics workspace data lives outside managed OpenCode configuration and lifecycle backups. Upgrade/reforge do not copy SQLite, workspace files, Parquet datasets or snapshots into backups. Lifecycle snapshots do include the small canonical Analytics `runtime.json` file and managed service unit so rollback can restore the prior OpenCode/session reference and service definition exactly. Rollback restores the prior service active/enabled state without bootstrapping missing OpenCode or creating a canonical session that was absent from the baseline. SQLite can be opened by a compatible later Analytics version; rollback does not downgrade user data.
 
 ## Developer UI mock
 

@@ -281,10 +281,34 @@ PY
   fi
 }
 
+stage_upgrade() {
+  local target_lock="$ready_config/generated/runtime/analytics-requirements.lock"
+  [[ -f "$target_lock" ]] || return 0
+  anvil_lifecycle_require_plan_operation InstallAnalyticsDependencies || return $?
+  if [[ "${ANVIL_TEST_MODE:-0}" == 1 && -z "${ANVIL_TEST_FAIL_ANALYTICS_PACKAGE:-}" ]]; then
+    anvil_log 'Offline lifecycle fixture: Analytics packages are represented by the staged release lock.'
+    return 0
+  fi
+  python3 "$ROOT/scripts/analytics_dependencies.py" stage \
+    --lock "$target_lock" --data-root "$ANVIL_DATA_HOME" \
+    --operation-id "$ANVIL_LIFECYCLE_OPERATION_ID" >/dev/null
+}
+
+preverify_upgrade() {
+  if [[ -f "$ready_config/generated/runtime/analytics-requirements.lock" ]]; then
+    anvil_lifecycle_require_plan_operation InstallAnalyticsDependencies || return $?
+    anvil_lifecycle_require_plan_operation EnsureAnalyticsService || return $?
+  fi
+  python3 "$ROOT/scripts/lifecycle_verify.py" --phase pre-activation \
+    --config "$ready_config/generated" --memory "$ANVIL_DATA_DIR/memory" --binary "$binary" \
+    --product-version "$ANVIL_VERSION" --runtime-version "$runtime_version" --runtime-major "$major"
+}
+
 apply_upgrade() {
   anvil_lifecycle_require_plan_operation ReplaceManagedArtifacts || return $?
   if [[ -f "$ready_config/generated/runtime/analytics-requirements.lock" ]]; then
     anvil_lifecycle_require_plan_operation InstallAnalyticsDependencies || return $?
+    anvil_lifecycle_require_plan_operation EnsureAnalyticsService || return $?
   fi
   if (( drift_count > 0 )); then
     printf 'Repairing %s Anvil-managed drifted artifact(s)...\n' "$drift_count"
@@ -327,6 +351,11 @@ commit_upgrade() {
     --opencode-major "$major" --binary "$binary" --anvil-only \
     --migration-status anvil-upgrade --previous-anvil-version "$old_anvil_version" --backup "$backup_dir" || return $?
   python3 "$ROOT/scripts/runtime_state.py" record >/dev/null || return $?
+  if [[ -f "$ready_config/generated/runtime/analytics-requirements.lock" &&
+        "${ANVIL_TEST_MODE:-0}" != 1 ]]; then
+    python3 "$ROOT/scripts/analytics_dependencies.py" finalize \
+      --data-root "$ANVIL_DATA_HOME" --operation-id "$ANVIL_LIFECYCLE_OPERATION_ID" >/dev/null || return $?
+  fi
 }
 
 rollback_upgrade() {
@@ -337,7 +366,7 @@ rollback_upgrade() {
 anvil_lifecycle_execute anvil-upgrade "$backup_dir" "$old_anvil_version" "$ANVIL_VERSION" \
   apply_upgrade verify_upgrade commit_upgrade rollback_upgrade \
   'Automatic Anvil rollback completed; the OpenCode runtime and data were preserved.' \
-  'Anvil upgrade failed after config replacement' "$plan_file"
+  'Anvil upgrade failed after activation' "$plan_file" "" stage_upgrade preverify_upgrade
 anvil_ok "Anvil $ANVIL_VERSION installed; OpenCode $runtime_version was preserved exactly."
 anvil_ok "Anvil-only rollback snapshot: $backup_dir"
 if (( drift_count > 0 )); then

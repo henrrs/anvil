@@ -153,6 +153,9 @@ def plan(current: CurrentState, desired: DesiredState) -> ChangePlan:
                 # product adapter converges it whenever present in staged config.
                 operations.extend(AnalyticsContributor().plan_product(True))
                 operations.extend(MemoryContributor().plan_initialize(state["memory"]["present"]))
+                operations.append(_op(OperationKind.ENSURE_SERVICE, "analytics",
+                                      "Validate the Analytics service candidate before activation; activate after config swap",
+                                      idempotent=False))
                 operations.extend((_op(OperationKind.VERIFY, "installation", "Verify the target before metadata commit"),
                                    _op(OperationKind.COMMIT, "installation", "Mark target release installed")))
     elif desired.operation == "reforge":

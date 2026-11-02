@@ -17,7 +17,8 @@ from typing import Any
 
 PHASE_SEQUENCES = {
     "upgrade": ("applying-config", "config-applied", "before-installation-metadata", "postflight-validated"),
-    "anvil-upgrade": ("applying-config", "config-applied", "before-installation-metadata", "postflight-validated"),
+    "anvil-upgrade": ("staging", "pre-activation-verification", "activating", "activation-completed",
+                      "post-activation-verification", "committing", "completed"),
     "reforge": ("applying-config", "config-applied", "before-installation-metadata", "postflight-validated"),
     "update-runtime": ("before-installation-metadata", "postflight-validated"),
     "migrate-runtime": ("applying-config", "config-applied", "before-installation-metadata", "postflight-validated"),
@@ -120,7 +121,7 @@ def _write(value: dict[str, Any]) -> None:
         raise
 
 
-def begin(operation: str, backup: str, source: str, target: str, owner_pid: int) -> None:
+def begin(operation: str, backup: str, source: str, target: str, owner_pid: int) -> str:
     with _transaction_lock():
         if _read() is not None:
             raise ValueError("another lifecycle transaction is already pending recovery")
@@ -130,9 +131,11 @@ def begin(operation: str, backup: str, source: str, target: str, owner_pid: int)
                 "backup": str(Path(backup).absolute()),
                 "source_version": source or None, "target_version": target or None,
                 "owner_pid": owner_pid,
+                "activation_started": False,
                 "phase": "snapshot-verified", "started_utc": started,
                 "events": [{"phase": "snapshot-verified", "at": started}]}
         _write(data)
+        return operation_id
 
 
 def phase(value: str) -> None:
@@ -141,7 +144,11 @@ def phase(value: str) -> None:
         if current is None:
             raise ValueError("cannot update a missing lifecycle transaction journal")
         sequence = PHASE_SEQUENCES.get(str(current.get("operation")))
-        if sequence is not None:
+        terminal_stage_failure = value in {"staging-failed", "pre-activation-failed"}
+        if terminal_stage_failure:
+            if current.get("activation_started"):
+                raise ValueError("pre-activation failure cannot be recorded after activation started")
+        elif sequence is not None:
             events = current.get("events")
             completed = [item.get("phase") for item in events if isinstance(item, dict)] if isinstance(events, list) else []
             expected_index = len(completed) - 1
@@ -154,6 +161,8 @@ def phase(value: str) -> None:
                            "restoring-metadata", "verifying-restored-state"}:
             raise ValueError(f"unknown lifecycle phase: {value}")
         current["phase"] = value
+        if value == "activating":
+            current["activation_started"] = True
         current["updated_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         events = current.get("events")
         if isinstance(events, list) and len(events) < 64:
@@ -183,6 +192,7 @@ def main() -> int:
     p_begin.add_argument("--source-version", default="")
     p_begin.add_argument("--target-version", default="")
     p_begin.add_argument("--owner-pid", type=int, default=os.getppid())
+    p_begin.add_argument("--print-id", action="store_true")
     p_phase = sub.add_parser("phase")
     p_phase.add_argument("value")
     sub.add_parser("clear")
@@ -191,7 +201,9 @@ def main() -> int:
         if args.action == "inspect":
             print(json.dumps(inspect(), ensure_ascii=False))
         elif args.action == "begin":
-            begin(args.operation, args.backup, args.source_version, args.target_version, args.owner_pid)
+            operation_id = begin(args.operation, args.backup, args.source_version, args.target_version, args.owner_pid)
+            if args.print_id:
+                print(operation_id)
         elif args.action == "phase":
             phase(args.value)
         else:

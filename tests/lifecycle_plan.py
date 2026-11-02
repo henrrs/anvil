@@ -28,7 +28,8 @@ with tempfile.TemporaryDirectory() as name:
     upgrade = plan(current, DesiredState("upgrade", "2.17.0"))
     assert [item.kind for item in upgrade.operations] == [
         OperationKind.SNAPSHOT, OperationKind.REPLACE_MANAGED, OperationKind.SYNC_DEPENDENCIES,
-        OperationKind.INITIALIZE_MEMORY, OperationKind.VERIFY, OperationKind.COMMIT]
+        OperationKind.INITIALIZE_MEMORY, OperationKind.ENSURE_SERVICE,
+        OperationKind.VERIFY, OperationKind.COMMIT]
     assert before == current.as_dict() and not list(root.rglob("*")), "planner mutated or discovered state"
 
     unsafe = CurrentState(persisted, dict(life, lifecycle="CORRUPTED",

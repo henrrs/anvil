@@ -35,7 +35,8 @@ REQUIRED = {
 
 ALLOWED = {
     "upgrade": REQUIRED["upgrade"] | {OperationKind.SYNC_DEPENDENCIES,
-                                      OperationKind.INITIALIZE_MEMORY},
+                                      OperationKind.INITIALIZE_MEMORY,
+                                      OperationKind.ENSURE_SERVICE},
     "reforge": REQUIRED["reforge"] | {OperationKind.INSTALL_RUNTIME,
                                       OperationKind.SYNC_DEPENDENCIES,
                                       OperationKind.INITIALIZE_MEMORY},

@@ -15,7 +15,7 @@ make upgrade
 make doctor
 ```
 
-`make upgrade` upgrades Anvil only and preserves the exact validated OpenCode executable and version. It uses local runtime discovery, builds the matching Anvil config, and rehearses with the local runtime against copied config, OpenCode data/state, and Anvil Markdown memory under a temporary HOME/XDG tree. It does not resolve a release, download or install OpenCode, edit `PATH`, contact Databricks, or change OpenCode data/state. It creates an Anvil-scoped backup, applies Anvil files and metadata, and runs doctor in local-only postflight mode. Failed postflight checks restore Anvil config/metadata while leaving OpenCode untouched.
+`make upgrade` upgrades Anvil only and preserves the exact validated OpenCode executable and version. It uses local runtime discovery, builds the matching Anvil config, and rehearses with the local runtime against copied config, OpenCode data/state, and Anvil Markdown memory under a temporary HOME/XDG tree. It does not resolve an OpenCode release, download or install OpenCode, edit `PATH`, contact Databricks, or change OpenCode data/state. After the verified snapshot, it stages pinned Analytics dependencies in a hidden runtime, validates imports and the candidate service unit, then activates the runtime and config. A failure before activation discards staging and leaves the active install untouched. A failure after activation restores the captured pre-operation state and verifies against that baseline, including degraded or inactive Analytics service state.
 
 `make upgrade DRY_RUN=1` is fully local and stops after rehearsal before a live backup or file change. It prints `Network required NO` and `PRESERVE EXACT VERSION`. Set `ANVIL_YES=1` only for reviewed non-interactive runs.
 

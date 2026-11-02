@@ -48,8 +48,19 @@ class AnalyticsContributor:
 
     def plan_product(self, installed: bool) -> tuple[Any, ...]:
         from lifecycle_plan import OperationKind, _op
+        lock = Path(__file__).resolve().parents[1] / "config" / "analytics-requirements.lock"
+        package_summary = "release-pinned Analytics dependencies"
+        try:
+            import analytics_dependencies
+            _, packages = analytics_dependencies.parse_lock(lock)
+            policy = analytics_dependencies.package_resolution_policy()
+            package_summary = (", ".join(f"{name}=={version}" for name, version in packages)
+                               + f"; source policy {policy.policy}; public fallback "
+                               + ("enabled" if policy.public_fallback else "disabled"))
+        except (OSError, ValueError, RuntimeError):
+            package_summary += "; corporate-first source policy with policy-controlled public fallback"
         return ((_op(OperationKind.SYNC_DEPENDENCIES, "analytics",
-                     "Converge release-pinned local dependencies"),) if installed else ())
+                     "Stage and verify " + package_summary),) if installed else ())
 
     def plan_service(self, readiness: dict[str, Any]) -> tuple[Any, ...]:
         from lifecycle_plan import OperationKind, _op
@@ -64,9 +75,14 @@ class AnalyticsContributor:
             return
         import analytics_dependencies
         data_home = memory.parent.parent
-        target = analytics_dependencies.runtime_path(lock, data_home)
+        operation_id = os.environ.get("ANVIL_LIFECYCLE_OPERATION_ID")
+        marker = (analytics_dependencies._operation_marker(data_home, operation_id)
+                  if operation_id else None)
+        interpreter = (analytics_dependencies.staged_interpreter(lock, data_home, operation_id)
+                       if marker is not None and marker.is_file()
+                       else analytics_dependencies.runtime_path(lock, data_home) / "bin" / "python")
         _, packages = analytics_dependencies.parse_lock(lock)
-        if not analytics_dependencies._validate(target / "bin" / "python", packages):
+        if not analytics_dependencies._validate(interpreter, packages):
             raise ValueError("pinned Analytics dependencies are unavailable")
 
     def verify_service(self, config: Path, home: Path) -> None:
@@ -78,6 +94,26 @@ class AnalyticsContributor:
             port = 8765
         if analytics_service.service_state(config, home, systemd, port)["status"] != "READY":
             raise ValueError("Analytics service is not ready")
+
+    def verify_service_candidate(self, config: Path, home: Path) -> None:
+        import analytics_service
+        systemd = Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config"))) / "systemd" / "user"
+        try:
+            port = int(os.environ.get("ANVIL_ANALYTICS_PORT", "8765"))
+        except ValueError:
+            port = 8765
+        if not 1 <= port <= 65535:
+            raise ValueError("Analytics service port is invalid")
+        lock = config / "runtime" / "analytics-requirements.lock"
+        interpreter = None
+        operation_id = os.environ.get("ANVIL_LIFECYCLE_OPERATION_ID")
+        if lock.is_file() and operation_id:
+            import analytics_dependencies
+            data_home = Path(os.environ.get("XDG_DATA_HOME", str(home / ".local" / "share"))).expanduser()
+            marker = analytics_dependencies._operation_marker(data_home, operation_id)
+            if marker.is_file():
+                interpreter = analytics_dependencies.staged_interpreter(lock, data_home, operation_id)
+        analytics_service.validate_candidate(config, home, systemd, port, interpreter)
 
 
 class DatabricksContributor:

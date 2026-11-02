@@ -1164,6 +1164,35 @@ def managed_file_repair_test(temp: pathlib.Path) -> None:
           and not (paths["anvil_data"] / "backups").exists(),
           "dry-run mutated installation state or created a rollback snapshot")
 
+    pip_conf = paths["config_home"] / "pip" / "pip.conf"
+    pip_conf.parent.mkdir(parents=True, exist_ok=True)
+    pip_secret = "SECRET_REGISTRY_TOKEN_123"
+    pip_conf.write_text(f"[global]\nindex-url = https://user:{pip_secret}@packages.example.invalid/simple\n",
+                        encoding="utf-8")
+    pip_conf_before = file_hash(pip_conf)
+    pre_stage_config = filesystem_snapshot(paths["config"])
+    pre_stage_installation = file_hash(installation_path)
+    failed_staging = run(
+        ["/usr/bin/make", "--no-print-directory", "upgrade"],
+        dict(env, ANVIL_TEST_FAIL_ANALYTICS_PACKAGE="duckdb"), expected=2,
+    )
+    check("duckdb==1.5.5" in failed_staging.stderr and "VERSION_NOT_FOUND" in failed_staging.stderr,
+          "the exact 2.16→2.17 dependency failure did not retain its structured DuckDB cause")
+    check(pip_secret not in failed_staging.stdout + failed_staging.stderr
+          and file_hash(pip_conf) == pip_conf_before,
+          "package registry credentials leaked or global pip configuration changed")
+    check("active installation was not changed" in failed_staging.stderr
+          and "Automatic rollback" not in failed_staging.stderr,
+          "pre-activation failure incorrectly entered snapshot rollback")
+    check(filesystem_snapshot(paths["config"]) == pre_stage_config
+          and file_hash(installation_path) == pre_stage_installation,
+          "failed Analytics staging changed active config or committed release metadata")
+    check(not (paths["anvil_data"] / "lifecycle-transaction.json").exists(),
+          "failed Analytics staging left a lifecycle journal")
+    check(not (paths["config_home"] / "systemd" / "user" / "anvil-analytics.service").exists()
+          and not list((paths["data_home"] / "anvil" / "analytics" / "runtimes").glob(".runtime-*")),
+          "failed Analytics staging activated a runtime or attempted service convergence")
+
     failed = run(["/usr/bin/make", "--no-print-directory", "upgrade"],
                  dict(env, ANVIL_TEST_FAIL_AFTER_CONFIG="1"), expected=2)
     check(file_hash(managed_script) == drifted_hash
@@ -1741,11 +1770,19 @@ def upgrade_external_runtime_is_offline_test(temp: pathlib.Path) -> None:
 
 def anvil_upgrade_rollback_test(temp: pathlib.Path) -> None:
     paths = fixture(temp)
+    analytics_runtime_state = paths["home"] / ".anvil" / "analytics" / "runtime.json"
+    analytics_runtime_state.parent.mkdir(parents=True, exist_ok=True)
+    write_json(analytics_runtime_state, {
+        "schema_version": 1, "workspace": str(paths["home"] / ".anvil" / "workspaces" / "analytics"),
+        "base_url": "", "executable": "", "version": "", "runtime_generation": None,
+        "canonical_session_id": "",
+    })
     before = {
         "config": tree_hash(paths["config"]), "binary": file_hash(paths["binary"]),
         "data": tree_hash(paths["data_opencode"]), "state": tree_hash(paths["state_opencode"]),
         "installation": file_hash(paths["anvil_data"] / "installation.json"),
         "memory": tree_hash(paths["memory"]),
+        "analytics_runtime": file_hash(analytics_runtime_state),
     }
     env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_YES="1", ANVIL_TEST_FAIL_AFTER_CONFIG="1")
     proc = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env, expected=2)
@@ -1754,9 +1791,14 @@ def anvil_upgrade_rollback_test(temp: pathlib.Path) -> None:
         "data": tree_hash(paths["data_opencode"]), "state": tree_hash(paths["state_opencode"]),
         "installation": file_hash(paths["anvil_data"] / "installation.json"),
         "memory": tree_hash(paths["memory"]),
+        "analytics_runtime": file_hash(analytics_runtime_state),
     }
     check(after == before, "Anvil-only rollback did not restore metadata/config while preserving runtime and user state")
     check("Automatic Anvil rollback completed" in proc.stderr, "Anvil-only failure did not report successful scoped rollback")
+    check("RESTORED_DEGRADED_BASELINE" in proc.stdout,
+          "rollback did not classify a previously unavailable Analytics baseline as successfully restored")
+    check(json.loads(analytics_runtime_state.read_text(encoding="utf-8"))["canonical_session_id"] == "",
+          "rollback changed the pre-operation missing-canonical-session state")
     backups = list((paths["anvil_data"] / "backups").iterdir())
     check(len(backups) == 1 and json.loads((backups[0] / "manifest.json").read_text(encoding="utf-8"))["scope"] == "anvil",
           "failed Anvil upgrade did not retain its verified Anvil-only recovery snapshot")
@@ -1987,7 +2029,7 @@ def upgrade_test(
     check(tree_hash(paths["state_opencode"]) == original_state, "live OpenCode state changed during upgrade")
     backup = pathlib.Path(installed["migration"]["backup"])
     run([sys.executable, str(ROOT / "scripts" / "state.py"), "verify", str(backup)], env_for(paths))
-    check("Anvil post-apply verification" in proc.stdout and "Status: HEALTHY" in proc.stdout,
+    check("Anvil post-activation verification" in proc.stdout and "Status: HEALTHY" in proc.stdout,
           "post-upgrade structured verification did not pass")
     if external_binary:
         check(file_hash(paths["binary"]) == original_binary, "upgrade changed the external V1 executable")
@@ -2051,7 +2093,7 @@ def upgrade_preserves_v1_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
     backup = pathlib.Path(installed["migration"]["backup"])
     manifest = json.loads((backup / "manifest.json").read_text(encoding="utf-8"))
     check(manifest["scope"] == "anvil", "normal Anvil upgrade did not create an Anvil-scoped backup")
-    check("Anvil post-apply verification" in proc.stdout and "Status: HEALTHY" in proc.stdout,
+    check("Anvil post-activation verification" in proc.stdout and "Status: HEALTHY" in proc.stdout,
           "OpenCode 1 Anvil upgrade verification did not pass")
     doctor = run(["/usr/bin/make", "--no-print-directory", "doctor"], env)
     for section in ("Capabilities", "Stats", "Memory", "Knowledge", "Project overrides", "Version documentation"):
@@ -2090,7 +2132,7 @@ def upgrade_preserves_v2_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
     check(tree_hash(paths["data_opencode"]) == before_data and tree_hash(paths["state_opencode"]) == before_state, "OpenCode 2 upgrade changed opaque user data/state")
     check("Network required      NO" in proc.stdout and "PRESERVE EXACT VERSION" in proc.stdout, "upgrade plan did not state the offline exact-runtime invariant")
     check(file_hash(paths["binary"]) == original_binary, "Anvil-only upgrade changed the OpenCode 2 executable bytes")
-    check("Anvil post-apply verification" in proc.stdout and "Status: HEALTHY" in proc.stdout,
+    check("Anvil post-activation verification" in proc.stdout and "Status: HEALTHY" in proc.stdout,
           "OpenCode 2 Anvil upgrade verification did not pass")
     for section in ("Capabilities", "Stats", "Memory", "Knowledge", "Project overrides", "Version documentation"):
         check(section in proc.stdout, f"OpenCode 2 doctor omitted the {section} category")

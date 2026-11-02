@@ -282,8 +282,9 @@ def main(argv: list[str] | None = None) -> int:
         service.warehouses(refresh=True)
         service.hydrate_catalog_tree()
 
-    threading.Thread(target=initialize_services, name="anvil-analytics-runtime",
-                     daemon=True).start()
+    if os.environ.get("ANVIL_ANALYTICS_NO_BOOTSTRAP") != "1":
+        threading.Thread(target=initialize_services, name="anvil-analytics-runtime",
+                         daemon=True).start()
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:

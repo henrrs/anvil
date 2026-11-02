@@ -86,19 +86,25 @@ anvil_require_installed() {
 
 anvil_recover_pending() {
   if [[ "${ANVIL_SKIP_PENDING_RECOVERY:-0}" == 1 ]]; then return 0; fi
-  local transaction pending valid backup backup_valid error
+  local transaction pending valid backup backup_valid error operation operation_id activation_started
   transaction="$(python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" inspect)" || return 1
   local -a fields=()
   mapfile -d '' -t fields < <(python3 - "$transaction" <<'PY'
 import json,sys
 obj=json.loads(sys.argv[1])
-for key in ("pending","valid","backup","backup_valid","backup_error"):
+for key in ("pending","valid","backup","backup_valid","backup_error","operation","operation_id"):
     value=obj.get(key)
     sys.stdout.buffer.write((str(value) if value is not None else "").encode()+b"\0")
+activated=obj.get("activation_started")
+if activated is None:
+    activated=obj.get("phase") not in {"snapshot-verified","staging","pre-activation-verification",
+                                       "staging-failed","pre-activation-failed"}
+sys.stdout.buffer.write(str(activated).encode()+b"\0")
 PY
 )
   pending="${fields[0]:-}"; valid="${fields[1]:-}"; backup="${fields[2]:-}"
   backup_valid="${fields[3]:-}"; error="${fields[4]:-}"
+  operation="${fields[5]:-}"; operation_id="${fields[6]:-}"; activation_started="${fields[7]:-}"
   [[ "$pending" == True ]] || return 0
   local owner_active
   owner_active="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("owner_active",False))' "$transaction")"
@@ -114,6 +120,19 @@ PY
     anvil_error 'A lifecycle recovery is pending; DRY_RUN is read-only and did not restore the snapshot. Rerun the operation without DRY_RUN to recover safely.'
     return 1
   fi
+  if [[ "$valid" == True && "$operation" == anvil-upgrade && "$activation_started" != True ]]; then
+    if [[ -n "$operation_id" ]]; then
+      python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" abort \
+        --data-root "$ANVIL_DATA_HOME" --operation-id "$operation_id" >/dev/null || {
+          anvil_error "Interrupted pre-activation staging could not be cleaned safely. Journal operation $operation_id remains for retry."
+          return 1
+        }
+    fi
+    python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" clear || return 1
+    anvil_ok "Interrupted upgrade stopped before activation. Staged artifacts were discarded; the active installation remains unchanged."
+    export ANVIL_RECOVERED_PENDING=1
+    return 0
+  fi
   anvil_warn 'An interrupted Anvil lifecycle transaction was found; attempting snapshot recovery before continuing.'
   if [[ "$valid" != True || "$backup_valid" != True || -z "$backup" ]]; then
     anvil_error "Automatic recovery is unavailable: ${error:-the transaction journal or snapshot is invalid}. Preserve the current state and inspect the lifecycle journal and backups."
@@ -124,6 +143,7 @@ PY
     return 1
   fi
   if ! ANVIL_INTERNAL_MODE=1 ANVIL_SKIP_PENDING_RECOVERY=1 \
+      ANVIL_LIFECYCLE_OPERATION_ID="$operation_id" \
       bash "$ANVIL_ROOT/scripts/rollback.sh" --backup "$backup" --internal; then
     anvil_error "Snapshot recovery failed. The transaction journal remains for a safe retry; verified snapshot: $backup"
     return 1

@@ -95,6 +95,14 @@ PY
     previous_anvil_version="$ANVIL_PREVIOUS_ANVIL_VERSION"
   fi
 
+  python3 "$ANVIL_ROOT/scripts/lifecycle_baseline.py" capture \
+    --backup "$backup_dir" --config-dir "$ANVIL_CONFIG_DIR" --home "$ANVIL_HOME_DIR" \
+    --data-root "$ANVIL_DATA_HOME" --installation "$ANVIL_DATA_DIR/installation.json" \
+    --analytics-runtime-state "${ANVIL_HOME:-$ANVIL_HOME_DIR/.anvil}/analytics/runtime.json" \
+    --systemd-dir "${XDG_CONFIG_HOME:-$ANVIL_HOME_DIR/.config}/systemd/user" \
+    --binary "$executable" --python "$(command -v python3)" \
+    --port "${ANVIL_ANALYTICS_PORT:-8765}" >/dev/null
+
   bash "$ANVIL_ROOT/scripts/inspect.sh" > "$backup_dir/inspect.txt"
   chmod 600 -- "$backup_dir/inspect.txt"
 

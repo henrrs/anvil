@@ -177,11 +177,20 @@ anvil_converge_analytics_runtime() {
   local config_dir="$1" lock="$1/runtime/analytics-requirements.lock"
   [[ -f "$lock" ]] || return 0
   [[ "${ANVIL_TEST_MODE:-0}" != 1 ]] || return 0
-  python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" prepare \
-    --lock "$lock" --data-root "$ANVIL_DATA_HOME" >/dev/null || {
-      anvil_error 'Analytics runtime dependency convergence failed before service activation.'
-      return 1
-    }
+  if [[ "${ANVIL_ANALYTICS_RUNTIME_STAGED:-0}" == 1 ]]; then
+    python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" resolve \
+      --lock "$lock" --data-root "$ANVIL_DATA_HOME" >/dev/null || {
+        anvil_error 'The staged Analytics runtime failed its final pre-activation check.'
+        return 1
+      }
+  else
+    python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" prepare \
+      --lock "$lock" --data-root "$ANVIL_DATA_HOME" \
+      --operation-id "${ANVIL_LIFECYCLE_OPERATION_ID:-}" >/dev/null || {
+        anvil_error 'Analytics runtime dependency convergence failed before service activation.'
+        return 1
+      }
+  fi
   local systemd_dir="${XDG_CONFIG_HOME:-$ANVIL_HOME_DIR/.config}/systemd/user"
   python3 "$ANVIL_ROOT/scripts/analytics_service.py" sync \
     --config-dir "$config_dir" --home "$ANVIL_HOME_DIR" --systemd-dir "$systemd_dir" \
@@ -205,16 +214,30 @@ anvil_apply_config() {
     anvil_error 'Anvil global config staging copy is incomplete.'
     return 1
   fi
-  if [[ -f "$stage/runtime/analytics-requirements.lock" && "${ANVIL_TEST_MODE:-0}" != 1 ]]; then
-    if ! python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" prepare \
-        --lock "$stage/runtime/analytics-requirements.lock" --data-root "$ANVIL_DATA_HOME" >/dev/null; then
-      rm -rf -- "$stage"
-      anvil_error 'Analytics runtime dependency convergence failed before configuration activation.'
-      return 1
-    fi
+  if [[ -f "$stage/runtime/analytics-requirements.lock" && "${ANVIL_TEST_MODE:-0}" != 1 &&
+        "${ANVIL_ANALYTICS_RUNTIME_STAGED:-0}" != 1 && "${ANVIL_ROLLBACK_RESTORE:-0}" != 1 ]]; then
+    python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" prepare \
+      --lock "$stage/runtime/analytics-requirements.lock" --data-root "$ANVIL_DATA_HOME" \
+      --operation-id "${ANVIL_LIFECYCLE_OPERATION_ID:-}" >/dev/null || {
+        rm -rf -- "$stage"
+        anvil_error 'Analytics runtime dependency staging failed before configuration activation.'
+        return 1
+      }
   fi
   previous="$parent/.anvil-config-previous-$$"
   [[ ! -e "$previous" && ! -L "$previous" ]] || { rm -rf -- "$stage"; anvil_error 'A prior config swap needs manual review.'; return 1; }
+  if [[ -f "$stage/runtime/analytics-requirements.lock" && "${ANVIL_TEST_MODE:-0}" != 1 &&
+        "${ANVIL_ANALYTICS_RUNTIME_STAGED:-0}" == 1 && "${ANVIL_ROLLBACK_RESTORE:-0}" != 1 ]]; then
+    python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" activate \
+      --lock "$stage/runtime/analytics-requirements.lock" --data-root "$ANVIL_DATA_HOME" \
+      --operation-id "$ANVIL_LIFECYCLE_OPERATION_ID" >/dev/null || {
+        rm -rf -- "$stage"
+        anvil_error 'The verified Analytics runtime could not be activated; the snapshot restoration path will run.'
+        return 1
+      }
+    ANVIL_ANALYTICS_RUNTIME_ACTIVATED=1
+    export ANVIL_ANALYTICS_RUNTIME_ACTIVATED
+  fi
   if [[ -e "$ANVIL_CONFIG_DIR" || -L "$ANVIL_CONFIG_DIR" ]]; then
     mv -- "$ANVIL_CONFIG_DIR" "$previous"
   fi
@@ -239,17 +262,21 @@ anvil_apply_config() {
   if [[ -d "$ANVIL_CONFIG_DIR/web/analytics" ]]; then
     find "$ANVIL_CONFIG_DIR/web/analytics" -type f -exec chmod 600 -- {} +
   fi
+  if [[ "${ANVIL_ROLLBACK_RESTORE:-0}" == 1 && "$defer_analytics_service" != yes ]]; then
+    anvil_error 'Rollback config restoration must defer Analytics service activation to the captured baseline restorer.'
+    return 1
+  fi
   if [[ "${ANVIL_TEST_MODE:-0}" != 1 && "$defer_analytics_service" != yes && -f "$ANVIL_ROOT/scripts/analytics_service.py" ]]; then
     local systemd_dir="${XDG_CONFIG_HOME:-$ANVIL_HOME_DIR/.config}/systemd/user"
     if [[ -f "$ANVIL_CONFIG_DIR/runtime/analytics-requirements.lock" ]]; then
       if ! anvil_converge_analytics_runtime "$ANVIL_CONFIG_DIR"; then
-        anvil_error 'Analytics service convergence failed; the lifecycle operation must roll back.'
+        anvil_error 'Analytics service convergence failed after target activation; the lifecycle operation must restore its baseline.'
         return 1
       fi
     elif ! python3 "$ANVIL_ROOT/scripts/analytics_service.py" sync \
           --config-dir "$ANVIL_CONFIG_DIR" --home "$ANVIL_HOME_DIR" --systemd-dir "$systemd_dir" \
           --port "${ANVIL_ANALYTICS_PORT:-8765}"; then
-      anvil_error 'Analytics service convergence failed; the lifecycle operation must roll back.'
+      anvil_error 'Analytics service convergence failed after target activation; the lifecycle operation must restore its baseline.'
       return 1
     fi
   fi

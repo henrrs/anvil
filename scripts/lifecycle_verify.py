@@ -34,7 +34,7 @@ class VerificationResult:
 
 def verify(config: Path, memory: Path, binary: Path, *, product_version: str,
            runtime_version: str, runtime_major: int, test_mode: bool = False,
-           allow_repairable_drift: bool = False) -> VerificationResult:
+           allow_repairable_drift: bool = False, phase: str = "post-activation") -> VerificationResult:
     probes: list[Probe] = []
 
     def probe(name: str, fn, *, required: bool = True) -> None:
@@ -77,11 +77,24 @@ def verify(config: Path, memory: Path, binary: Path, *, product_version: str,
     probe("memory", memory_root)
 
     lock = config / "runtime" / "analytics-requirements.lock"
-    if lock.is_file() and not test_mode:
+    operation_id = os.environ.get("ANVIL_LIFECYCLE_OPERATION_ID")
+    staged_runtime = False
+    if lock.is_file() and operation_id:
+        try:
+            import analytics_dependencies
+            marker = analytics_dependencies._operation_marker(
+                Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")), operation_id)
+            staged_runtime = marker.is_file() and not marker.is_symlink()
+        except (OSError, ValueError):
+            staged_runtime = False
+    if lock.is_file() and (not test_mode or staged_runtime):
         analytics = AnalyticsContributor()
         probe("analytics_dependencies", lambda: analytics.verify(config, memory))
-        probe("analytics_service", lambda: analytics.verify_service(
-            config, Path(os.environ.get("HOME", str(Path.home()))).expanduser()))
+        analytics_home = Path(os.environ.get("HOME", str(Path.home()))).expanduser()
+        if phase == "pre-activation":
+            probe("analytics_service_candidate", lambda: analytics.verify_service_candidate(config, analytics_home))
+        elif not test_mode:
+            probe("analytics_service", lambda: analytics.verify_service(config, analytics_home))
     status = "PASS" if all(item.status == "PASS" for item in probes if item.required) else "FAIL"
     return VerificationResult(status, tuple(probes))
 
@@ -96,16 +109,17 @@ def main() -> int:
     parser.add_argument("--runtime-major", type=int, choices=(1, 2), required=True)
     parser.add_argument("--allow-repairable-drift", action="store_true",
                         help="Accept a verified pre-existing repairable Anvil-managed file during rollback")
+    parser.add_argument("--phase", choices=("pre-activation", "post-activation"), default="post-activation")
     parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args()
     result = verify(args.config, args.memory, args.binary, product_version=args.product_version,
                     runtime_version=args.runtime_version, runtime_major=args.runtime_major,
                     test_mode=os.environ.get("ANVIL_TEST_MODE") == "1",
-                    allow_repairable_drift=args.allow_repairable_drift)
+                    allow_repairable_drift=args.allow_repairable_drift, phase=args.phase)
     if args.format == "json":
         print(json.dumps(result.as_dict(), indent=2))
     else:
-        print("Anvil post-apply verification")
+        print("Anvil " + ("pre-activation" if args.phase == "pre-activation" else "post-activation") + " verification")
         for item in result.probes:
             print(f"  {item.name:24} {item.status}")
         print("Status: HEALTHY" if result.status == "PASS" else "Status: BROKEN")

@@ -245,7 +245,7 @@ def service_state(config: Path, home: Path, systemd_dir: Path, port: int) -> dic
             "status": "READY" if installed and active and healthy and (enabled or not manager) else "NOT_READY"}
 
 
-def _start_fallback(config: Path, home: Path, port: int, python: Path) -> None:
+def _start_fallback(config: Path, home: Path, port: int, python: Path, *, no_bootstrap: bool = False) -> None:
     pid_file, lock_file, log_file = _fallback_paths(home)
     with lock_file.open("a", encoding="utf-8") as lock_stream:
         os.chmod(lock_file, 0o600)
@@ -263,6 +263,8 @@ def _start_fallback(config: Path, home: Path, port: int, python: Path) -> None:
                             "XDG_STATE_HOME": os.environ.get("XDG_STATE_HOME", str(home / ".local" / "state")),
                             "PYTHONPATH": str(config) + (os.pathsep + environment.get("PYTHONPATH", "")),
                             "ANVIL_ANALYTICS_PORT": str(port)})
+        if no_bootstrap:
+            environment["ANVIL_ANALYTICS_NO_BOOTSTRAP"] = "1"
         with log_file.open("ab") as output:
             os.chmod(log_file, 0o600)
             process = subprocess.Popen([str(python), "-m", "scripts.analytics.server",
@@ -365,6 +367,35 @@ def sync(config: Path, home: Path, systemd_dir: Path, port: int, *, activate: bo
     if not _wait_converged(port):
         raise ValueError("Analytics service did not reach READY (service, OpenCode runtime, and canonical session)")
     return "READY"
+
+
+def validate_candidate(config: Path, home: Path, systemd_dir: Path, port: int,
+                       interpreter: Path | None = None) -> dict[str, str]:
+    """Validate the target service artifacts without writing a unit or starting a process."""
+    server = config / "scripts" / "analytics" / "server.py"
+    frontend = config / "web" / "analytics" / "index.html"
+    if not server.is_file() or server.is_symlink() or not frontend.is_file() or frontend.is_symlink():
+        raise ValueError("Analytics target server or frontend artifact is missing or unsafe")
+    staged_python = interpreter or _service_runtime(config, home, require_ready=True)
+    if not staged_python.is_file() or staged_python.is_symlink() or not os.access(staged_python, os.X_OK):
+        raise ValueError("Analytics service candidate interpreter is unavailable")
+    # The verification runs against the staged interpreter. The installed unit
+    # must reference the content-addressed final path that receives it during
+    # activation; the hidden staging directory is atomically renamed away.
+    service_python = _service_runtime(config, home, require_ready=False)
+    generated = _unit_text(config.absolute(), home.absolute(), port, service_python)
+    unit_dir = systemd_dir.expanduser().absolute()
+    unit = unit_dir / SERVICE_NAME
+    if unit_dir.is_symlink() or (unit_dir.exists() and not unit_dir.is_dir()):
+        raise ValueError("Analytics service unit directory is unsafe")
+    if unit.is_symlink() or (unit.exists() and not unit.is_file()):
+        raise ValueError("Analytics target service unit path is unsafe")
+    if unit.exists() and MARKER not in unit.read_text(encoding="utf-8", errors="replace"):
+        raise ValueError("an existing user-owned Analytics service unit was left untouched")
+    if f"ExecStart={_systemd_quote(str(service_python))}" not in generated:
+        raise ValueError("Analytics service candidate does not use the activated runtime path")
+    return {"status": "PASS", "interpreter": str(staged_python),
+            "service_interpreter": str(service_python), "unit": str(unit)}
 
 
 def _print_state(state: dict[str, object], port: int) -> None:
