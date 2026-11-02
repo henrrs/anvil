@@ -24,7 +24,7 @@ PACKAGE_LINE = re.compile(r"^([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)$")
 REQUIRED = {"duckdb", "pyarrow"}
 PUBLIC_INDEX = "https://pypi.org/simple"
 PACKAGE_CODES = {
-    "PACKAGE_NOT_FOUND", "VERSION_NOT_FOUND", "REGISTRY_UNAVAILABLE", "AUTHENTICATION_FAILED",
+    "PACKAGE_NOT_FOUND", "VERSION_NOT_FOUND", "REGISTRY_UNAVAILABLE", "NETWORK_BLOCKED", "AUTHENTICATION_FAILED",
     "TLS_FAILURE", "PROXY_FAILURE", "NETWORK_FAILURE", "RESOLUTION_CONFLICT", "WHEEL_NOT_AVAILABLE",
     "PYTHON_VERSION_INCOMPATIBLE", "INSTALLER_FAILURE", "IMPORT_VALIDATION_FAILED", "DISK_FAILURE",
     "UNKNOWN_INSTALL_FAILURE",
@@ -56,6 +56,8 @@ class PackageResolutionPolicy:
             "policy": self.policy,
             "configured_by": self.configured_by,
             "primary": self.primary.public(),
+            "corporate_registry_configured": self.primary.source_type == "CORPORATE_REGISTRY",
+            "selected_source": self.primary.public(),
             "public_fallback": "enabled" if self.public_fallback else "disabled",
             "fallback_source": self.fallback_source.public() if self.fallback_source else None,
             "ignored_extra_indexes": self.ignored_extra_indexes,
@@ -243,10 +245,18 @@ def runtime_path(lock: Path, data_root: Path, python: str = sys.executable) -> P
     return data_root / "anvil" / "analytics" / "runtimes" / f"py{version}-{digest}"
 
 
-def _validate(interpreter: Path, packages: list[tuple[str, str]]) -> bool:
+def _validate(interpreter: Path, packages: list[tuple[str, str]], *, expected_prefix: Path | None = None) -> bool:
+    """Validate a venv by execution semantics; normal bin/python symlinks are valid."""
+    if not interpreter.is_file() or not os.access(interpreter, os.X_OK):
+        return False
+    prefix = (expected_prefix or interpreter.parent.parent).expanduser().absolute()
     expected = json.dumps(dict(packages), separators=(",", ":"))
-    code = ("import importlib, importlib.metadata, json; expected=json.loads(" + repr(expected) + "); "
-            "importlib.import_module('duckdb'); importlib.import_module('pyarrow'); "
+    code = ("import importlib, importlib.metadata, json, pathlib, sys; "
+            "expected_prefix=pathlib.Path(" + repr(str(prefix)) + ").resolve(); "
+            "actual_prefix=pathlib.Path(sys.prefix).resolve(); "
+            "assert actual_prefix == expected_prefix; "
+            "expected=json.loads(" + repr(expected) + "); "
+            "[importlib.import_module(name.replace('-', '_')) for name in expected]; "
             "actual={name:importlib.metadata.version(name) for name in expected}; "
             "raise SystemExit(0 if all(actual.get(k)==v for k,v in expected.items()) else 1)")
     try:
@@ -323,6 +333,9 @@ def _append_log(path: Path, title: str, output: str, env: dict[str, str]) -> Non
 
 def _failure_reason(output: str, exc: BaseException | None = None) -> str:
     lower = output.casefold()
+    if any(item in lower for item in ("external network disabled", "network blocked", "offline test fixture",
+                                      "network is blocked by policy")):
+        return "NETWORK_BLOCKED"
     if any(item in lower for item in ("401 unauthorized", "403 forbidden", "authentication failed", "invalid credentials")):
         return "AUTHENTICATION_FAILED"
     if any(item in lower for item in ("proxyerror", "proxy error", "tunnel connection failed", "proxy authentication")):
@@ -335,14 +348,17 @@ def _failure_reason(output: str, exc: BaseException | None = None) -> str:
         return "PYTHON_VERSION_INCOMPATIBLE"
     if "none of the wheel's tags" in lower or "not a supported wheel" in lower or "no compatible wheel" in lower:
         return "WHEEL_NOT_AVAILABLE"
+    if any(item in lower for item in ("failed to establish a new connection", "max retries exceeded",
+                                      "could not fetch url", "connection refused", "name or service not known",
+                                      "temporary failure in name resolution")):
+        return "REGISTRY_UNAVAILABLE"
+    if any(item in lower for item in ("connectionerror", "connection reset", "network is unreachable",
+                                      "timed out", "timeout")):
+        return "NETWORK_FAILURE"
     if "no matching distribution" in lower or "could not find a version that satisfies" in lower:
         return "VERSION_NOT_FOUND"
     if any(item in lower for item in ("404 client error", "package not found", "project not found")):
         return "PACKAGE_NOT_FOUND"
-    if any(item in lower for item in ("connection refused", "name or service not known", "temporary failure in name resolution")):
-        return "REGISTRY_UNAVAILABLE"
-    if any(item in lower for item in ("connectionerror", "connection reset", "network is unreachable", "timed out", "timeout")):
-        return "NETWORK_FAILURE"
     if isinstance(exc, OSError) and exc.errno in {28, 122}:
         return "DISK_FAILURE"
     return "INSTALLER_FAILURE" if output or exc else "UNKNOWN_INSTALL_FAILURE"
@@ -567,6 +583,7 @@ def stage(lock: Path, data_root: Path, python: str = sys.executable, *, operatio
                 previous_error = exc
                 if source == policy.primary and policy.fallback_source and exc.reason_code in {
                     "PACKAGE_NOT_FOUND", "VERSION_NOT_FOUND", "REGISTRY_UNAVAILABLE", "NETWORK_FAILURE",
+                    "NETWORK_BLOCKED",
                 }:
                     _append_log(log_path, "source fallback decision",
                                 "Primary registry failed; explicit policy permits a separate public-source attempt.", base_env)
@@ -705,6 +722,15 @@ def restore_operation(data_root: Path, operation_id: str) -> None:
             raise DependencyError("runtime", "Analytics rollback target path is invalid",
                                   reason_code="DISK_FAILURE", stage="runtime restoration")
         if marker.get("phase") in {"activation-started", "activated"} and marker.get("reused_existing") is not True:
+            config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")).expanduser()
+            active_lock = config_home / "opencode" / "runtime" / "analytics-requirements.lock"
+            if active_lock.is_file() and not active_lock.is_symlink():
+                active_target = runtime_path(active_lock, data_root)
+                if active_target.resolve(strict=False) == target.resolve(strict=False):
+                    raise DependencyError(
+                        "runtime", "restore the previous managed config pointer before removing its staged Analytics runtime",
+                        reason_code="DISK_FAILURE", stage="runtime restoration",
+                    )
             if backup and backup.exists():
                 if target.exists() and not target.is_symlink():
                     shutil.rmtree(target)
@@ -812,18 +838,24 @@ def python_version(python: str) -> tuple[tuple[int, int], str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("prepare", "stage", "activate", "abort", "restore",
-                                           "finalize", "resolve", "status", "plan"))
-    parser.add_argument("--lock", type=Path)
-    parser.add_argument("--data-root", type=Path, default=Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")))
-    parser.add_argument("--python", default=sys.executable)
-    parser.add_argument("--operation-id", default=os.environ.get("ANVIL_LIFECYCLE_OPERATION_ID"))
-    parser.add_argument("--format", choices=("text", "json"), default="text")
+    subparsers = parser.add_subparsers(dest="action", required=True)
+    lock_actions = {"prepare", "stage", "activate", "resolve", "status", "plan"}
+    operation_actions = {"prepare", "stage", "activate", "abort", "restore", "finalize", "resolve", "status"}
+    for action in ("prepare", "stage", "activate", "abort", "restore", "finalize",
+                   "resolve", "status", "plan"):
+        command = subparsers.add_parser(action)
+        command.add_argument("--data-root", type=Path,
+                             default=Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")))
+        command.add_argument("--format", choices=("text", "json"), default="text")
+        if action in lock_actions:
+            command.add_argument("--lock", type=Path, required=True)
+            command.add_argument("--python", default=sys.executable)
+        if action in operation_actions:
+            command.add_argument("--operation-id", required=action in {"activate", "abort", "restore", "finalize"},
+                                 default=os.environ.get("ANVIL_LIFECYCLE_OPERATION_ID"))
     args = parser.parse_args(argv)
     try:
         if args.action in {"abort", "restore", "finalize"}:
-            if not args.operation_id:
-                raise ValueError(f"{args.action} requires --operation-id")
             if args.action == "abort":
                 abort(args.data_root, args.operation_id)
             elif args.action == "restore":
@@ -831,13 +863,10 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 finalize(args.data_root, args.operation_id)
             result = {"operation_id": args.operation_id, "status": args.action.upper()}
-            target = None
-            release, packages = "", []
-        else:
-            if args.lock is None:
-                raise ValueError(f"{args.action} requires --lock")
-            release, packages = parse_lock(args.lock)
-            target = runtime_path(args.lock, args.data_root, args.python)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 0
+        release, packages = parse_lock(args.lock)
+        target = runtime_path(args.lock, args.data_root, args.python)
         if args.action == "prepare":
             interpreter = prepare(args.lock, args.data_root, args.python, operation_id=args.operation_id)
             result = resolution_status(args.lock, args.data_root, args.python, args.operation_id)
@@ -888,8 +917,6 @@ def main(argv: list[str] | None = None) -> int:
             print("  OpenCode         bootstrap happens after activation; dry run performs no network checks")
         elif args.action in {"status", "resolve"}:
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-        elif args.action in {"abort", "restore", "finalize"}:
-            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "prepare":
             print(result["interpreter"])
             print(f"Analytics dependency source: {result['selected_source']['source_type']} ({result['selected_source']['label']})")
@@ -901,7 +928,7 @@ def main(argv: list[str] | None = None) -> int:
             details = exc.public()
             print("Analytics dependency staging failed.", file=sys.stderr)
             print(f"Dependency       {details['dependency']}{'=='+details['version'] if details['version'] else ''}", file=sys.stderr)
-            print(f"Python           {details['python'] or args.python}", file=sys.stderr)
+            print(f"Python           {details['python'] or getattr(args, 'python', sys.executable)}", file=sys.stderr)
             print(f"Registry         {details['registry']}", file=sys.stderr)
             print(f"Stage            {details['stage']}", file=sys.stderr)
             print(f"Reason           {details['reason_code']}", file=sys.stderr)

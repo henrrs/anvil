@@ -1,15 +1,4 @@
 {
-  "schema_version": 1,
-  "skills": {
-    "anvil-communication": "2.7.0",
-    "anvil-engineering": "2.9.0",
-    "anvil-system-design": "2.9.0",
-    "anvil-data-ingestion": "0.1.0",
-    "anvil-databricks": "0.1.0",
-    "anvil-delta-lake": "0.1.0",
-    "anvil-memory": "0.1.0",
-    "anvil-spark-performance": "0.1.0"
-  },
   "commands": {
     "distill": "2.0.0",
     "recall": "0.1.0",
@@ -17,10 +6,9 @@
     "review": "2.7.0"
   },
   "managed_artifacts": {
-    "release": "2.17.0",
     "files": {
       "AGENTS.md": "0b9f9df58dd4425194dcf347a843003bcf89236a8e1f3d469682ae0789752ad5",
-      "VERSION": "b7c9900f90f674500897abbc5467c0478cd7a7a7dc2e4e7797a85ae1cebe4ae6",
+      "VERSION": "8eec80aaadd8d27ed7c2c7ec6874fb199df44092a8924a28254cb3acf177f610",
       "commands/distill.md": "5a481d161c347fcef2f24085edc3e7739a9cd9abcd9c22e4d4a2847c4330d55d",
       "commands/recall.md": "53031bd6648d8f12da60b810f3d1de473c9d66bff8bef42de4ff8cb8545b96da",
       "commands/remember.md": "7b9dae0f9513882e15bbb4348a7b9c1a419fc61110c7d34caaf514905f7baeab",
@@ -29,7 +17,7 @@
       "opencode.jsonc": null,
       "plugins/anvil-core-v1.ts": "a9bca532799bf11634e4f1cae5d45e15f33970886ef1b8ae31f33a1e67979abd",
       "plugins/anvil-core/index.ts": "416bc46d2dff510c86994e3a4abe22e482cd5da7a9602512318ff6b4e5ce8d7e",
-      "runtime/analytics-requirements.lock": "4e8ca68fb7803133b272fa913c748c7dca4842d58adc888ed38cf330540612c6",
+      "runtime/analytics-requirements.lock": "772746bf940e9e2b09e1eea33c04c41d22f1ada2d08a97b0af94a6eb301c4091",
       "scripts/analysis/__init__.py": "cadaaf2c9c5caad914e24dbc150fbd0845a207e5165d0384036f871345a16feb",
       "scripts/analysis/contracts.py": "e8a6954e7622ad428bf5f64917fea548aa044611e9a6cc4456875a60678f1d50",
       "scripts/analysis/errors.py": "acbe2e28bd7752454953b8326f550aa66e58b1e0f9c24ed27b58c67d2eb60da6",
@@ -49,15 +37,15 @@
       "scripts/analytics/errors.py": "bf08a75fe7af53b0dd6b28d84abfdc4fe3d6cdf7d555684b72714db2850921d7",
       "scripts/analytics/materialization.py": "e07315d6cec73e073d613736a7fe8f4b4c8946a9d777b3d5597067358d981efe",
       "scripts/analytics/models.py": "6b976bd5c8b5ffd676fd1fa24b89dac6f9720cc5ffa35091dafed3d572966083",
-      "scripts/analytics/opencode.py": "ea5ff4f6e414eb582f8fb087548b38713e11ff57fd42deec8e39b13a05e972d8",
+      "scripts/analytics/opencode.py": "cea5b116def114b892216d9f7740d957c4dc5ce38a242279deef7768c0e8d689",
       "scripts/analytics/paths.py": "c5fce6a40a8ecabf74140ca3d1c0f9fa02493099b7712a6f0e0d91b514279de4",
       "scripts/analytics/planner.py": "3ebbc566709ce69b08f7c35b9574dbd659ea05760ec03c27feebbc1cf6a2d777",
       "scripts/analytics/query.py": "e38aac61269ca9607c5cb3cb8cc160ce442fa882aec25f9094aca334a27384bb",
-      "scripts/analytics/runtime.py": "bd7502ea3dcfd2df4e5af3b552c21d96f14f5a876a80f26fd383260fa43b5858",
+      "scripts/analytics/runtime.py": "27a4837568d3145cf2a4498f3d989758ae1a6fb02ed6788c113ebba8a7ba8649",
       "scripts/analytics/server.py": "ab1e7b78f8cb9307184ed0857b771ec5bc076fc1f2a0610b6bcf5321b828d3bf",
       "scripts/analytics/service.py": "c2d375e4f8b7b830fdf98832b92d7c016cfcd38f394635fabd3dc8bb8c534ca2",
       "scripts/analytics/sessions.py": "19f0e08a8aff421c2fad24d60742f80555d7cb920d946fb9b973aa01403341be",
-      "scripts/analytics/store.py": "dc746b3b0960992a600ff1f88d59649d94f20bf8270402e9e70d2dff46ca0237",
+      "scripts/analytics/store.py": "df0ce3c25992b8b64a093e1f2c36267a384193a17a8463aff2feaaa4d85cb9d3",
       "scripts/analytics/tool_cli.py": "ad01b2a6ac08502bb49288517eb177992b4c405225b1a1a178a456dda5f7c5e5",
       "scripts/analytics/transfer.py": "0a5cbe2ea1e5c92f2286d829122804c38c010bf97724f9f03bb74649b21d736c",
       "scripts/analyze.py": "d46ddc55031841f1bf9823b960b0e20001f8e3c831f96cc472a2375eb8088406",
@@ -162,6 +150,18 @@
       "web/analytics/app.js": "5cddc2e5bf20f4d51e0b1137f1ccfc78655413c042620875af7be9d43ee326cf",
       "web/analytics/index.html": "ca2b45dd46b152b59253d3bb1a0332cf972552f5ff3cf8e98dfcdc30fe136957",
       "web/analytics/styles.css": "7c85d314fd180bb78d5ef1610054fa30c17d4b6f66050129ed9222c9cb62235d"
-    }
+    },
+    "release": "2.17.1"
+  },
+  "schema_version": 1,
+  "skills": {
+    "anvil-communication": "2.7.0",
+    "anvil-data-ingestion": "0.1.0",
+    "anvil-databricks": "0.1.0",
+    "anvil-delta-lake": "0.1.0",
+    "anvil-engineering": "2.9.0",
+    "anvil-memory": "0.1.0",
+    "anvil-spark-performance": "0.1.0",
+    "anvil-system-design": "2.9.0"
   }
 }

@@ -1,15 +1,15 @@
 # Anvil runtime compatibility
 
 **Official runtime release metadata last checked:** 2026-10-27
-**Anvil release:** `2.16.0`
+**Anvil release:** `2.17.1`
 **Policy:** OpenCode 1.x and 2.x supported; default major `1`; automatic major upgrade disabled.
 
 | Anvil | OpenCode runtime | Minimum | Offline profile fixture | Adapter | Support |
 |---|---|---:|---:|---|---|
-| 2.16.x | 1.x | 1.18.18 | 1.18.18 | `opencode-v1` | Supported |
-| 2.16.x | 2.x | 2.0.0 | 2.0.0 | `opencode-v2` | Supported |
+| 2.17.x | 1.x | 1.18.18 | 1.18.18 | `opencode-v1` | Supported |
+| 2.17.x | 2.x | 2.0.0 | 2.0.0 | `opencode-v2` | Supported |
 
-The 2.16.0 mandatory suite uses offline OpenCode 1/2 profile fixtures and isolated lifecycle, memory, Databricks, communication, engineering and Analytics regressions. Separately, on 2026-10-27 official digest-verified OpenCode 1 `1.19.3` and OpenCode 2 `2.0.31` binaries validated generated candidate config/agent/command/skill discovery; those native smoke checks do not exercise a model or live workspace. Minimum supported versions are unchanged. Analytics V1/V2 plugin contracts are source-tested, but live plugin loading and runtime chat were not exercised for 2.16.0.
+The 2.17.1 mandatory suite uses offline OpenCode 1/2 profile fixtures and isolated lifecycle, memory, Databricks, communication, engineering and Analytics regressions. Separately, on 2026-10-27 official digest-verified OpenCode 1 `1.19.3` and OpenCode 2 `2.0.31` binaries validated generated candidate config/agent/command/skill discovery; those native smoke checks do not exercise a model or live workspace. Minimum supported versions are unchanged. Analytics V1/V2 plugin contracts are source-tested, but live plugin loading and runtime chat were not exercised for 2.17.1.
 
 ## Common and runtime-specific capabilities
 

@@ -102,6 +102,15 @@ BASE_REQUIRED_SCRIPTS = {
 }
 DATABRICKS_SCRIPTS = {"scripts/databricks.py", "scripts/databricks_finops.py"}
 OPTIONAL_MANAGED_PREFIXES = ("scripts/analytics/", "web/analytics/")
+RELEASE_CONTROL_FILES = {
+    "scripts/anvil_upgrade.sh", "scripts/upgrade.sh", "scripts/reforge.sh", "scripts/rollback.sh",
+    "scripts/lib/common.sh", "scripts/lib/install.sh", "scripts/lib/backup.sh",
+    "scripts/lib/lifecycle-operation.sh", "scripts/managed_config.py", "scripts/release_authority.py",
+    "scripts/lifecycle_state.py", "scripts/lifecycle_plan.py", "scripts/lifecycle_contributors.py",
+    "scripts/lifecycle_executor.py", "scripts/lifecycle_verify.py", "scripts/lifecycle_transaction.py",
+    "scripts/lifecycle_recovery.py", "scripts/lifecycle_baseline.py", "scripts/analytics_schema.py",
+    "scripts/analytics_service.py", "scripts/analytics_dependencies.py", "scripts/state.py",
+}
 
 
 def _analytics_workspace_files() -> set[str]:
@@ -215,6 +224,59 @@ def _verify_release_manifest_authority(target_version: str) -> None:
         raise ManagedConfigError("the target release manifest cannot be verified against the source checkout") from exc
     if committed_version != target_version or committed_inventory != working_inventory:
         raise ManagedConfigError("the target release manifest is not the committed manifest for this checkout")
+
+
+def release_checkout_changes(root: Path = ROOT, *, test_mode: bool | None = None,
+                             control_files: set[str] | None = None) -> list[str]:
+    """Return release-owned source files whose working bytes differ from HEAD."""
+    if test_mode is None:
+        test_mode = os.environ.get("ANVIL_TEST_MODE") == "1"
+    if test_mode:
+        return []
+    root = root.absolute()
+    inventory_path = root / "config" / "managed-inventory.json"
+    try:
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        artifacts = inventory["managed_artifacts"]["files"]
+        if not isinstance(artifacts, dict):
+            raise ValueError("managed artifact list is invalid")
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return ["VERSION", "config/managed-inventory.json"]
+    source_paths = {"VERSION", "config/managed-inventory.json", *(control_files or RELEASE_CONTROL_FILES)}
+    for relative in artifacts:
+        for major in (1, 2):
+            source = _release_source_path(str(relative), major)
+            if source:
+                source_paths.add(source)
+    changed: list[str] = []
+    for relative in sorted(source_paths):
+        path = root / relative
+        if path.is_symlink() or not path.is_file():
+            changed.append(relative)
+            continue
+        try:
+            working = path.read_bytes()
+            committed = subprocess.run(
+                ["git", "-C", str(root), "show", f"HEAD:{relative}"],
+                check=True, capture_output=True, timeout=5,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            changed.append(relative)
+            continue
+        if working != committed:
+            changed.append(relative)
+    try:
+        committed_version = subprocess.run(
+            ["git", "-C", str(root), "show", "HEAD:VERSION"],
+            check=True, capture_output=True, timeout=5,
+        ).stdout.decode("utf-8").strip()
+        working_version = (root / "VERSION").read_text(encoding="utf-8").strip()
+        manifest_version = str(inventory["managed_artifacts"].get("release", ""))
+        if committed_version != working_version or manifest_version != working_version:
+            changed.extend(path for path in ("VERSION", "config/managed-inventory.json") if path not in changed)
+    except (OSError, UnicodeError, subprocess.SubprocessError, KeyError, TypeError):
+        changed.extend(path for path in ("VERSION", "config/managed-inventory.json") if path not in changed)
+    return sorted(set(changed))
 
 
 def _validate_release_target(target_manifest: dict[str, Any], target_version: str,

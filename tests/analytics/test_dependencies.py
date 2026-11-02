@@ -1,20 +1,25 @@
 from __future__ import annotations
 
+import contextlib
 import shutil
 import csv
 import hashlib
 import base64
 import io
 import json
+import os
 import subprocess
+import sys
 import tempfile
 import zipfile
 import unittest
+import venv
 from pathlib import Path
 from unittest.mock import patch
 
 from scripts.analytics_dependencies import (DependencyError, PackageResolutionPolicy, PackageSource,
                                             _append_log, _redact, activate, abort, finalize, package_resolution_policy,
+                                            _failure_reason, _validate, main as dependencies_main,
                                             parse_lock, prepare, restore_operation, runtime_path, stage, staged_interpreter)
 from scripts.analytics_service import _unit_text, validate_candidate
 
@@ -61,12 +66,96 @@ class AnalyticsDependencyTests(unittest.TestCase):
 
     def test_release_lock_is_exact_and_content_addressed(self) -> None:
         release, packages = parse_lock(self.lock)
-        self.assertEqual(release, "2.17.0")
+        self.assertEqual(release, "2.17.1")
         self.assertEqual(dict(packages), {"duckdb": "1.5.5", "pyarrow": "26.0.0"})
         first = runtime_path(self.lock, self.data)
         changed = self.root / "changed.lock"
         changed.write_text(self.lock.read_text(encoding="utf-8") + "# reviewed change\n", encoding="utf-8")
         self.assertNotEqual(first, runtime_path(changed, self.data))
+
+    def test_venv_python_symlinks_are_validated_by_prefix_and_execution(self) -> None:
+        environment = self.root / "venv"
+        venv.EnvBuilder(with_pip=False).create(environment)
+        interpreter = environment / "bin" / "python"
+        self.assertTrue(interpreter.is_file())
+        self.assertTrue(os.access(interpreter, os.X_OK))
+        self.assertTrue(_validate(interpreter, []), "a standard venv interpreter must pass semantic validation")
+
+        wrong = self.root / "wrong-venv" / "bin" / "python"
+        wrong.parent.mkdir(parents=True)
+        wrong.write_text(f"#!/bin/sh\nexec {sys.executable} \"$@\"\n", encoding="utf-8")
+        wrong.chmod(0o700)
+        self.assertFalse(_validate(wrong, []), "a launcher outside the expected venv prefix must fail")
+
+        broken = self.root / "broken-venv" / "bin" / "python"
+        broken.parent.mkdir(parents=True)
+        broken.symlink_to(self.root / "missing-python")
+        self.assertFalse(_validate(broken, []), "a broken venv interpreter link must fail")
+        self.assertFalse(_validate(self.root / "missing-python", []))
+
+    def test_dependency_action_cli_contracts_are_strict_and_do_not_fall_through(self) -> None:
+        actions = ("prepare", "stage", "activate", "abort", "restore", "finalize",
+                   "resolve", "status", "plan")
+        lifecycle = {"abort", "restore", "finalize"}
+        lock_actions = {"prepare", "stage", "activate", "resolve", "status", "plan"}
+        operation = "action-contract-fixture"
+        output = io.StringIO()
+        status_value = {"ready": True, "release": "test", "selected_source": {"label": "local"},
+                        "resolution_policy": {"primary": {"label": "local"}}}
+        policy = PackageResolutionPolicy(
+            PackageSource("file:///tmp/registry", "CORPORATE_REGISTRY", "Configured local package registry"),
+            False, None, "corporate-first", "test",
+        )
+        with patch("scripts.analytics_dependencies.parse_lock", return_value=("test", [("duckdb", "1"), ("pyarrow", "2")])), \
+             patch("scripts.analytics_dependencies.runtime_path", return_value=self.data / "runtime"), \
+             patch("scripts.analytics_dependencies.python_version", return_value=((3, 11), "3.11")), \
+             patch("scripts.analytics_dependencies._validate", return_value=True), \
+             patch("scripts.analytics_dependencies.package_resolution_policy", return_value=policy), \
+             patch("scripts.analytics_dependencies.resolution_status", return_value=dict(status_value)), \
+             patch("scripts.analytics_dependencies.prepare", return_value=self.root / "venv/bin/python"), \
+             patch("scripts.analytics_dependencies.stage", return_value=self.root / "stage/bin/python"), \
+             patch("scripts.analytics_dependencies.activate", return_value=self.root / "active/bin/python"), \
+             patch("scripts.analytics_dependencies.abort") as abort_action, \
+             patch("scripts.analytics_dependencies.restore_operation") as restore_action, \
+             patch("scripts.analytics_dependencies.finalize") as finalize_action:
+            for action in actions:
+                argv = [action, "--format", "json", "--data-root", str(self.data)]
+                if action in lock_actions:
+                    argv += ["--lock", str(self.lock)]
+                if action in lifecycle or action == "activate":
+                    argv += ["--operation-id", operation]
+                output.seek(0)
+                output.truncate(0)
+                with self.subTest(action=action), contextlib.redirect_stdout(output):
+                    self.assertEqual(dependencies_main(argv), 0)
+                result = json.loads(output.getvalue())
+                self.assertIsInstance(result, dict)
+                if action in lifecycle:
+                    self.assertEqual(result, {"operation_id": operation, "status": action.upper()})
+            abort_action.assert_called_once_with(self.data, operation)
+            restore_action.assert_called_once_with(self.data, operation)
+            finalize_action.assert_called_once_with(self.data, operation)
+
+        invalid = (
+            ["prepare"], ["stage"], ["activate", "--lock", str(self.lock)],
+            ["resolve"], ["status"], ["plan"],
+            ["abort"], ["restore"], ["finalize"],
+            ["abort", "--operation-id", operation, "--lock", str(self.lock)],
+            ["restore", "--operation-id", operation, "--python", sys.executable],
+            ["plan", "--lock", str(self.lock), "--unexpected"],
+        )
+        for argv in invalid:
+            with self.subTest(invalid_argv=argv), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    dependencies_main(argv)
+                self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(_failure_reason("external network disabled by Anvil offline test fixture"),
+                         "NETWORK_BLOCKED")
+        self.assertEqual(_failure_reason(
+            "HTTPSConnectionPool: Max retries exceeded after Failed to establish a new connection; "
+            "Could not find a version that satisfies the requirement duckdb==1.5.5"), "REGISTRY_UNAVAILABLE")
+        self.assertEqual(_failure_reason("Could not find a version that satisfies duckdb==1.5.5"),
+                         "VERSION_NOT_FOUND")
 
     def test_failed_package_install_preserves_previous_environment(self) -> None:
         destination = runtime_path(self.lock, self.data)
@@ -168,7 +257,16 @@ class AnalyticsDependencyTests(unittest.TestCase):
             active = activate(self.lock, self.data, operation)
             self.assertEqual(active, destination / "bin" / "python")
             self.assertTrue(active.is_file())
-            restore_operation(self.data, operation)
+            config_home = self.root / "config-home"
+            active_lock = config_home / "opencode" / "runtime" / "analytics-requirements.lock"
+            active_lock.parent.mkdir(parents=True)
+            shutil.copyfile(self.lock, active_lock)
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(config_home)}):
+                with self.assertRaises(DependencyError):
+                    restore_operation(self.data, operation)
+                self.assertTrue(active.is_file(), "rollback deleted a runtime still referenced by active config")
+                active_lock.write_text(self.lock.read_text(encoding="utf-8") + "# old pointer\n", encoding="utf-8")
+                restore_operation(self.data, operation)
             self.assertFalse(destination.exists(), "rollback must remove a newly activated target runtime")
 
     def test_service_candidate_uses_final_runtime_path_not_hidden_stage_path(self) -> None:
@@ -179,16 +277,16 @@ class AnalyticsDependencyTests(unittest.TestCase):
         (config / "scripts" / "analytics" / "server.py").write_text("# server fixture\n")
         (config / "web" / "analytics").mkdir(parents=True)
         (config / "web" / "analytics" / "index.html").write_text("<html></html>")
-        staged = self.root / "runtimes" / ".runtime-operation-fixture" / "bin" / "python"
-        staged.parent.mkdir(parents=True)
-        staged.write_text("# staged interpreter\n")
-        staged.chmod(0o700)
         home = self.root / "home"
         systemd = self.root / "config-home" / "systemd" / "user"
         with patch.dict("os.environ", {"XDG_DATA_HOME": str(self.data),
                                        "XDG_CONFIG_HOME": str(self.root / "config-home")}):
-            result = validate_candidate(config, home, systemd, 8765, staged)
             target = runtime_path(config / "runtime" / "analytics-requirements.lock", self.data) / "bin" / "python"
+            staged_root = target.parent.parent.parent / ".runtime-operation-fixture"
+            venv.EnvBuilder(with_pip=False).create(staged_root)
+            staged = staged_root / "bin" / "python"
+            with patch("scripts.analytics_service._validate", return_value=True):
+                result = validate_candidate(config, home, systemd, 8765, staged)
             self.assertEqual(result["interpreter"], str(staged))
             self.assertEqual(result["service_interpreter"], str(target))
             unit = _unit_text(config, home, 8765, Path(result["service_interpreter"]))

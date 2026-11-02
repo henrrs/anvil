@@ -41,7 +41,31 @@ The default Anvil-owned Databricks profile and authentication remain the only su
 
 ## Data and rollback
 
-Analytics workspace data lives outside managed OpenCode configuration and lifecycle backups. Upgrade/reforge do not copy SQLite, workspace files, Parquet datasets or snapshots into backups. Lifecycle snapshots do include the small canonical Analytics `runtime.json` file and managed service unit so rollback can restore the prior OpenCode/session reference and service definition exactly. Rollback restores the prior service active/enabled state without bootstrapping missing OpenCode or creating a canonical session that was absent from the baseline. SQLite can be opened by a compatible later Analytics version; rollback does not downgrade user data.
+Analytics datasets, workspace files and Parquet materializations remain outside lifecycle backups. The small lifecycle-owned `~/.anvil/analytics/context.db` control store has an explicit per-migration rollback policy. A migration marked `BACKWARD_COMPATIBLE` keeps the database; a migration marked `BACKUP_RESTORE_REQUIRED` is blocked before activation unless Anvil creates and verifies a consistent SQLite backup through SQLite's backup API. Rollback restores that database only when the recorded contract requires it, before the baseline service starts. Unknown or non-rollbackable schema transitions block before activation.
+
+Lifecycle snapshots also include the small canonical Analytics `runtime.json` file and managed service unit so rollback can restore the prior OpenCode/session reference and service definition. The managed systemd service is the normal owner. `make analytics` ensures and health-checks it; `make analytics-dev` is the explicit foreground development server. If an old Anvil foreground listener owns the configured port, Anvil migrates it only after confirming the same user, Anvil server command, port and config working directory. An unknown port owner is left untouched.
+
+Pending lifecycle journals are classified on the next mutating command. Abandoned pre-activation staging is cleaned, a committed target is finalized, and interrupted restoration is first checked against its captured baseline before any repeated restore. Ambiguous journals stop with the snapshot preserved. A normal supported recovery does not require manually clearing the journal.
+
+For corporate networks, Anvil selects an explicit Anvil package source first, then configured pip sources, then public PyPI only under the configured fallback policy. Existing pip configuration is read without rewriting it; credentials from unrelated tools are never harvested. `make upgrade DRY_RUN=1` reports the source policy and selected source label without checking live availability or exposing credential values.
+
+## Installed-machine rehearsal
+
+After updating the checkout, use this sequence on a machine that already has Anvil installed:
+
+```bash
+make inspect
+make doctor
+make capabilities
+make upgrade DRY_RUN=1
+make upgrade
+make inspect
+make doctor
+make capabilities
+make upgrade
+```
+
+The upgrade requires a committed, verifiable release checkout. The last upgrade checks convergence and should produce no dependency rebuild, service regeneration, session recreation, database migration or runtime restart when no drift exists. Dry-run remains read-only.
 
 ## Developer UI mock
 

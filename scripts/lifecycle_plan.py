@@ -25,6 +25,7 @@ class OperationKind(str, Enum):
     INSTALL_RUNTIME = "InstallRuntimeArtifact"
     MIGRATE_ADAPTER = "MigrateRuntimeAdapter"
     SYNC_DEPENDENCIES = "InstallAnalyticsDependencies"
+    CAPTURE_ANALYTICS_STATE = "CaptureAnalyticsRollbackState"
     ENSURE_SERVICE = "EnsureAnalyticsService"
     INITIALIZE_MEMORY = "InitializeMemory"
     VERIFY = "VerifyInstallation"
@@ -34,6 +35,7 @@ class OperationKind(str, Enum):
 
 
 ORDER = {OperationKind.SNAPSHOT: 0, OperationKind.REPLACE_MANAGED: 1,
+         OperationKind.CAPTURE_ANALYTICS_STATE: 1,
          OperationKind.INSTALL_RUNTIME: 1, OperationKind.MIGRATE_ADAPTER: 2,
          OperationKind.SYNC_DEPENDENCIES: 3, OperationKind.INITIALIZE_MEMORY: 3,
          OperationKind.ENSURE_SERVICE: 4, OperationKind.VERIFY: 5,
@@ -147,17 +149,23 @@ def plan(current: CurrentState, desired: DesiredState) -> ChangePlan:
         elif lifecycle in {"READY", "INSTALLED", "DEGRADED", "STALE", "MIGRATION_REQUIRED", "RECOVERABLE"}:
             changed_release = source != target or lifecycle in {"RECOVERABLE", "STALE", "MIGRATION_REQUIRED"}
             if changed_release or lifecycle == "DEGRADED" or lifecycle in {"READY", "INSTALLED"}:
-                operations.extend((_op(OperationKind.SNAPSHOT, "anvil", "Preserve exact pre-upgrade state"),
-                                   _op(OperationKind.REPLACE_MANAGED, "managed-config", "Converge target release artifacts")))
+                schema_plan = current.analytics.get("schema_rollback")
+                if not isinstance(schema_plan, dict) or schema_plan.get("status") != "READY":
+                    blockers.append("Analytics persistent schema rollback compatibility could not be verified; inspect the context database before upgrading.")
+                else:
+                    operations.append(_op(OperationKind.SNAPSHOT, "anvil", "Preserve exact pre-upgrade state"))
+                    operations.extend(AnalyticsContributor().plan_rollback_state(schema_plan))
+                    operations.append(_op(OperationKind.REPLACE_MANAGED, "managed-config", "Converge target release artifacts"))
                 # The target release ships the pinned dependency lock and the
                 # product adapter converges it whenever present in staged config.
-                operations.extend(AnalyticsContributor().plan_product(True))
-                operations.extend(MemoryContributor().plan_initialize(state["memory"]["present"]))
-                operations.append(_op(OperationKind.ENSURE_SERVICE, "analytics",
-                                      "Validate the Analytics service candidate before activation; activate after config swap",
-                                      idempotent=False))
-                operations.extend((_op(OperationKind.VERIFY, "installation", "Verify the target before metadata commit"),
-                                   _op(OperationKind.COMMIT, "installation", "Mark target release installed")))
+                if not blockers:
+                    operations.extend(AnalyticsContributor().plan_product(True))
+                    operations.extend(MemoryContributor().plan_initialize(state["memory"]["present"]))
+                    operations.append(_op(OperationKind.ENSURE_SERVICE, "analytics",
+                                          "Validate the Analytics service candidate before activation; activate after config swap",
+                                          idempotent=False))
+                    operations.extend((_op(OperationKind.VERIFY, "installation", "Verify the target before metadata commit"),
+                                       _op(OperationKind.COMMIT, "installation", "Mark target release installed")))
     elif desired.operation == "reforge":
         if source and source != target:
             blockers.append("Reforge rebuilds the installed release; run make upgrade for a release change.")
@@ -168,15 +176,22 @@ def plan(current: CurrentState, desired: DesiredState) -> ChangePlan:
         else:
             runtime = current.active_runtime.get("runtime") if isinstance(current.active_runtime, dict) else {}
             runtime = runtime if isinstance(runtime, dict) else {}
-            operations.extend((_op(OperationKind.SNAPSHOT, "anvil", "Preserve pre-reforge state"),
-                               _op(OperationKind.REPLACE_MANAGED, "managed-config", "Rebuild managed artifacts")))
+            schema_plan = current.analytics.get("schema_rollback")
+            if not isinstance(schema_plan, dict) or schema_plan.get("status") != "READY":
+                blockers.append("Analytics persistent schema rollback compatibility could not be verified; inspect the context database before reforge.")
+            else:
+                operations.append(_op(OperationKind.SNAPSHOT, "anvil", "Preserve pre-reforge state"))
+                operations.extend(AnalyticsContributor().plan_rollback_state(schema_plan))
+                operations.append(_op(OperationKind.REPLACE_MANAGED, "managed-config", "Rebuild managed artifacts"))
             if not runtime.get("usable"):
-                operations.append(_op(OperationKind.INSTALL_RUNTIME, "opencode",
-                                      "Provision the policy-selected runtime on first installation", idempotent=False))
-            operations.extend(AnalyticsContributor().plan_product(True))
-            operations.extend(MemoryContributor().plan_initialize(state["memory"]["present"]))
-            operations.extend((_op(OperationKind.VERIFY, "installation", "Verify rebuilt artifacts"),
-                               _op(OperationKind.COMMIT, "installation", "Record rebuilt installation")))
+                if not blockers:
+                    operations.append(_op(OperationKind.INSTALL_RUNTIME, "opencode",
+                                          "Provision the policy-selected runtime on first installation", idempotent=False))
+            if not blockers:
+                operations.extend(AnalyticsContributor().plan_product(True))
+                operations.extend(MemoryContributor().plan_initialize(state["memory"]["present"]))
+                operations.extend((_op(OperationKind.VERIFY, "installation", "Verify rebuilt artifacts"),
+                                   _op(OperationKind.COMMIT, "installation", "Record rebuilt installation")))
     elif desired.operation in {"update-runtime", "migrate-runtime"}:
         allowed = ({"READY", "INSTALLED", "DEGRADED"} if desired.operation == "migrate-runtime"
                    else {"READY", "INSTALLED", "DEGRADED", "STALE", "MIGRATION_REQUIRED", "RECOVERABLE"})

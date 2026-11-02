@@ -30,7 +30,9 @@ with tempfile.TemporaryDirectory() as name:
             "memory": {"present": True}, "backups": {"latest": str(root / "snapshot")},
             "recovery": {"applicable": True}}
     runtime = {"runtime": {"usable": True, "generation": 1, "executable": "/fixture/opencode"}}
-    ready = CurrentState(persisted, dict(base, lifecycle="READY"), runtime, {}, {})
+    analytics = {"schema_rollback": {"status": "READY", "policy": "NO_MIGRATION",
+                                     "schema_version": 3, "target_schema_version": 3}}
+    ready = CurrentState(persisted, dict(base, lifecycle="READY"), runtime, analytics, {})
 
     for desired, executor_name, expected_profile, runtime_major in (
         (DesiredState("upgrade", "2.17.0"), "anvil-upgrade", "config", None),
@@ -62,6 +64,19 @@ with tempfile.TemporaryDirectory() as name:
         assert "runtime major" in str(exc)
     else:
         raise AssertionError("executor accepted a plan for a different runtime major")
+
+    migration_ready = CurrentState(
+        persisted, dict(base, lifecycle="READY"), runtime,
+        {"schema_rollback": {"status": "READY", "policy": "BACKUP_RESTORE_REQUIRED",
+                             "schema_version": 2, "target_schema_version": 3,
+                             "restore_required": True}}, {},
+    )
+    for desired, operation in ((DesiredState("upgrade", "2.17.0"), "anvil-upgrade"),
+                               (DesiredState("reforge", "2.17.0", 1), "reforge")):
+        migration_plan = plan(migration_ready, desired)
+        assert OperationKind.CAPTURE_ANALYTICS_STATE in {item.kind for item in migration_plan.operations}
+        persist(plan_file, migration_plan.as_dict())
+        assert validate(plan_file, operation, desired.runtime_major) == "config"
 
     incomplete = copy.deepcopy(plan(ready, DesiredState("update-runtime")).as_dict())
     incomplete["operations"] = [item for item in incomplete["operations"]

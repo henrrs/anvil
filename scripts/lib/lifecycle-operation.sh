@@ -135,7 +135,17 @@ anvil_lifecycle_fail() {
     anvil_lifecycle_failure_detail "$status"
   fi
   anvil_error "$failure_message (exit $status); restoring the verified snapshot."
+  python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase recovery-restoring || {
+    anvil_error 'Could not persist the recovery phase; the verified snapshot remains available for retry.'
+    transaction_active=0
+    return
+  }
   if "$rollback_fn"; then
+    python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase recovery-verified || {
+      anvil_error "Baseline restoration completed, but operation journal verification could not be recorded. Snapshot remains at $backup."
+      transaction_active=0
+      return
+    }
     python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" clear || {
       journal="$(python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" inspect 2>/dev/null || printf '{}')"
       read -r operation_id failed_phase < <(python3 - "$journal" <<'PY'

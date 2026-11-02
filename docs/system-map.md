@@ -1,6 +1,6 @@
 # Anvil System Map
 
-This map describes Anvil 2.17.0 and its Analytics Workspace. It follows the public Make targets through configuration, lifecycle, runtime, providers, persistent state, analytical helpers, and local verification. The companion [quality audit](quality-audit.md) records evidence, findings, and confidence.
+This map describes Anvil 2.17.1 and its Analytics Workspace, preserving the Anvil 2.17.0 and its Analytics Workspace baseline while recording installed-state recovery hardening. It follows the public Make targets through configuration, lifecycle, runtime, providers, persistent state, analytical helpers, and local verification. The companion [quality audit](quality-audit.md) records evidence, findings, and confidence.
 
 ## Shape and data flow
 

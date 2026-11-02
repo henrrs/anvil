@@ -174,11 +174,6 @@ PY
   python3 "$ROOT/scripts/analytics_service.py" stop --config-dir "$ANVIL_CONFIG_DIR" \
     --home "$ANVIL_HOME_DIR" --systemd-dir "${XDG_CONFIG_HOME:-$ANVIL_HOME_DIR/.config}/systemd/user" \
     --port "${ANVIL_ANALYTICS_PORT:-8765}" >/dev/null 2>&1 || true
-  marker="$ANVIL_DATA_HOME/anvil/analytics/operations/$lifecycle_operation_id.json"
-  if [[ -n "$lifecycle_operation_id" && -f "$marker" && ! -L "$marker" ]]; then
-    python3 "$ROOT/scripts/analytics_dependencies.py" restore \
-      --data-root "$ANVIL_DATA_HOME" --operation-id "$lifecycle_operation_id" >/dev/null
-  fi
 fi
 umask 077
 rollback_stage="$(mktemp -d "$(dirname -- "$ANVIL_CONFIG_DIR")/.anvil-config-rollback-stage.XXXXXX")"
@@ -188,6 +183,13 @@ if [[ "$config_present" != yes ]]; then mkdir -m 700 -- "$rollback_config"; fi
 python3 "$ROOT/scripts/managed_config.py" restore-merge --source "$ANVIL_CONFIG_DIR" --target "$rollback_config" >/dev/null
 ANVIL_ROLLBACK_RESTORE=1 ANVIL_ANALYTICS_RUNTIME_STAGED=0 \
   anvil_apply_config "$rollback_config" yes yes
+marker="$ANVIL_DATA_HOME/anvil/analytics/operations/$lifecycle_operation_id.json"
+if [[ -n "$lifecycle_operation_id" && -f "$marker" && ! -L "$marker" ]]; then
+  # Restore the old managed config/pointer first. Dependency cleanup may then
+  # safely remove only the staged runtime that the restored config no longer uses.
+  python3 "$ROOT/scripts/analytics_dependencies.py" restore \
+    --data-root "$ANVIL_DATA_HOME" --operation-id "$lifecycle_operation_id" >/dev/null
+fi
 if [[ "$backup_scope" == runtime ]]; then
   installer_archive="$backup_real/opencode-root.tar.gz"
   python3 "$ROOT/scripts/archive.py" restore "$installer_archive" "$ANVIL_INSTALL_ROOT" "$installer_present"

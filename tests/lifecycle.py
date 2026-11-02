@@ -10,6 +10,7 @@ import pathlib
 import shlex
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
@@ -393,7 +394,8 @@ def fresh_machine_command_contract_test(temp: pathlib.Path, wrapper_v1: pathlib.
     ]
     after_failures = tree_hash(pathlib.Path(bootstrap_env["XDG_DATA_HOME"]) / "anvil")
     for args, expected in postinstall:
-        proc = run(["/usr/bin/make", "--no-print-directory", *args], offline, expected=expected)
+        command_env = dict(offline, ANVIL_TEST_MODE="1") if args[0] == "upgrade" else offline
+        proc = run(["/usr/bin/make", "--no-print-directory", *args], command_env, expected=expected)
         output = assert_human_public_result(proc, "make " + " ".join(args))
         if args[0] == "doctor":
             check("not in this session's PATH" in output and "Status: WARNING" in output,
@@ -562,7 +564,7 @@ def config_ownership_transition_test(temp: pathlib.Path) -> None:
     collision_path.parent.mkdir(parents=True)
     collision_path.write_text("user-owned skill collision\n", encoding="utf-8")
     collision_before = tree_hash(collision["config"])
-    collision_env = offline_env(collision, temp / "collision")
+    collision_env = offline_env(collision, temp / "collision", ANVIL_TEST_MODE="1")
     blocked = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"],
                   collision_env, expected=2)
     check("user-owned files conflict" in blocked.stderr,
@@ -584,7 +586,7 @@ def large_config_upgrade_plan_test(temp: pathlib.Path) -> None:
     before_config = filesystem_snapshot(paths["config"])
     before_installation = filesystem_snapshot(paths["anvil_data"])
     before_runtime = file_hash(paths["binary"])
-    env = offline_env(paths, temp)
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1")
 
     dry = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env)
     preserved = next((line for line in dry.stdout.splitlines()
@@ -704,7 +706,7 @@ def brownfield_legacy_npm_symlink_test(temp: pathlib.Path) -> None:
     backup_path = pathlib.Path(snapshot.stdout.strip().splitlines()[-1])
     run([sys.executable, str(ROOT / "scripts/state.py"), "verify", str(backup_path)], env_for(paths))
 
-    env = offline_env(paths, temp)
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1")
     inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
     check("Status                MIGRATION_REQUIRED" in inspect.stdout,
           "valid 2.6.1 install with external npm state was not classified as migratable; "
@@ -843,7 +845,7 @@ def managed_symlink_recovery_test(temp: pathlib.Path) -> None:
     broken_file.symlink_to(temp / "missing-managed-target.md")
     attack_hash = file_hash(attacker_file)
     config_before = filesystem_snapshot(paths["config"])
-    env = offline_env(paths, temp)
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1")
 
     inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
     check("Status                CORRUPTED" in inspect.stdout,
@@ -1031,7 +1033,7 @@ def filesystem_and_working_directory_test(temp: pathlib.Path) -> None:
 
 def readonly_config_parent_preflight_test(temp: pathlib.Path) -> None:
     paths = fixture(temp / "machine")
-    env = offline_env(paths, temp, ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_YES="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
     before_config = tree_hash(paths["config"])
     before_data = tree_hash(paths["anvil_data"])
     runtime = start_runtime(paths, marker=temp / "runtime-ready")
@@ -1136,6 +1138,19 @@ def managed_file_repair_test(temp: pathlib.Path) -> None:
     installation["managed_config_manifest_sha256"] = file_hash(manifest_path)
     write_json(installation_path, installation)
 
+    context_database = paths["home"] / ".anvil" / "analytics" / "context.db"
+    context_database.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(context_database) as connection:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
+        connection.executemany("INSERT INTO schema_migrations VALUES(?, 'fixture')", [(1,), (2,)])
+        connection.execute("""CREATE TABLE catalog_hydration(
+            scope TEXT NOT NULL, parent_name TEXT NOT NULL DEFAULT '', state TEXT NOT NULL,
+            error_code TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '',
+            attempts INTEGER NOT NULL DEFAULT 0, object_count INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL, PRIMARY KEY(scope,parent_name))""")
+        connection.execute("INSERT INTO catalog_hydration(scope,state,updated_at) VALUES('baseline','READY','before')")
+
     managed_script = paths["config"] / "scripts/analytics/runtime.py"
     managed_script.write_bytes(b"# exact pre-upgrade local change\n")
     drifted_hash = file_hash(managed_script)
@@ -1156,11 +1171,22 @@ def managed_file_repair_test(temp: pathlib.Path) -> None:
 
     observed_roots = [paths["home"], paths["config_home"], paths["data_home"], paths["state_home"]]
     before_dry = {str(root): filesystem_snapshot(root) for root in observed_roots}
+    # SQLite may update transient -shm lock bytes when read through a WAL-mode
+    # database. The persistent DB, WAL, and all other installed state must stay
+    # byte-for-byte unchanged during a dry run.
     dry = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env)
     check("REPAIRABLE_MANAGED_DRIFT" in dry.stdout and "verified replacement" in dry.stdout
           and "No changes performed." in dry.stdout,
           "dry-run did not report the verified managed drift repair plan")
-    check(before_dry == {str(root): filesystem_snapshot(root) for root in observed_roots}
+    after_dry = {str(root): filesystem_snapshot(root) for root in observed_roots}
+    for root in observed_roots:
+        before = before_dry[str(root)]
+        after = after_dry[str(root)]
+        before_dry[str(root)] = {name: value for name, value in before.items()
+                                 if not name.endswith("/context.db-shm")}
+        after_dry[str(root)] = {name: value for name, value in after.items()
+                               if not name.endswith("/context.db-shm")}
+    check(before_dry == after_dry
           and not (paths["anvil_data"] / "backups").exists(),
           "dry-run mutated installation state or created a rollback snapshot")
 
@@ -1193,25 +1219,48 @@ def managed_file_repair_test(temp: pathlib.Path) -> None:
           and not list((paths["data_home"] / "anvil" / "analytics" / "runtimes").glob(".runtime-*")),
           "failed Analytics staging activated a runtime or attempted service convergence")
 
+    verified_backups = sorted((paths["anvil_data"] / "backups").iterdir())
+    check(bool(verified_backups), "staging failure did not retain a verified fixture snapshot")
+    subprocess.run([sys.executable, str(ROOT / "scripts/lifecycle_transaction.py"), "begin",
+                    "--operation", "anvil-upgrade", "--backup", str(verified_backups[-1]),
+                    "--source-version", "2.16.0", "--target-version", ANVIL_VERSION,
+                    "--owner-pid", "2147483647"], env=env, check=True, capture_output=True, text=True)
+    subprocess.run([sys.executable, str(ROOT / "scripts/lifecycle_transaction.py"), "phase", "staging"],
+                   env=env, check=True, capture_output=True, text=True)
+
     failed = run(["/usr/bin/make", "--no-print-directory", "upgrade"],
-                 dict(env, ANVIL_TEST_FAIL_AFTER_CONFIG="1"), expected=2)
+                 dict(env, ANVIL_TEST_FAIL_AFTER_CONFIG="1", ANVIL_TEST_MIGRATE_CONTEXT_DB="1"), expected=2)
     check(file_hash(managed_script) == drifted_hash
           and json.loads(installation_path.read_text(encoding="utf-8"))["anvil_version"] == "2.16.0"
           and "managed_drift_repair_failed" in failed.stderr
+          and "Interrupted upgrade stopped before activation" in failed.stderr
           and "Automatic Anvil rollback completed" in failed.stderr,
-          "a failed replacement did not restore the exact pre-upgrade drifted file and release metadata")
+          "pending staging recovery or a failed replacement did not restore the exact pre-upgrade state")
+    with sqlite3.connect(context_database) as connection:
+        check(connection.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 2
+              and "progress_current" not in {row[1] for row in connection.execute("PRAGMA table_info(catalog_hydration)")}
+              and connection.execute("SELECT state FROM catalog_hydration WHERE scope='baseline'").fetchone()[0] == "READY",
+              "post-migration rollback did not restore the compatible schema-v2 control database")
 
-    upgraded = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
+    upgraded = run(["/usr/bin/make", "--no-print-directory", "upgrade"],
+                   dict(env, ANVIL_TEST_MIGRATE_CONTEXT_DB="1"))
     expected_target_hash = lifecycle_state.managed_config.RELEASE_ARTIFACTS["scripts/analytics/runtime.py"]
     check(file_hash(managed_script) == expected_target_hash
           and "Repairing 1 Anvil-managed drifted artifact(s)" in upgraded.stdout,
           "upgrade did not replace the drifted file with its pinned target artifact")
     check(file_hash(user_script) == user_hash,
           "upgrade overwrote an unowned user file during managed drift repair")
+    with sqlite3.connect(context_database) as connection:
+        check(connection.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 3
+              and "progress_current" in {row[1] for row in connection.execute("PRAGMA table_info(catalog_hydration)")},
+              "successful convergence did not migrate the lifecycle-owned Analytics control store")
     check(lifecycle_state_for_env(env) == "READY", "verified managed drift upgrade did not converge to READY")
+    database_after_success = file_hash(context_database)
     repeated = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env)
     check("Repairing 1 Anvil-managed drifted artifact(s)" not in repeated.stdout,
           "managed drift repair repeated after the installation converged")
+    check(file_hash(context_database) == database_after_success,
+          "repeated upgrade dry-run changed the Analytics control store")
 
     run(["/usr/bin/make", "--no-print-directory", "rollback"], env)
     check(file_hash(managed_script) == drifted_hash,
@@ -1220,6 +1269,10 @@ def managed_file_repair_test(temp: pathlib.Path) -> None:
           "rollback did not restore the installed source release metadata")
     check(file_hash(user_script) == user_hash,
           "rollback changed user-owned content while restoring managed drift")
+    with sqlite3.connect(context_database) as connection:
+        check(connection.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 2
+              and "progress_current" not in {row[1] for row in connection.execute("PRAGMA table_info(catalog_hydration)")},
+              "explicit rollback did not restore the schema compatible with the prior Anvil release")
 
     with mock.patch.dict(os.environ, {"ANVIL_TEST_MODE": "1"}):
         unsafe = lifecycle_state.managed_config.classify_installed_drift(
@@ -1716,7 +1769,7 @@ def local_inventory_and_external_runtime_test(temp: pathlib.Path) -> None:
     shutil.rmtree(paths["home"] / ".opencode")
     run([sys.executable, str(ROOT / "scripts" / "runtime_state.py"), "record", "--binary", str(external_binary)],
         env_for(paths))
-    env = offline_env(paths, temp, PATH="/usr/bin:/bin")
+    env = offline_env(paths, temp, PATH="/usr/bin:/bin", ANVIL_TEST_MODE="1")
 
     inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
     check("OpenCode installed     True" in inspect.stdout and "OpenCode usable        True" in inspect.stdout,

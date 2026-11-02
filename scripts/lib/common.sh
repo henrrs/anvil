@@ -86,32 +86,22 @@ anvil_require_installed() {
 
 anvil_recover_pending() {
   if [[ "${ANVIL_SKIP_PENDING_RECOVERY:-0}" == 1 ]]; then return 0; fi
-  local transaction pending valid backup backup_valid error operation operation_id activation_started
+  local transaction pending valid backup backup_valid error operation operation_id owner_active
+  local classification state action reason baseline_result
   transaction="$(python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" inspect)" || return 1
-  local -a fields=()
-  mapfile -d '' -t fields < <(python3 - "$transaction" <<'PY'
-import json,sys
-obj=json.loads(sys.argv[1])
-for key in ("pending","valid","backup","backup_valid","backup_error","operation","operation_id"):
-    value=obj.get(key)
-    sys.stdout.buffer.write((str(value) if value is not None else "").encode()+b"\0")
-activated=obj.get("activation_started")
-if activated is None:
-    activated=obj.get("phase") not in {"snapshot-verified","staging","pre-activation-verification",
-                                       "staging-failed","pre-activation-failed"}
-sys.stdout.buffer.write(str(activated).encode()+b"\0")
-PY
-)
-  pending="${fields[0]:-}"; valid="${fields[1]:-}"; backup="${fields[2]:-}"
-  backup_valid="${fields[3]:-}"; error="${fields[4]:-}"
-  operation="${fields[5]:-}"; operation_id="${fields[6]:-}"; activation_started="${fields[7]:-}"
+  pending="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("pending",False))' "$transaction")"
   [[ "$pending" == True ]] || return 0
-  local owner_active
   owner_active="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("owner_active",False))' "$transaction")"
   if [[ "$owner_active" == True ]]; then
     anvil_error 'Another Anvil lifecycle command is still running. Wait for it to finish before retrying.'
     return 1
   fi
+  valid="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("valid",False))' "$transaction")"
+  backup="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("backup") or "")' "$transaction")"
+  backup_valid="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("backup_valid",False))' "$transaction")"
+  error="$(python3 -c 'import json,sys; v=json.loads(sys.argv[1]); print(v.get("backup_error") or v.get("error") or "")' "$transaction")"
+  operation="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("operation") or "")' "$transaction")"
+  operation_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("operation_id") or "")' "$transaction")"
   if [[ -L "$ANVIL_CONFIG_DIR" || -L "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_BIN" ]]; then
     anvil_error 'A managed config or installer path became a symlink after interruption. Automatic recovery stopped for manual review.'
     return 1
@@ -120,7 +110,22 @@ PY
     anvil_error 'A lifecycle recovery is pending; DRY_RUN is read-only and did not restore the snapshot. Rerun the operation without DRY_RUN to recover safely.'
     return 1
   fi
-  if [[ "$valid" == True && "$operation" == anvil-upgrade && "$activation_started" != True ]]; then
+  classification="$(python3 "$ANVIL_ROOT/scripts/lifecycle_recovery.py" classify \
+    --journal-json "$transaction" --config "$ANVIL_CONFIG_DIR" --installation "$ANVIL_DATA_DIR/installation.json" 2>/dev/null)" || {
+      anvil_error 'The pending lifecycle journal is invalid or unknown. Preserve the current state and snapshot, then run make inspect for recovery guidance.'
+      return 1
+    }
+  IFS=$'\t' read -r state action reason < <(python3 - "$classification" <<'PY'
+import json,sys
+value=json.loads(sys.argv[1])
+print("\t".join(str(value.get(key) or "") for key in ("state","action","reason")))
+PY
+)
+  if [[ "$action" == BLOCK ]]; then
+    anvil_error "Pending lifecycle journal cannot be recovered automatically ($state): $reason. Preserve the snapshot and run make inspect before manual recovery."
+    return 1
+  fi
+  if [[ "$action" == ABORT_STAGING && "$valid" == True ]]; then
     if [[ -n "$operation_id" ]]; then
       python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" abort \
         --data-root "$ANVIL_DATA_HOME" --operation-id "$operation_id" >/dev/null || {
@@ -129,14 +134,46 @@ PY
         }
     fi
     python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" clear || return 1
+    anvil_cleanup_interrupted_config_staging
     anvil_ok "Interrupted upgrade stopped before activation. Staged artifacts were discarded; the active installation remains unchanged."
     export ANVIL_RECOVERED_PENDING=1
     return 0
   fi
-  anvil_warn 'An interrupted Anvil lifecycle transaction was found; attempting snapshot recovery before continuing.'
+  if [[ "$action" == FINALIZE_TARGET && "$valid" == True ]]; then
+    local operation_marker="$ANVIL_DATA_HOME/anvil/analytics/operations/$operation_id.json"
+    if [[ -e "$operation_marker" || -L "$operation_marker" ]]; then
+      [[ ! -L "$operation_marker" && -f "$operation_marker" ]] || {
+        anvil_error 'The committed target has an unsafe Analytics operation marker; preserve state for manual review.'
+        return 1
+      }
+      python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" finalize \
+        --data-root "$ANVIL_DATA_HOME" --operation-id "$operation_id" >/dev/null || {
+          anvil_error "The target is installed, but Analytics runtime finalization failed for operation $operation_id. Retry the lifecycle command to resume safely."
+          return 1
+        }
+    fi
+    python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" clear || return 1
+    anvil_cleanup_interrupted_config_staging
+    anvil_ok 'The committed Anvil target was already installed; pending finalization is complete.'
+    export ANVIL_RECOVERED_PENDING=1
+    return 0
+  fi
+  anvil_warn "Interrupted lifecycle state $state found; verifying the captured baseline before restoring it."
   if [[ "$valid" != True || "$backup_valid" != True || -z "$backup" ]]; then
     anvil_error "Automatic recovery is unavailable: ${error:-the transaction journal or snapshot is invalid}. Preserve the current state and inspect the lifecycle journal and backups."
     return 1
+  fi
+  python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase recovery-restoring || {
+    anvil_error 'The lifecycle journal could not record recovery progress; the snapshot was left untouched.'
+    return 1
+  }
+  if baseline_result="$(python3 "$ANVIL_ROOT/scripts/lifecycle_recovery.py" verify-baseline --backup "$backup" 2>/dev/null)"; then
+    python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase recovery-verified || return 1
+    python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" clear || return 1
+    anvil_cleanup_interrupted_config_staging
+    anvil_ok 'The captured installation baseline was already restored and verified; the stale journal was finalized.'
+    export ANVIL_RECOVERED_PENDING=1
+    return 0
   fi
   if ! python3 "$ANVIL_ROOT/scripts/active-opencode.py"; then
     anvil_error 'Close OpenCode before retrying; recovery needs exclusive access to its configured data paths.'
@@ -148,6 +185,18 @@ PY
     anvil_error "Snapshot recovery failed. The transaction journal remains for a safe retry; verified snapshot: $backup"
     return 1
   fi
+  if ! baseline_result="$(python3 "$ANVIL_ROOT/scripts/lifecycle_recovery.py" verify-baseline --backup "$backup" 2>/dev/null)"; then
+    anvil_error "Snapshot restoration returned, but baseline verification still fails. The journal and snapshot remain for retry: $backup"
+    return 1
+  fi
+  python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase recovery-verified || return 1
+  anvil_cleanup_interrupted_config_staging
+  python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" clear || return 1
+  anvil_ok "Interrupted operation recovered and verified from $backup."
+  export ANVIL_RECOVERED_PENDING=1
+}
+
+anvil_cleanup_interrupted_config_staging() {
   python3 - "$ANVIL_CONFIG_DIR" <<'PY'
 import shutil,sys
 from pathlib import Path
@@ -157,7 +206,4 @@ for prefix in (".anvil-config-stage.", ".anvil-config-previous-", ".anvil-config
         if path.is_dir() and not path.is_symlink():
             shutil.rmtree(path)
 PY
-  python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" clear || return 1
-  anvil_ok "Interrupted operation recovered from $backup."
-  export ANVIL_RECOVERED_PENDING=1
 }

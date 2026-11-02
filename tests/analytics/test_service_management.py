@@ -7,7 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.analytics_service import MARKER, SERVICE_NAME, _unit_text, service_state, sync
+from scripts.analytics_service import (MARKER, SERVICE_NAME, _migrate_legacy_listener,
+                                       _unit_text, service_state, sync)
 
 
 class AnalyticsServiceManagementTests(unittest.TestCase):
@@ -74,6 +75,55 @@ class AnalyticsServiceManagementTests(unittest.TestCase):
              patch("scripts.analytics_service._wait_converged", return_value=True):
             result = sync(self.config, self.home, self.systemd, 8765, activate=True)
         self.assertEqual(result, "READY")
+        self.assertEqual(calls, [("daemon-reload",), ("enable", "--now", SERVICE_NAME)])
+
+    def test_unknown_port_owner_is_never_signaled(self) -> None:
+        with patch("scripts.analytics_service._port_open", return_value=True), \
+             patch("scripts.analytics_service._port_owner_pids", return_value=[4321]), \
+             patch("scripts.analytics_service._is_legacy_anvil_process", return_value=False), \
+             patch("scripts.analytics_service.os.kill") as kill:
+            with self.assertRaisesRegex(ValueError, "unknown process"):
+                _migrate_legacy_listener(self.config, 8765)
+        kill.assert_not_called()
+
+    def test_recognized_legacy_anvil_listener_is_stopped_gracefully(self) -> None:
+        with patch("scripts.analytics_service._port_open", side_effect=[True, False, False]), \
+             patch("scripts.analytics_service._port_owner_pids", return_value=[4321]), \
+             patch("scripts.analytics_service._is_legacy_anvil_process", return_value=True), \
+             patch("scripts.analytics_service.os.kill") as kill:
+            _migrate_legacy_listener(self.config, 8765)
+        kill.assert_called_once()
+        self.assertEqual(kill.call_args.args[1], 15)
+
+    def test_sync_repairs_managed_203_exec_unit_before_starting_service(self) -> None:
+        self.systemd.mkdir(parents=True)
+        unit = self.systemd / SERVICE_NAME
+        unit.write_text(MARKER + "\n[Service]\nExecStart=/missing/analytics/python\n", encoding="utf-8")
+        interpreter = self.root / "runtime" / "bin" / "python"
+        interpreter.parent.mkdir(parents=True)
+        interpreter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        interpreter.chmod(0o700)
+        calls = []
+
+        def run_systemctl(*args):
+            calls.append(args)
+            return True
+
+        with patch.dict("os.environ", {"XDG_CONFIG_HOME": str(self.root / "config-home")}):
+            with patch("scripts.analytics_service._service_runtime", return_value=interpreter), \
+                 patch("scripts.analytics_service._verify_unit_payload"), \
+                 patch("scripts.analytics_service._is_active_user_unit_dir", return_value=True), \
+                 patch("scripts.analytics_service._systemd_available", return_value=True), \
+                 patch("scripts.analytics_service._systemctl_value", return_value="inactive"), \
+                 patch("scripts.analytics_service._port_open", return_value=False), \
+                 patch("scripts.analytics_service._run_systemctl", side_effect=run_systemctl), \
+                 patch("scripts.analytics_service.service_state", return_value={
+                     "installed": True, "enabled": True, "active": True, "main_pid": 4321,
+                     "healthy": True, "status": "READY"}), \
+                 patch("scripts.analytics_service._wait_converged", return_value=True):
+                self.assertEqual(sync(self.config, self.home, self.systemd, 8765), "READY")
+        self.assertIn(str(interpreter), unit.read_text(encoding="utf-8"))
+        self.assertNotIn("/missing/analytics/python", unit.read_text(encoding="utf-8"))
         self.assertEqual(calls, [("daemon-reload",), ("enable", "--now", SERVICE_NAME)])
 
     @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze is not installed")

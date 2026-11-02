@@ -70,7 +70,12 @@ def inspect() -> dict[str, Any]:
     if isinstance(owner_pid, int) and owner_pid > 0:
         try:
             os.kill(owner_pid, 0)
-            owner_active = True
+            expected_start = value.get("owner_process_start")
+            observed_start = _process_start(owner_pid)
+            # PID reuse after a reboot must not strand an otherwise recoverable
+            # journal. Older journals have no token and retain the old check.
+            owner_active = observed_start is not None and (
+                expected_start is None or str(expected_start) == observed_start)
         except ProcessLookupError:
             pass
         except PermissionError:
@@ -93,6 +98,18 @@ def inspect() -> dict[str, Any]:
             backup_error = str(exc)
     return {**value, "pending": True, "valid": True, "owner_active": owner_active, "journal": str(journal),
             "backup_valid": backup_valid, "backup_error": backup_error}
+
+
+def _process_start(pid: int) -> str | None:
+    """Return Linux /proc start ticks so a reused PID is not mistaken for the owner."""
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+        # comm is parenthesized and may itself contain spaces or ')'. The final
+        # ')' separates it from fields beginning with state (field 3).
+        tail = raw[raw.rfind(")") + 2:].split()
+        return tail[19] if len(tail) > 19 else None  # field 22: starttime
+    except (OSError, UnicodeError, IndexError):
+        return None
 
 
 def _write(value: dict[str, Any]) -> None:
@@ -131,6 +148,7 @@ def begin(operation: str, backup: str, source: str, target: str, owner_pid: int)
                 "backup": str(Path(backup).absolute()),
                 "source_version": source or None, "target_version": target or None,
                 "owner_pid": owner_pid,
+                "owner_process_start": _process_start(owner_pid),
                 "activation_started": False,
                 "phase": "snapshot-verified", "started_utc": started,
                 "events": [{"phase": "snapshot-verified", "at": started}]}
@@ -145,7 +163,15 @@ def phase(value: str) -> None:
             raise ValueError("cannot update a missing lifecycle transaction journal")
         sequence = PHASE_SEQUENCES.get(str(current.get("operation")))
         terminal_stage_failure = value in {"staging-failed", "pre-activation-failed"}
-        if terminal_stage_failure:
+        if value == "recovery-restoring":
+            if current.get("phase") in {"snapshot-verified", "staging", "pre-activation-verification",
+                                         "staging-failed", "pre-activation-failed"}:
+                raise ValueError("pre-activation transactions must abort staging instead of restoring a snapshot")
+            # Recovery is deliberately retryable after interruption.
+        elif value == "recovery-verified":
+            if current.get("phase") != "recovery-restoring":
+                raise ValueError("recovery can be verified only after restoration has started")
+        elif terminal_stage_failure:
             if current.get("activation_started"):
                 raise ValueError("pre-activation failure cannot be recorded after activation started")
         elif sequence is not None:

@@ -7,6 +7,8 @@ import argparse
 import fcntl
 import json
 import os
+import re
+import signal
 import shutil
 import socket
 import subprocess
@@ -18,9 +20,9 @@ import urllib.request
 from pathlib import Path
 
 try:
-    from .analytics_dependencies import DependencyError, runtime_path
+    from .analytics_dependencies import DependencyError, _validate, parse_lock, runtime_path
 except ImportError:
-    from analytics_dependencies import DependencyError, runtime_path
+    from analytics_dependencies import DependencyError, _validate, parse_lock, runtime_path
 
 MARKER = "# Managed by Anvil Analytics Workspace"
 SERVICE_NAME = "anvil-analytics.service"
@@ -136,6 +138,86 @@ def _unit_text(config: Path, home: Path, port: int, interpreter: Path | None = N
         "WantedBy=default.target",
         "",
     ])
+
+
+def _verify_unit_payload(payload: str, *, verify_interpreter: Path | None = None,
+                         configured_interpreter: Path | None = None) -> None:
+    """Validate systemd syntax before publishing or activating a generated unit."""
+    binary = shutil.which("systemd-analyze")
+    if not binary:
+        return
+    candidate = payload
+    if verify_interpreter is not None:
+        lines = candidate.splitlines()
+        for index, line in enumerate(lines):
+            if line.startswith("ExecStart="):
+                expected = ("ExecStart=" + _systemd_quote(str(configured_interpreter))
+                            if configured_interpreter is not None else "")
+                if not expected or not line.startswith(expected):
+                    raise ValueError("Analytics unit candidate has an unexpected ExecStart executable")
+                lines[index] = "ExecStart=" + _systemd_quote(str(verify_interpreter)) + line[len(expected):]
+                break
+        else:
+            raise ValueError("Analytics unit candidate is missing ExecStart")
+        candidate = "\n".join(lines) + "\n"
+    with tempfile.TemporaryDirectory(prefix="anvil-systemd-verify.") as directory:
+        unit = Path(directory) / SERVICE_NAME
+        unit.write_text(candidate, encoding="utf-8")
+        unit.chmod(0o600)
+        try:
+            result = subprocess.run([binary, "--user", "verify", str(unit)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, timeout=10, check=False)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValueError("systemd could not validate the generated Analytics unit") from exc
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout).strip().splitlines()
+        detail = details[-1] if details else "invalid systemd unit"
+        raise ValueError(f"systemd rejected the generated Analytics unit: {detail}")
+
+
+def _port_owner_pids(port: int) -> list[int]:
+    binary = shutil.which("ss")
+    if not binary:
+        return []
+    try:
+        result = subprocess.run([binary, "-ltnpH", f"sport = :{port}"],
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                text=True, timeout=3, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return sorted({int(value) for value in re.findall(r"pid=(\d+)", result.stdout)})
+
+
+def _is_legacy_anvil_process(pid: int, config: Path, port: int) -> bool:
+    proc = Path("/proc") / str(pid)
+    try:
+        if proc.stat().st_uid != os.getuid():
+            return False
+        argv = [part.decode("utf-8", errors="replace") for part in (proc / "cmdline").read_bytes().split(b"\0") if part]
+        if not any("scripts.analytics.server" in part or "scripts/analytics/server.py" in part for part in argv):
+            return False
+        if not any(value == str(port) or value == f"--port={port}" for value in argv):
+            return False
+        return Path(os.readlink(proc / "cwd")).resolve() == config.resolve()
+    except (OSError, RuntimeError):
+        return False
+
+
+def _migrate_legacy_listener(config: Path, port: int) -> None:
+    """Stop only a same-user legacy Anvil foreground listener with verified identity."""
+    if not _port_open(port):
+        return
+    pids = _port_owner_pids(port)
+    if not pids or any(not _is_legacy_anvil_process(pid, config, port) for pid in pids):
+        raise ValueError(f"Port {port} is already occupied by an unknown process; Anvil left it untouched")
+    for pid in pids:
+        os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and _port_open(port):
+        time.sleep(0.1)
+    if _port_open(port):
+        raise ValueError(f"Legacy Anvil Analytics listener on port {port} did not stop cleanly")
 
 
 def _safe_unit_path(systemd_dir: Path) -> Path:
@@ -331,6 +413,18 @@ def sync(config: Path, home: Path, systemd_dir: Path, port: int, *, activate: bo
     manager = _is_active_user_unit_dir(unit.parent, home) and _systemd_available()
     python = _service_runtime(config, home, require_ready=activate)
     payload = _unit_text(config.absolute(), home.absolute(), port, python)
+    if not config.is_absolute() or not config.is_dir():
+        raise ValueError("Analytics service WorkingDirectory must be an existing absolute config directory")
+    verify_interpreter = None
+    if not python.is_file() or not os.access(python, os.X_OK):
+        if activate:
+            raise ValueError("Analytics service interpreter is unavailable")
+        # A non-activating sync may describe a content-addressed runtime that
+        # has not been staged yet. Validate unit syntax with this interpreter
+        # while preserving the configured ExecStart for the eventual target.
+        verify_interpreter = Path(sys.executable)
+    _verify_unit_payload(payload, verify_interpreter=verify_interpreter,
+                         configured_interpreter=python if verify_interpreter is not None else None)
     changed = not unit.exists() or unit.read_text(encoding="utf-8") != payload
     if changed:
         fd, temporary_name = tempfile.mkstemp(prefix=".anvil-analytics.", dir=unit.parent)
@@ -348,9 +442,12 @@ def sync(config: Path, home: Path, systemd_dir: Path, port: int, *, activate: bo
     if not activate:
         return "CONFIGURED_PENDING_USER_SYSTEMD" if not manager else "CONFIGURED"
     if manager:
+        already_active = _systemctl_value("is-active", SERVICE_NAME) == "active"
+        if not already_active:
+            _migrate_legacy_listener(config.absolute(), port)
         if not _run_systemctl("daemon-reload"):
             raise ValueError("systemd daemon-reload failed; Analytics service was not converged")
-        if changed and _systemctl_value("is-active", SERVICE_NAME) == "active":
+        if changed and already_active:
             if not _run_systemctl("enable", SERVICE_NAME):
                 raise ValueError("systemd could not enable the Analytics service")
             if not _run_systemctl("restart", SERVICE_NAME):
@@ -363,6 +460,8 @@ def sync(config: Path, home: Path, systemd_dir: Path, port: int, *, activate: bo
     else:
         if changed:
             _stop_fallback(home, port)
+        if not _managed_pid(_fallback_paths(home, create=False)[0], port):
+            _migrate_legacy_listener(config.absolute(), port)
         _start_fallback(config, home, port, python)
     if not _wait_converged(port):
         raise ValueError("Analytics service did not reach READY (service, OpenCode runtime, and canonical session)")
@@ -377,13 +476,23 @@ def validate_candidate(config: Path, home: Path, systemd_dir: Path, port: int,
     if not server.is_file() or server.is_symlink() or not frontend.is_file() or frontend.is_symlink():
         raise ValueError("Analytics target server or frontend artifact is missing or unsafe")
     staged_python = interpreter or _service_runtime(config, home, require_ready=True)
-    if not staged_python.is_file() or staged_python.is_symlink() or not os.access(staged_python, os.X_OK):
+    if not staged_python.is_file() or not os.access(staged_python, os.X_OK):
         raise ValueError("Analytics service candidate interpreter is unavailable")
     # The verification runs against the staged interpreter. The installed unit
     # must reference the content-addressed final path that receives it during
     # activation; the hidden staging directory is atomically renamed away.
     service_python = _service_runtime(config, home, require_ready=False)
     generated = _unit_text(config.absolute(), home.absolute(), port, service_python)
+    if not config.is_absolute() or not config.is_dir():
+        raise ValueError("Analytics service WorkingDirectory must be an existing absolute config directory")
+    lock = config / "runtime" / "analytics-requirements.lock"
+    packages = parse_lock(lock)[1] if lock.is_file() and not lock.is_symlink() else []
+    if not _validate(staged_python, packages):
+        raise ValueError("Analytics staged interpreter failed execution, venv-prefix, or import validation")
+    staged_root = staged_python.parent.parent.resolve()
+    target_root = service_python.parent.parent.absolute()
+    if staged_root != target_root.resolve() and staged_root.parent != target_root.parent.resolve():
+        raise ValueError("Analytics staged interpreter is not a sibling of its content-addressed target")
     unit_dir = systemd_dir.expanduser().absolute()
     unit = unit_dir / SERVICE_NAME
     if unit_dir.is_symlink() or (unit_dir.exists() and not unit_dir.is_dir()):
@@ -394,6 +503,8 @@ def validate_candidate(config: Path, home: Path, systemd_dir: Path, port: int,
         raise ValueError("an existing user-owned Analytics service unit was left untouched")
     if f"ExecStart={_systemd_quote(str(service_python))}" not in generated:
         raise ValueError("Analytics service candidate does not use the activated runtime path")
+    _verify_unit_payload(generated, verify_interpreter=staged_python,
+                         configured_interpreter=service_python)
     return {"status": "PASS", "interpreter": str(staged_python),
             "service_interpreter": str(service_python), "unit": str(unit)}
 

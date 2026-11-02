@@ -92,7 +92,7 @@ class _HttpAdapter:
         try:
             # OpenCode can accept TCP before its HTTP handlers are ready. Keep
             # any one probe short so retries stay inside the manager deadline.
-            result = self._request("GET", self._health_path(), timeout=min(2.0, self.timeout))
+            result = self._request("GET", self._health_path(), timeout=min(0.5, self.timeout))
             return isinstance(result, dict) and result.get("healthy", True) is True
         except (ProviderError, UnavailableError):
             return False

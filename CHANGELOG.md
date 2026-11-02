@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.17.1] - 2026-11-02 (candidate; real-machine rehearsal remains environment-specific)
+
+- Fixed Analytics service unit path serialization, validates candidate units before activation, accepts standard venv interpreter symlinks only when execution and `sys.prefix` match the staged environment, and migrates only positively identified legacy Anvil listeners.
+- Made lifecycle rollback restore its config/runtime pointers before removing staged dependencies, declared SQLite migration rollback policies, and captured consistent `context.db` backups with the SQLite backup API when restoration is required.
+- Added classified, retryable journal recovery for abandoned staging, interrupted activation/restoration, and committed-but-unfinalized upgrades; unknown states remain blocked with the snapshot preserved.
+- Reconciles stale persisted OpenCode URLs by discarding dead adapters and retrying startup probes with a short per-attempt timeout.
+- Added release-owned dirty-checkout preflight, deployed-artifact inventory checks, and clearer corporate registry failure/source reporting without changing global pip configuration or reading unrelated credentials.
+
 ## [2.17.0] - 2026-11-01 (candidate; live workspace checks remain environment-specific)
 
 - Converged Analytics dependencies into a release-pinned, content-addressed Python environment; DuckDB and PyArrow are now required for the default local SQL and materialization capabilities, and failed preparation leaves the prior environment/configuration available.

@@ -29,6 +29,10 @@ if drift.get("classification") in {"UNSAFE_MANAGED_DRIFT","UNKNOWN_DRIFT"}:
 '
   exit 1
 fi
+if ! python3 "$ROOT/scripts/release_authority.py" verify; then
+  anvil_error 'Upgrade stopped before snapshot or dependency staging because the target release is not authoritative.'
+  exit 2
+fi
 if ! plan_json="$(python3 "$ROOT/scripts/lifecycle_plan.py" upgrade --format json)"; then
   python3 "$ROOT/scripts/lifecycle_plan.py" upgrade --format text || true
   exit 2
@@ -115,7 +119,17 @@ for item in value.get("findings",[]):
 PY
     fi
     anvil_error "Anvil upgrade failed after config replacement (exit $status); restoring the Anvil-only snapshot."
+    python3 "$ROOT/scripts/lifecycle_transaction.py" phase recovery-restoring || {
+      anvil_error "Could not persist rollback progress; the verified snapshot remains at $backup_dir."
+      cleanup
+      exit "$status"
+    }
     if ANVIL_INTERNAL_MODE=1 bash "$ROOT/scripts/rollback.sh" --backup "$backup_dir" --internal; then
+      python3 "$ROOT/scripts/lifecycle_transaction.py" phase recovery-verified || {
+        anvil_error "Baseline restored, but recovery verification could not be journaled. Snapshot remains at $backup_dir."
+        cleanup
+        exit "$status"
+      }
       python3 "$ROOT/scripts/lifecycle_transaction.py" clear || anvil_error 'Automatic rollback completed, but the recovery journal could not be cleared.'
       anvil_ok 'Automatic Anvil rollback completed; the OpenCode runtime and data were preserved.'
     else
@@ -295,6 +309,8 @@ stage_upgrade() {
 }
 
 preverify_upgrade() {
+  python3 "$ROOT/scripts/lifecycle_baseline.py" verify-plan \
+    --backup "$backup_dir" --target-config "$ready_config/generated" >/dev/null
   if [[ -f "$ready_config/generated/runtime/analytics-requirements.lock" ]]; then
     anvil_lifecycle_require_plan_operation InstallAnalyticsDependencies || return $?
     anvil_lifecycle_require_plan_operation EnsureAnalyticsService || return $?
@@ -322,6 +338,14 @@ for item in json.load(open(sys.argv[1],encoding="utf-8")).get("findings",[]):
 PY
   fi
   anvil_apply_config "$ready_config/generated" || return $?
+  if [[ "${ANVIL_TEST_MIGRATE_CONTEXT_DB:-0}" == 1 ]]; then
+    [[ "${ANVIL_TEST_MODE:-0}" == 1 ]] || {
+      anvil_error 'Context database migration injection is reserved for isolated lifecycle tests.'
+      return 2
+    }
+    PYTHONPATH="$ANVIL_CONFIG_DIR" python3 -c \
+      'from scripts.analytics.store import ContextStore; ContextStore()' || return $?
+  fi
   if [[ "${ANVIL_TEST_FAIL_AFTER_CONFIG:-0}" == 1 ]]; then
     anvil_error 'Injected failure after Anvil config replacement.'
     return 1

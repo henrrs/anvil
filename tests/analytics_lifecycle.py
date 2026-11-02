@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from analytics_service import MARKER, sync  # noqa: E402
 from managed_config import (MANIFEST_NAME, inspect_source, plan, snapshot,
-                            validate_installed, restore_merge)
+                            validate_installed, restore_merge, _release_artifacts_for_major)
 
 
 def check(condition: bool, message: str) -> None:
@@ -62,6 +62,10 @@ def main() -> int:
         expected_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         installed = validate_installed(fresh, expected_version, expected_version)
         manifest = json.loads((fresh / MANIFEST_NAME).read_text(encoding="utf-8"))
+        check(set(manifest["files"]) == set(_release_artifacts_for_major(1)),
+              "fresh managed inventory differs from the actual Anvil-deployed artifact set")
+        check(not {"scripts/analytics_service.py", "scripts/analytics_dependencies.py"} & set(manifest["files"]),
+              "host-only lifecycle tools were incorrectly pinned as installed managed artifacts")
         check("scripts/analytics/server.py" in manifest["files"],
               "fresh installation did not include the Analytics server in managed packaging")
         check("web/analytics/app.js" in manifest["files"],
@@ -134,6 +138,9 @@ def main() -> int:
               <= set(convergence["changes"]["added"]),
               "upgrade did not add the release-pinned Analytics runtime artifacts")
         validate_installed(converged_analytics, expected_version, expected_version)
+        converged_manifest = json.loads((converged_analytics / MANIFEST_NAME).read_text(encoding="utf-8"))
+        check(set(converged_manifest["files"]) == set(_release_artifacts_for_major(1)),
+              "upgrade managed inventory differs from the fresh deployed artifact set")
 
         # User-global data is created outside both managed config and backup.
         analytics_data = home / ".anvil" / "analytics"

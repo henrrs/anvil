@@ -15,6 +15,34 @@ from .models import (CatalogObject, KnowledgeItem, MaterializationState,
 from .paths import AnalyticsPaths
 
 SCHEMA_VERSION = 3
+MIGRATION_ROLLBACK_POLICIES = {
+    1: "BACKWARD_COMPATIBLE",
+    2: "BACKUP_RESTORE_REQUIRED",
+    3: "BACKUP_RESTORE_REQUIRED",
+}
+
+
+def migration_rollback_policy(source_schema: int, target_schema: int = SCHEMA_VERSION) -> dict[str, Any]:
+    """Declare whether an older Anvil runtime can safely reopen a migrated store."""
+    if type(source_schema) is not int or type(target_schema) is not int or source_schema < 0 or target_schema < 0:
+        return {"status": "BLOCKED", "policy": "NON_ROLLBACKABLE", "migrations": []}
+    if source_schema > target_schema:
+        return {"status": "BLOCKED", "policy": "NON_ROLLBACKABLE", "migrations": []}
+    migrations = list(range(source_schema + 1, target_schema + 1))
+    policies = [MIGRATION_ROLLBACK_POLICIES.get(version) for version in migrations]
+    if any(policy is None for policy in policies):
+        return {"status": "BLOCKED", "policy": "NON_ROLLBACKABLE", "migrations": migrations}
+    if not migrations:
+        policy = "NO_MIGRATION"
+    elif "BACKUP_RESTORE_REQUIRED" in policies:
+        policy = "BACKUP_RESTORE_REQUIRED"
+    elif all(item == "BACKWARD_COMPATIBLE" for item in policies):
+        policy = "BACKWARD_COMPATIBLE"
+    else:
+        policy = "NON_ROLLBACKABLE"
+    return {"status": "READY" if policy != "NON_ROLLBACKABLE" else "BLOCKED",
+            "policy": policy, "migrations": migrations,
+            "restore_required": policy == "BACKUP_RESTORE_REQUIRED"}
 
 
 def _now() -> str:

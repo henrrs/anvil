@@ -44,7 +44,26 @@ class AnalyticsContributor:
                 port = 8765
         except ValueError:
             port = 8765
-        return collect_analytics(config, home, port)
+        result = collect_analytics(config, home, port)
+        try:
+            import analytics_schema
+            from analytics.store import SCHEMA_VERSION, migration_rollback_policy
+            state_root = Path(os.environ.get("ANVIL_HOME", str(home / ".anvil"))).expanduser().absolute()
+            database = state_root / "analytics" / "context.db"
+            observed = analytics_schema.inspect_database(database)
+            policy = migration_rollback_policy(observed["schema_version"])
+            result["schema_rollback"] = {**observed, **policy,
+                                          "target_schema_version": SCHEMA_VERSION}
+        except (OSError, ValueError, RuntimeError) as exc:
+            result["schema_rollback"] = {"status": "BLOCKED", "reason": type(exc).__name__}
+        return result
+
+    def plan_rollback_state(self, schema_plan: dict[str, Any]) -> tuple[Any, ...]:
+        from lifecycle_plan import OperationKind, _op
+        if schema_plan.get("policy") == "BACKUP_RESTORE_REQUIRED":
+            return (_op(OperationKind.CAPTURE_ANALYTICS_STATE, "analytics-control-store",
+                        "Capture a verified SQLite rollback snapshot before an incompatible schema migration"),)
+        return ()
 
     def plan_product(self, installed: bool) -> tuple[Any, ...]:
         from lifecycle_plan import OperationKind, _op

@@ -50,7 +50,15 @@ class AnalyticsRuntimeManager:
                 if self.adapter.health():
                     return {**saved, "generation": generation, "base_url": base_url,
                             "executable": record.get("executable", ""), "version": record.get("version", "")}
+                # A persisted URL is only an adoption candidate. Once health
+                # fails, discard the adapter as well as the URL so the next
+                # branch cannot accidentally re-adopt the dead process.
                 base_url = None
+                self.adapter = None
+            else:
+                # The saved process belongs to a different runtime identity.
+                # Do not carry a caller-provided handle across that boundary.
+                self.adapter = None
 
         if self.configured_base_url:
             base_url = self.configured_base_url
@@ -60,7 +68,8 @@ class AnalyticsRuntimeManager:
             base_url = getattr(self.adapter, "base_url", "http://127.0.0.1")
         elif not base_url:
             base_url = self._start_runtime(record)
-            self.adapter = create_adapter(generation, base_url, self.paths.workspace)
+            if self.adapter is None or getattr(self.adapter, "base_url", None) != base_url:
+                self.adapter = create_adapter(generation, base_url, self.paths.workspace)
         if not self.adapter or not self.adapter.health():
             raise UnavailableError("The dedicated OpenCode runtime did not become healthy")
 

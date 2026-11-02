@@ -134,7 +134,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
         adapter = create_adapter(1, "http://127.0.0.1:41999", self.paths.workspace)
         with patch("scripts.analytics.opencode._LOCAL_OPENER.open", side_effect=TimeoutError("first probe stalled")) as opened:
             self.assertFalse(adapter.health())
-        self.assertEqual(opened.call_args.kwargs["timeout"], 2.0)
+        self.assertEqual(opened.call_args.kwargs["timeout"], 0.5)
 
         executable = self.paths.root / "opencode"
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -170,6 +170,62 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             result = manager._start_runtime({"executable": str(executable), "generation": 1})
         self.assertTrue(result.startswith("http://127.0.0.1:"))
         self.assertEqual(health.calls, 2)
+
+    def test_dead_persisted_runtime_discards_adapter_and_starts_a_new_runtime(self):
+        executable = self.paths.root / "opencode"
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o700)
+        self.paths.runtime.write_text(json.dumps({
+            "schema_version": 1,
+            "base_url": "http://127.0.0.1:41999",
+            "runtime_generation": 1,
+            "executable": str(executable),
+            "canonical_session_id": "session-kept",
+        }), encoding="utf-8")
+
+        class Adapter:
+            def __init__(self, base_url, healthy):
+                self.base_url = base_url
+                self.healthy = healthy
+
+            def health(self):
+                return self.healthy
+
+        dead = Adapter("http://127.0.0.1:41999", False)
+        restarted = []
+        created = []
+
+        def create(_generation, base_url, _workspace):
+            value = dead if base_url.endswith(":41999") else Adapter(base_url, True)
+            if value is not dead:
+                restarted.append(value)
+            created.append(value)
+            return value
+
+        class Process:
+            def poll(self):
+                return None
+            def terminate(self):
+                pass
+            def wait(self, timeout=None):
+                return 0
+            def kill(self):
+                pass
+
+        manager = AnalyticsRuntimeManager(
+            self.paths,
+            runtime={"supported": True, "generation": 1, "version": "1.19.0",
+                     "executable": str(executable)},
+            process_factory=lambda *_a, **_k: Process(), startup_timeout=2,
+        )
+        with patch("scripts.analytics.runtime.create_adapter", side_effect=create), \
+             patch("scripts.analytics.runtime.time.sleep", return_value=None):
+            result = manager.ensure()
+        self.assertNotEqual(result["base_url"], "http://127.0.0.1:41999")
+        self.assertEqual(created, [dead, restarted[0]])
+        self.assertIs(manager.adapter, restarted[0])
+        self.assertEqual(manager.adapter.base_url, result["base_url"])
+        self.assertEqual(result["canonical_session_id"], "session-kept")
 
     def test_open_code_adapters_select_v1_and_v2_routes_and_payloads(self):
         for generation in (1, 2):

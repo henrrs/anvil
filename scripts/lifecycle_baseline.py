@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import analytics_service  # noqa: E402
+import analytics_schema  # noqa: E402
 import runtime_state  # noqa: E402
 
 UNIT_NAME = analytics_service.SERVICE_NAME
@@ -83,6 +84,7 @@ def capture(args: argparse.Namespace) -> None:
     config = args.config_dir.absolute()
     install = args.installation.absolute()
     runtime_state_file = args.analytics_runtime_state.absolute()
+    context_database = runtime_state_file.parent / "context.db"
     systemd_dir = args.systemd_dir.absolute()
     unit = systemd_dir / UNIT_NAME
     port = args.port
@@ -129,6 +131,7 @@ def capture(args: argparse.Namespace) -> None:
     runtime_symlink = os.readlink(runtime_state_file) if runtime_state_file.is_symlink() else None
     if runtime_present:
         _atomic_copy(runtime_state_file, artifact_dir / "analytics-runtime.json", runtime_mode or 0o600)
+    database_baseline = analytics_schema.capture_rollback_state(context_database, artifact_dir)
 
     runtime_saved: dict[str, Any] = {}
     if runtime_present:
@@ -149,6 +152,7 @@ def capture(args: argparse.Namespace) -> None:
         "product_release": record.get("anvil_version"),
         "managed_manifest_sha256": manifest_hash,
         "configuration_present": config.is_dir(),
+        "configuration_profile_sha256": _hash(config / "opencode.jsonc") if config.is_dir() else None,
         "opencode_runtime": opencode,
         "analytics": {
             "service": {key: service.get(key) for key in ("installed", "unit_installed", "enabled",
@@ -169,10 +173,12 @@ def capture(args: argparse.Namespace) -> None:
             },
             "dependency_runtime": active_runtime_path,
             "dependencies_ready": dependencies_ready,
+            "context_database": database_baseline,
         },
         "artifacts": {
             "service_unit": "lifecycle-baseline/analytics-service.unit" if unit_owned else None,
             "runtime_json": "lifecycle-baseline/analytics-runtime.json" if runtime_present else None,
+            "context_database": database_baseline.get("artifact"),
         },
     }
     baseline_path = artifact_dir / "pre-operation-state.json"
@@ -209,12 +215,6 @@ def restore(args: argparse.Namespace) -> dict[str, Any]:
     else:
         analytics_service._stop_fallback(args.home, port)
 
-    if args.operation_id:
-        marker = analytics_service._data_home(args.home) / "anvil" / "analytics" / "operations" / f"{args.operation_id}.json"
-        if marker.exists() and not marker.is_symlink():
-            import analytics_dependencies
-            analytics_dependencies.restore_operation(analytics_service._data_home(args.home), args.operation_id)
-
     if systemd_dir.is_symlink() or (systemd_dir.exists() and not systemd_dir.is_dir()):
         raise ValueError("Analytics service unit directory became unsafe during rollback")
     current_managed_unit = (unit.is_file() and not unit.is_symlink()
@@ -246,6 +246,12 @@ def restore(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError("Analytics runtime state became a symbolic link during rollback")
         runtime_state_file.unlink()
 
+    database_baseline = analytics.get("context_database")
+    if isinstance(database_baseline, dict):
+        analytics_schema.restore_rollback_state(
+            database_baseline, args.backup / "lifecycle-baseline",
+            runtime_state_file.parent / "context.db")
+
     if analytics.get("systemd_manager"):
         if not _systemctl("daemon-reload"):
             raise ValueError("systemd user manager could not reload the restored Analytics unit")
@@ -273,7 +279,7 @@ def restore(args: argparse.Namespace) -> dict[str, Any]:
     return {"baseline": baseline, "service": service_before}
 
 
-def verify(args: argparse.Namespace) -> dict[str, Any]:
+def verify(args: argparse.Namespace, *, strict_configuration: bool = False) -> dict[str, Any]:
     baseline = _load(args.backup / "lifecycle-baseline" / "pre-operation-state.json")
     errors: list[str] = []
     config = args.config_dir.absolute()
@@ -287,9 +293,14 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
         pass
     if baseline.get("product_release") != record.get("anvil_version"):
         errors.append("product release differs from the captured baseline")
+    if bool(baseline.get("configuration_present")) != config.is_dir():
+        errors.append("configuration directory presence differs from the captured baseline")
     manifest_hash = _hash(config / ".anvil-managed.json") if config.is_dir() else None
     if baseline.get("managed_manifest_sha256") != manifest_hash:
         errors.append("managed configuration manifest differs from the captured baseline")
+    profile_hash = _hash(config / "opencode.jsonc") if config.is_dir() else None
+    if strict_configuration and baseline.get("configuration_profile_sha256") != profile_hash:
+        errors.append("OpenCode configuration profile differs from the captured baseline")
 
     runtime = runtime_state.discover(args.binary).get("runtime") or {}
     runtime = runtime if isinstance(runtime, dict) else {}
@@ -328,6 +339,13 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
                               if args.analytics_runtime_state.is_symlink() else None)
     if runtime_record.get("symlink_target") != actual_runtime_symlink:
         errors.append("Analytics runtime state link differs from the captured baseline")
+    database_baseline = analytics.get("context_database")
+    if isinstance(database_baseline, dict):
+        try:
+            analytics_schema.verify_restored_state(database_baseline,
+                                                   args.analytics_runtime_state.parent / "context.db")
+        except (OSError, ValueError) as exc:
+            errors.append(str(exc))
     unit_record = analytics["service_unit"]
     unit = args.systemd_dir / UNIT_NAME
     actual_unit_hash = _hash(unit) if unit.is_file() and not unit.is_symlink() else None
@@ -350,6 +368,26 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
             "errors": errors, "product_release": baseline.get("product_release"),
             "opencode_runtime": expected_runtime, "analytics_service": analytics["service"],
             "canonical_session": analytics["runtime_record"]["canonical_session"]}
+
+
+def verify_migration_plan(backup: Path, target_config: Path) -> dict[str, Any]:
+    """Prove the target schema transition has its declared rollback input before activation."""
+    baseline = _load(backup / "lifecycle-baseline" / "pre-operation-state.json")
+    target_config = target_config.absolute()
+    if not (target_config / "scripts" / "analytics" / "store.py").is_file():
+        return {"status": "NOT_APPLICABLE", "reason": "target release has no Analytics control store"}
+    state = baseline.get("analytics", {}).get("context_database")
+    if not isinstance(state, dict):
+        raise ValueError("snapshot does not record the Analytics schema rollback contract")
+    from analytics.store import migration_rollback_policy
+    policy = migration_rollback_policy(int(state.get("schema_version", -1)))
+    if policy["status"] != "READY" or policy["policy"] != state.get("rollback_policy"):
+        raise ValueError("target Analytics schema has no matching safe rollback contract")
+    if policy.get("restore_required"):
+        analytics_schema.verify_snapshot(state, backup / "lifecycle-baseline" / "context.db")
+    return {"status": "PASS", "source_schema": state.get("schema_version"),
+            "target_schema": state.get("target_schema_version"), "policy": state.get("rollback_policy"),
+            "restore_required": state.get("restore_required")}
 
 
 def main() -> int:
@@ -377,14 +415,22 @@ def main() -> int:
         item.add_argument("--binary", default=None)
         item.add_argument("--operation-id", default="")
         item.add_argument("--port", type=int, default=8765)
+        if action == "verify":
+            item.add_argument("--strict-configuration", action="store_true")
+    p_migration = sub.add_parser("verify-plan")
+    p_migration.add_argument("--backup", type=Path, required=True)
+    p_migration.add_argument("--target-config", type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.action == "capture":
             capture(args)
+        elif args.action == "verify-plan":
+            result = verify_migration_plan(args.backup, args.target_config)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "restore":
             print(json.dumps(restore(args), ensure_ascii=False, sort_keys=True))
         else:
-            result = verify(args)
+            result = verify(args, strict_configuration=args.strict_configuration)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             if result["status"] == "RESTORATION_FAILED":
                 for reason in result["errors"]:
