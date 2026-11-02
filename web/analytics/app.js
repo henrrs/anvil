@@ -149,6 +149,14 @@ function post(path, body = {}) {
   return api(path, { method: "POST", body: JSON.stringify(body) });
 }
 
+function resizeChatComposer() {
+  const input = $("chat-input");
+  if (!input) return;
+  input.style.height = "auto";
+  input.style.height = `${Math.min(224, Math.max(input.scrollHeight, 80))}px`;
+  input.style.overflowY = input.scrollHeight > 224 ? "auto" : "hidden";
+}
+
 function toast(message, kind = "info") {
   const region = $("toast-region");
   const item = node("div", `toast ${kind}`, message);
@@ -323,10 +331,15 @@ function renderTableWorkspace(workspace) {
   $("favorite-table").title = favorite ? "Remove from favorites" : "Add to favorites";
   $("favorite-table").setAttribute("aria-label", $("favorite-table").title);
   $("favorite-table").setAttribute("aria-pressed", String(favorite));
-  const canMaterialize = Boolean(state.selectedWarehouse && ["RUNNING"].includes(
-    state.warehouses.find((item) => item.warehouse_id === state.selectedWarehouse)?.state));
-  $("table-make-local").disabled = !canMaterialize;
-  $("table-make-local").title = canMaterialize ? "Create a bounded local snapshot" : "Select a running SQL warehouse first";
+  const localAction = $("table-make-local");
+  const freshness = String(workspace.coverage?.freshness || "UNKNOWN").toUpperCase();
+  const isCurrent = Boolean(workspace.coverage?.covered) && freshness === "CURRENT";
+  localAction.disabled = Boolean(workspace.activeOperation);
+  localAction.textContent = workspace.activeOperation ? "Updating…" : isCurrent ? "Local ✓"
+    : workspace.coverage?.snapshot_id ? "Update local copy" : "Keep local";
+  localAction.title = workspace.activeOperation ? "A local copy is being updated"
+    : isCurrent ? "This table has a verified current local copy" : "Reuse or create this table's local copy";
+  localAction.setAttribute("aria-label", localAction.textContent);
   document.querySelectorAll(".table-tab").forEach((tab) => {
     const active = tab.dataset.section === workspace.section;
     tab.classList.toggle("active", active);
@@ -365,8 +378,10 @@ function renderTableOverview(target, object, coverage, columns) {
   summary.append(node("p", "table-summary-main", [type, format, `${columns.length} columns`].filter(Boolean).join(" · ")));
   const details = [props.owner ? `Owner: ${props.owner}` : "", object.updated_at ? `Modified ${relativeTime(object.updated_at)}` : ""].filter(Boolean);
   if (details.length) summary.append(node("p", "table-summary-meta", details.join("  ·  ")));
-  summary.append(node("p", `table-local-state ${coverage?.snapshot_id ? "available" : "remote"}`,
-    coverage?.covered ? "Complete local snapshot" : coverage?.snapshot_id ? "Partial local snapshot" : "Remote only"));
+  const localStatus = coverage?.covered && coverage?.freshness === "CURRENT" ? "Local copy is current"
+    : coverage?.snapshot_id ? "Local copy available; freshness " + String(coverage.freshness || "unknown").toLowerCase().replaceAll("_", " ")
+      : "Remote only";
+  summary.append(node("p", "table-local-state " + (coverage?.snapshot_id ? "available" : "remote"), localStatus));
   target.append(summary);
   if (object.comment) {
     target.append(node("h2", "section-title", "Description"), node("p", "subtle-copy", object.comment));
@@ -465,14 +480,19 @@ function renderLocalData(target, workspace) {
   const coverage = workspace.coverage;
   const covered = Boolean(coverage?.covered);
   const card = node("div", `coverage-card ${covered ? "covered" : ""}`);
-  card.append(node("strong", "", covered ? "Complete local snapshot" : coverage?.snapshot_id ? "Partial local snapshot" : "No local snapshot"));
-  card.append(node("p", "", coverage?.reason || (covered ? "The local Parquet snapshot is ready for covered queries." : "Create a bounded snapshot when you need local execution.")));
+  card.append(node("strong", "", covered ? "Local copy covers this table" : coverage?.snapshot_id ? "Local copy needs attention" : "No local copy"));
+  card.append(node("p", "", coverage?.reason || (covered ? "The local Parquet copy is ready for queries within its coverage." : "Keep a local copy when you need local execution.")));
   const details = node("div", "table-facts");
   details.append(fact("Rows", coverage?.rows ? Number(coverage.rows).toLocaleString() : "Not available"),
     fact("Size", coverage?.bytes ? formatBytes(coverage.bytes) : "Not available"),
-    fact("Columns", coverage?.columns?.join(", ") || "Not available"),
-    fact("Snapshot", coverage?.snapshot_id ? coverage.snapshot_id.slice(0, 12) : "Not available"));
-  target.append(card, node("h2", "section-title", "Coverage"), details);
+    fact("Columns", coverage?.columns_mode === "ALL" ? "All columns" : coverage?.columns?.join(", ") || "Not available"),
+    fact("Rows included", !coverage?.snapshot_id ? "Not available" : coverage.rows_mode === "FILTERED" ? "Filtered rows" : "All rows"),
+    fact("Updated", relativeTime(coverage?.updated_at) || "Not available"));
+  const actions = node("div", "local-data-actions");
+  if (coverage?.dataset_id) actions.append(button("Remove local copy", "button secondary danger-text",
+    () => removeLocalDataset({ dataset_id: coverage.dataset_id, source_name: workspace.fullName }),
+    "Remove local copy of " + workspace.fullName));
+  target.append(card, node("h2", "section-title", "Coverage"), details, actions);
 }
 
 function renderQueryWorkspace(workspace) {
@@ -486,12 +506,25 @@ function renderQueryWorkspace(workspace) {
   $("route-badge").textContent = workspace.result?.route || workspace.route;
   $("query-message").textContent = workspace.message || "Read-only SQL. Results are capped for safety.";
   $("query-metrics").textContent = workspace.result
-    ? `${workspace.result.row_count ?? workspace.result.rows?.length ?? 0} rows · ${formatBytes(workspace.result.byte_count || 0)}` : "";
+    ? String(workspace.result.row_count ?? workspace.result.rows?.length ?? 0) + " rows · " +
+      formatBytes(workspace.result.byte_count || 0) +
+      (workspace.result.latency_ms == null ? "" : " · " + workspace.result.latency_ms + " ms")
+    : "";
   const results = $("query-results");
   results.replaceChildren();
   if (workspace.error) results.append(node("div", "error-card", workspace.error));
   else if (workspace.result) renderResults(results, workspace.result);
-  else results.append(node("div", "results-placeholder", ""), node("p", "", "Run a query to inspect results"));
+  else if (workspace.status === "running") {
+    const progress = node("div", "query-progress");
+    progress.setAttribute("role", "status");
+    progress.setAttribute("aria-live", "polite");
+    progress.append(node("span", "activity-spinner"), node("span", "", workspace.message || "Preparing query…"));
+    results.append(progress);
+  } else {
+    const placeholder = node("div", "results-placeholder", "");
+    placeholder.append(node("span", "", "⌁"), node("p", "", "Run a query to inspect results"));
+    results.append(placeholder);
+  }
 }
 
 function setQueryStatus(status, label = "") {
@@ -751,6 +784,7 @@ function renderHomeList(container, items, onClick = null) {
     const copy = node("span", "home-row-copy");
     copy.append(node("strong", "", item.title || item.name || "Analytics item"), node("small", "", item.subtitle || ""));
     row.append(copy);
+    if (item.updated_at) copy.append(node("small", "local-updated", "Updated " + relativeTime(item.updated_at)));
     if (item.state) row.append(node("span", `operation-pill ${String(item.state).toLowerCase()}`, item.state));
     container.append(row);
   }
@@ -774,16 +808,11 @@ function renderHome() {
     (item) => createQuery(item.sql || "", "Recent query"));
   const readyDatasets = state.datasets.filter((item) => item.state === "READY");
   $("home-dataset-count").textContent = String(readyDatasets.length);
-  renderHomeList($("home-local-datasets"), readyDatasets.slice(0, 5).map((item) => ({
-    title: tableName(item.source_name || item.payload?.plan?.source_name || item.operation_id || "Local dataset"),
-    subtitle: `${item.rows || item.row_count || 0} rows · ${item.state || "READY"}`,
-    icon: "●", source_name: item.source_name || item.payload?.plan?.source_name,
-  })),
-  (item) => item.source_name && openTable(item.source_name));
+  renderLocalDatasets(readyDatasets.slice(0, 5));
   const activeOps = state.operations.filter((item) => ["PLANNED", "RUNNING", "PAUSED", "VALIDATING"].includes(item.state));
   $("home-operation-count").textContent = String(activeOps.length);
   renderHomeList($("home-operations"), activeOps.map((item) => ({
-    title: item.source_name || item.operation_id || "Materialization",
+    title: item.source_name || "Materialization",
     subtitle: `${item.kind || "materialization"} · ${item.state}`,
     state: item.state, icon: "↻",
   })));
@@ -801,6 +830,36 @@ function renderHome() {
   $("home-operations-section").classList.toggle("hidden", !activeOps.length);
 }
 
+function renderLocalDatasets(items) {
+  const container = $("home-local-datasets");
+  container.replaceChildren();
+  for (const item of items) {
+    const sourceName = item.source_name || "Local dataset";
+    const row = node("div", "home-row static local-dataset-row");
+    row.append(node("span", "home-row-icon", "●"));
+    const copy = node("span", "home-row-copy");
+    const columnCount = Array.isArray(item.columns) ? item.columns.length : (item.columns_mode === "ALL" ? "all" : 0);
+    const detail = `${Number(item.rows || 0).toLocaleString()} rows · ${columnCount} columns · ${formatBytes(item.bytes || 0)}`;
+    copy.append(node("strong", "", tableName(sourceName)), node("small", "", detail));
+    row.append(copy);
+    row.append(button("Open", "text-button", () => openTable(sourceName), `Open ${sourceName}`));
+    row.append(button("Remove", "text-button danger-text", () => removeLocalDataset(item), `Remove local copy of ${sourceName}`));
+    container.append(row);
+  }
+}
+
+async function removeLocalDataset(dataset) {
+  const name = dataset.source_name || "this table";
+  if (!window.confirm("Remove Anvil's local copy of " + name + "? The remote Databricks table will not be changed.")) return;
+  try {
+    await api("/api/datasets/" + encodeURIComponent(dataset.dataset_id), { method: "DELETE" });
+    toast("Removed local copy of " + name + ".", "success");
+    await loadHomeData();
+    const workspace = queryWorkspace("table:" + name);
+    if (workspace) await refreshCoverage(workspace);
+  } catch (error) { toast(error.message, "error"); }
+}
+
 async function loadIdentity() {
   try {
     const me = await api("/api/me");
@@ -808,6 +867,18 @@ async function loadIdentity() {
     state.runtime = me.status?.runtime || {};
     state.databricks = me.status?.databricks || {};
     state.local = me.status?.local || {};
+    const modelPolicy = me.status?.model_policy || {};
+    const modelLabel = $("analytics-model-label");
+    if (modelLabel) {
+      modelLabel.textContent = modelPolicy.display_name || "GPT 6 Luna";
+      modelLabel.title = "Logical model: " + (modelPolicy.logical_model || "anvil-analytics") +
+        "\nProvider: " + (modelPolicy.provider || "opencode") +
+        "\nModel: " + (modelPolicy.model || "gpt-6-luna") +
+        "\nFallback: " + (modelPolicy.fallback || "NONE");
+      modelLabel.setAttribute("aria-label", modelLabel.textContent + ". Logical model " +
+        (modelPolicy.logical_model || "anvil-analytics") + ". Provider " +
+        (modelPolicy.provider || "opencode") + ". Fallback " + (modelPolicy.fallback || "NONE"));
+    }
     $("user-name").textContent = me.name || "Anvil user";
     $("user-avatar").textContent = (me.name || "A").trim().charAt(0).toUpperCase() || "A";
     $("workspace-label").textContent = me.workspace ? new URL(me.workspace).host : "Global workspace";
@@ -994,33 +1065,195 @@ function addChatMessage(role, value) {
   if (thread.querySelector(".welcome-message")) thread.replaceChildren();
   const item = node("article", `chat-message ${role}`);
   item.append(node("div", "message-role", role === "user" ? "YOU" : "ANVIL"));
-  const text = node("p", "message-text", value);
+  const text = role === "assistant" ? node("div", "message-text markdown-body") : node("p", "message-text", value);
+  if (role === "assistant") renderSafeMarkdown(text, value);
   item.append(text);
   thread.append(item);
   thread.scrollTop = thread.scrollHeight;
   return text;
 }
 
+function renderSafeMarkdown(container, value) {
+  container.replaceChildren();
+  const lines = String(value || "").replace(/\r\n?/g, "\n").split("\n");
+  const appendInline = (parent, text) => {
+    const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
+    let cursor = 0;
+    for (const match of text.matchAll(pattern)) {
+      if (match.index > cursor) parent.append(document.createTextNode(text.slice(cursor, match.index)));
+      const token = match[0];
+      let element;
+      if (token.startsWith("`")) {
+        element = node("code", "", token.slice(1, -1));
+      } else if (token.startsWith("**")) {
+        element = node("strong", "", token.slice(2, -2));
+      } else if (token.startsWith("*")) {
+        element = node("em", "", token.slice(1, -1));
+      } else {
+        const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+        let target;
+        try { target = new URL(linkMatch[2], window.location.href); } catch { target = null; }
+        if (!target || !["https:", "http:"].includes(target.protocol)) {
+          parent.append(document.createTextNode(token));
+          cursor = match.index + token.length;
+          continue;
+        }
+        element = node("a", "", linkMatch[1]);
+        element.href = target.href;
+        element.target = "_blank";
+        element.rel = "noopener noreferrer";
+      }
+      parent.append(element);
+      cursor = match.index + token.length;
+    }
+    if (cursor < text.length) parent.append(document.createTextNode(text.slice(cursor)));
+  };
+  const isTableSeparator = (line) => line.includes("|") &&
+    /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+  const tableCells = (line) => {
+    const value = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+    const cells = [];
+    let cell = "";
+    let escaped = false;
+    for (const char of value) {
+      if (char === "|" && !escaped) { cells.push(cell.trim()); cell = ""; continue; }
+      if (char === "\\" && !escaped) { escaped = true; cell += char; continue; }
+      escaped = false;
+      cell += char;
+    }
+    cells.push(cell.trim());
+    return cells.map((entry) => entry.replaceAll("\\|", "|"));
+  };
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index];
+    if (!line.trim()) { index += 1; continue; }
+    if (line.startsWith("```")) {
+      const code = [];
+      index += 1;
+      while (index < lines.length && !lines[index].startsWith("```")) code.push(lines[index++]);
+      if (index < lines.length) index += 1;
+      const pre = node("pre", "");
+      pre.append(node("code", "", code.join("\n")));
+      container.append(pre);
+      continue;
+    }
+    if (index + 1 < lines.length && line.includes("|") && isTableSeparator(lines[index + 1])) {
+      const headers = tableCells(line);
+      const width = Math.min(headers.length, tableCells(lines[index + 1]).length);
+      const table = node("table", "markdown-table");
+      const head = node("thead", "");
+      const headerRow = node("tr", "");
+      for (const value of headers.slice(0, width)) {
+        const cell = node("th", "");
+        cell.scope = "col";
+        appendInline(cell, value);
+        headerRow.append(cell);
+      }
+      head.append(headerRow);
+      const body = node("tbody", "");
+      index += 2;
+      while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+        const values = tableCells(lines[index++]);
+        const row = node("tr", "");
+        for (let column = 0; column < width; column += 1) {
+          const cell = node("td", "");
+          appendInline(cell, values[column] || "");
+          row.append(cell);
+        }
+        body.append(row);
+      }
+      table.append(head, body);
+      const scroller = node("div", "markdown-table-scroll");
+      scroller.setAttribute("role", "region");
+      scroller.setAttribute("aria-label", "Scrollable answer table");
+      scroller.tabIndex = 0;
+      scroller.append(table);
+      container.append(scroller);
+      continue;
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      const element = node(`h${heading[1].length}`, "");
+      appendInline(element, heading[2]);
+      container.append(element);
+      index += 1;
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      const list = node("ul", "");
+      while (index < lines.length && /^\s*[-*]\s+/.test(lines[index])) {
+        const item = node("li", "");
+        appendInline(item, lines[index++].replace(/^\s*[-*]\s+/, ""));
+        list.append(item);
+      }
+      container.append(list);
+      continue;
+    }
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const list = node("ol", "");
+      while (index < lines.length && /^\s*\d+\.\s+/.test(lines[index])) {
+        const item = node("li", "");
+        appendInline(item, lines[index++].replace(/^\s*\d+\.\s+/, ""));
+        list.append(item);
+      }
+      container.append(list);
+      continue;
+    }
+    const paragraph = node("p", "");
+    while (index < lines.length && lines[index].trim() &&
+           !lines[index].startsWith("```") && !/^#{1,3}\s+/.test(lines[index]) &&
+           !/^\s*[-*]\s+/.test(lines[index]) && !/^\s*\d+\.\s+/.test(lines[index])) {
+      if (paragraph.childNodes.length) paragraph.append(document.createElement("br"));
+      appendInline(paragraph, lines[index++]);
+    }
+    container.append(paragraph);
+  }
+}
+
 async function sendChat(prefill = "") {
   const prompt = (prefill || $("chat-input").value).trim();
   if (!prompt || state.chatBusy) return;
   $("chat-input").value = "";
+  resizeChatComposer();
   state.chatBusy = true;
   $("send-chat").disabled = true;
   addChatMessage("user", prompt);
-  const answer = addChatMessage("assistant", "Preparing Analytics context…");
+  let answerText = "Preparing Analytics context…";
+  const answer = addChatMessage("assistant", answerText);
+  const activity = node("div", "assistant-activity");
+  activity.setAttribute("role", "status");
+  activity.setAttribute("aria-live", "polite");
+  activity.append(node("span", "activity-spinner"), node("span", "", "Preparing Analytics session…"));
+  answer.closest(".chat-message").insertBefore(activity, answer);
+  answer.classList.add("hidden");
+  const showAnswer = () => {
+    activity.remove();
+    answer.classList.remove("hidden");
+  };
   let receivedText = false;
   try {
     await apiClient.streamChat({ prompt, context: buildChatContext(),
       deep_investigation: $("deep-investigation").checked }, (event, payload) => {
-      if (event === "status") answer.textContent = payload.message || "Anvil is thinking…";
-      if (event === "result") { answer.textContent = payload.text || ""; receivedText = true; }
-      if (event === "chunk") { answer.textContent += payload.text || ""; receivedText = true; }
+      if (event === "status") activity.lastChild.textContent = payload.message || "Asking Anvil in the canonical session…";
+      if (event === "result") { showAnswer(); answerText = payload.text || ""; renderSafeMarkdown(answer, answerText); receivedText = true; }
+      if (event === "chunk") {
+        showAnswer();
+        if (!receivedText) answerText = "";
+        answerText += payload.text || "";
+        renderSafeMarkdown(answer, answerText);
+        receivedText = true;
+      }
       $("chat-thread").scrollTop = $("chat-thread").scrollHeight;
     });
-    if (!receivedText && answer.textContent.startsWith("Preparing")) answer.textContent = "Anvil completed without a text response.";
+    if (!receivedText && answerText.startsWith("Preparing")) {
+      showAnswer();
+      answerText = "Anvil completed without a text response.";
+      renderSafeMarkdown(answer, answerText);
+    }
   } catch (error) {
-    answer.textContent = `I couldn't complete that request: ${error.message}`;
+    showAnswer();
+    answerText = `I couldn't complete that request: ${error.message}`;
+    renderSafeMarkdown(answer, answerText);
     toast(error.message, "error");
   } finally {
     state.chatBusy = false;
@@ -1043,13 +1276,16 @@ async function runQuery() {
   }
   workspace.status = "running";
   workspace.result = null;
-  workspace.message = "Running read-only query…";
+  workspace.message = workspace.route === "AUTO" ? "Checking local coverage…"
+    : workspace.route === "LOCAL" ? "Preparing local query…" : "Preparing Databricks query…";
   renderQueryWorkspace(workspace);
   try {
     let explain = null;
     if (workspace.route === "AUTO") {
       explain = await post("/api/query/explain", { sql: workspace.sql });
       workspace.explain = explain;
+      workspace.message = explain.route === "LOCAL" ? "Running query locally…" : "Preparing Databricks query…";
+      renderQueryWorkspace(workspace);
       if (explain.route === "DATABRICKS" && !state.selectedWarehouse) {
         throw new Error("Select a SQL Warehouse for this query. Local queries remain available when coverage is complete.");
       }
@@ -1057,7 +1293,11 @@ async function runQuery() {
     const remoteRoute = workspace.route === "DATABRICKS" || (workspace.route === "AUTO" && explain?.route === "DATABRICKS");
     const selected = state.warehouses.find((item) => item.warehouse_id === warehouseIdForQuery());
     if (remoteRoute && selected && ["STOPPED", "STARTING", "STOPPING"].includes(selected.state)) {
-      workspace.message = selected.state === "RUNNING" ? "Running read-only query…" : "Starting SQL Warehouse…";
+      workspace.message = selected.state === "RUNNING" ? "Executing query on Databricks…" : "Starting SQL Warehouse…";
+      renderQueryWorkspace(workspace);
+    } else {
+      workspace.message = explain?.route === "LOCAL" || workspace.route === "LOCAL"
+        ? "Executing query locally…" : "Executing query on Databricks…";
       renderQueryWorkspace(workspace);
     }
     const result = await post("/api/query", { sql: workspace.sql, route: workspace.route,
@@ -1102,36 +1342,54 @@ function openMaterialize() {
   const workspace = activeTableWorkspace();
   if (!workspace) return toast("Open a table first.", "error");
   const columns = workspace.detail?.columns || [];
+  $("materialize-title").textContent = workspace.coverage?.snapshot_id ? "Update local copy" : "Keep table available locally";
   $("materialize-columns").value = columns.slice(0, 5).map((item) => item.name).filter(Boolean).join(", ");
+  $("materialize-all-columns").checked = false;
+  $("materialize-selected-columns").checked = true;
   $("confirm-full-table").checked = false;
+  $("confirm-full-table-row").classList.add("hidden");
+  $("materialize-selected-field").classList.remove("hidden");
   $("materialize-columns").disabled = false;
+  $("materialize-all-rows").checked = true;
+  $("materialize-filtered-rows").checked = false;
   $("materialize-filter").value = "";
+  $("materialize-filter").disabled = true;
   $("materialize-feedback").textContent = state.selectedWarehouse
-    ? "Only listed columns are fetched. Full-table copy requires explicit confirmation."
-    : "Choose a SQL Warehouse before starting a bounded transfer.";
+    ? "Anvil reuses covered local data when possible. A warehouse starts only when a transfer is needed."
+    : "Anvil selects an available warehouse only when a transfer is needed.";
   $("materialize-dialog").showModal();
 }
 
 async function startMaterialization() {
   const workspace = activeTableWorkspace();
   if (!workspace) return;
-  const columns = $("confirm-full-table").checked ? ["*"] : $("materialize-columns").value.split(",").map((item) => item.trim()).filter(Boolean);
+  const allColumns = $("materialize-all-columns").checked;
+  const columns = allColumns ? ["*"] : $("materialize-columns").value.split(",").map((item) => item.trim()).filter(Boolean);
   if (!columns.length) return toast("Choose at least one column.", "error");
-  if (!state.selectedWarehouse) return showWarehouseRequired("Select a SQL Warehouse before materializing data.");
-  const fullTableConfirmed = $("confirm-full-table").checked;
-  const mib = Math.max(1, Math.min(1024, Number($("materialize-mib").value) || 512));
-  const rows = Math.max(1, Math.min(1_000_000, Number($("materialize-rows").value) || 100_000));
+  const fullTableConfirmed = allColumns && $("confirm-full-table").checked;
+  if (allColumns && !fullTableConfirmed) return toast("Confirm that you want to keep all columns locally.", "error");
+  const filteredRows = $("materialize-filtered-rows").checked;
+  const predicate = filteredRows ? $("materialize-filter").value.trim() : "";
+  if (filteredRows && !predicate) return toast("Enter a filter for filtered rows.", "error");
   $("confirm-materialize").disabled = true;
-  $("materialize-feedback").textContent = "Submitting a bounded materialization…";
+  $("materialize-feedback").textContent = "Preparing local copy…";
   try {
     const operation = await post("/api/materializations", {
-      source_name: workspace.fullName, columns,
-      predicate: $("materialize-filter").value.trim(), warehouse_id: state.selectedWarehouse,
-      max_rows: rows, max_bytes: Math.trunc(mib * 1024 * 1024), full_table_confirmed: fullTableConfirmed,
+      source_name: workspace.fullName, columns, predicate,
+      warehouse_id: state.selectedWarehouse || "",
+      max_rows: 1000000, max_bytes: 1073741824, full_table_confirmed: fullTableConfirmed,
     });
+    if (operation.reused) {
+      $("materialize-feedback").textContent = operation.message || "The current local copy covers this request.";
+      await refreshCoverage(workspace);
+      await loadHomeData();
+      return;
+    }
     workspace.activeOperation = operation.operation_id;
+    workspace.operationPhase = operation.phase || operation.state;
     $("cancel-materialization").disabled = false;
-    $("materialize-feedback").textContent = `${operation.state} · ${operation.operation_id}`;
+    $("materialize-feedback").textContent = materializationPhaseText(workspace.operationPhase);
+    renderTableWorkspace(workspace);
     pollMaterialization(operation.operation_id, workspace);
   } catch (error) { $("materialize-feedback").textContent = error.message; }
   finally { $("confirm-materialize").disabled = false; }
@@ -1140,18 +1398,48 @@ async function startMaterialization() {
 async function pollMaterialization(id, workspace) {
   if (workspace.activeOperation !== id) return;
   try {
-    const operation = await api(`/api/materializations/${encodeURIComponent(id)}`);
-    $("materialize-feedback").textContent = `${operation.state} · ${operation.rows || 0} rows · ${formatBytes(operation.bytes || 0)}`;
+    const operation = await api("/api/materializations/" + encodeURIComponent(id));
+    workspace.operationPhase = operation.phase || operation.state;
+    $("materialize-feedback").textContent = operation.state === "READY"
+      ? "Local copy ready · " + Number(operation.rows || 0).toLocaleString() +
+        " rows · " + formatBytes(operation.bytes || 0)
+      : materializationPhaseText(workspace.operationPhase);
     if (["READY", "FAILED", "CANCELLED"].includes(operation.state)) {
-      if (operation.state === "READY") toast("Local snapshot is ready.", "success");
+      if (operation.state === "READY") {
+        toast("Local copy is ready.", "success");
+        await loadHomeData();
+      }
       if (operation.state === "FAILED") toast("Materialization failed. Review provider status and retry.", "error");
       workspace.activeOperation = "";
+      workspace.operationPhase = "";
       $("cancel-materialization").disabled = true;
       await refreshCoverage(workspace);
       return;
     }
+    renderTableWorkspace(workspace);
   } catch (error) { $("materialize-feedback").textContent = error.message; }
   window.setTimeout(() => pollMaterialization(id, workspace), 1800);
+}
+
+function materializationPhaseText(phase) {
+  const labels = {
+    PLANNED: "Preparing local copy…",
+    STARTING_WAREHOUSE: "Starting SQL Warehouse…",
+    EXECUTING: "Executing Databricks query…",
+    REMOTE_QUERY: "Executing Databricks query…",
+    SUBMITTED: "Waiting for Databricks query…",
+    FETCHING: "Preparing result transfer…",
+    DOWNLOADING_ARROW: "Downloading Arrow data…",
+    WRITING_PARQUET: "Writing local Parquet files…",
+    VALIDATING: "Validating local copy…",
+    ACTIVATING: "Activating local copy…",
+    RUNNING: "Creating local copy…",
+    PAUSED: "Local copy paused",
+    FAILED: "Local copy failed",
+    CANCELLED: "Local copy creation canceled",
+    CANCELED: "Local copy creation canceled",
+  };
+  return labels[String(phase || "").toUpperCase()] || "Creating local copy…";
 }
 
 async function refreshCoverage(workspace) {
@@ -1174,7 +1462,7 @@ async function loadRecentQueries() {
 async function loadHomeData() {
   const results = await Promise.allSettled([
     api("/api/query/history?limit=10"),
-    api("/api/materializations?limit=20"),
+    api("/api/datasets?limit=100"),
     api("/api/operations"),
     api("/api/investigations/recent?limit=5"),
   ]);
@@ -1191,7 +1479,7 @@ function renderOperationsFooter() {
   const active = state.operations.filter((item) => ["PLANNED", "RUNNING", "PAUSED", "VALIDATING"].includes(item.state));
   const label = active.length ? `${active.length} active operation${active.length === 1 ? "" : "s"}` : "No active operations";
   $("operations-label").textContent = label;
-  $("operations-label").title = active.map((item) => `${item.operation_id}: ${item.state}`).join("\n") || "No active Analytics operations";
+  $("operations-label").title = active.map((item) => (item.source_name || "Local data") + ": " + item.state).join("\n") || "No active Analytics operations";
   $("operations-label").classList.toggle("hidden", !active.length);
 }
 
@@ -1375,6 +1663,7 @@ function installHandlers() {
   });
   $("refresh-warehouses").addEventListener("click", () => loadWarehouses(true));
   $("send-chat").addEventListener("click", () => sendChat());
+  $("chat-input").addEventListener("input", resizeChatComposer);
   $("chat-input").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendChat(); }
   });
@@ -1404,7 +1693,25 @@ function installHandlers() {
     clearChatButton.focus();
   });
   $("confirm-materialize").addEventListener("click", startMaterialization);
-  $("confirm-full-table").addEventListener("change", (event) => { $("materialize-columns").disabled = event.target.checked; });
+  $("materialize-all-columns").addEventListener("change", () => {
+    const all = $("materialize-all-columns").checked;
+    $("confirm-full-table-row").classList.toggle("hidden", !all);
+    $("materialize-selected-field").classList.toggle("hidden", all);
+    $("materialize-columns").disabled = all;
+    if (!all) $("confirm-full-table").checked = false;
+  });
+  $("materialize-selected-columns").addEventListener("change", () => {
+    $("confirm-full-table-row").classList.add("hidden");
+    $("materialize-selected-field").classList.remove("hidden");
+    $("materialize-columns").disabled = false;
+    $("confirm-full-table").checked = false;
+  });
+  $("materialize-all-rows").addEventListener("change", () => {
+    $("materialize-filter").disabled = !$("materialize-filtered-rows").checked;
+  });
+  $("materialize-filtered-rows").addEventListener("change", () => {
+    $("materialize-filter").disabled = !$("materialize-filtered-rows").checked;
+  });
   $("cancel-materialization").addEventListener("click", async () => {
     const workspace = activeTableWorkspace();
     if (!workspace?.activeOperation) return;
@@ -1440,6 +1747,7 @@ function installHandlers() {
 
 async function start() {
   installHandlers();
+  resizeChatComposer();
   applyLayout();
   renderWorkspaceTabs();
   renderCatalogView();

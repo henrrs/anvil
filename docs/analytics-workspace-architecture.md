@@ -47,21 +47,25 @@ The session titled `anvil-global-analytics` represents active analytical context
 
 The canonical OpenCode session is working context, not durable memory. Losing it does not remove catalog metadata, findings, query history, operations or snapshots. Repository OpenCode sessions are isolated because the runtime uses the dedicated global Analytics workspace directory. Startup probes retry short local health requests inside a bounded deadline; service readiness includes both the OpenCode runtime and the canonical session.
 
+Analytics prompt requests select the explicit OpenCode Models provider/model reference `opencode/gpt-6-luna`. The selected model is exposed in runtime status. Provider/model errors reach the UI; Analytics does not silently route the request to another model.
+
 ## State and optional engines
 
 | Plane | Store | Responsibility |
 |---|---|---|
-| Control/context | SQLite with WAL | Catalog metadata, knowledge, query history, runtime/task sessions, operations and materialization provenance |
+| Control/context | SQLite with WAL | Catalog metadata, knowledge, query history, runtime/task sessions, operations, local-dataset identity and materialization provenance |
 | Query/runtime | Release-pinned Python virtual environment under Anvil XDG data | Run the Analytics service and its exact required DuckDB/PyArrow versions |
 | Query engine | Required DuckDB in-memory connection | Execute the intentionally restricted local SQL subset against Parquet |
 | Transfer codec | Required PyArrow | Validate bounded Arrow chunks and read/write Parquet snapshots |
-| Local data | Parquet files with a checksummed manifest and current pointer | Persist acquired data independently of the OpenCode context |
+| Local data | Workspace-scoped Parquet generations, checksummed manifests and an atomic dataset-state pointer | Persist one logical copy per workspace/table independently of the OpenCode context |
 
-SQLite migrations are versioned and transactional. Runtime identity is a separate atomic JSON file so it can be inspected without querying OpenCode's private database. Dataset paths and state are permission-restricted and reject symlinked roots/files.
+SQLite migrations are versioned and transactional. Runtime identity is a separate atomic JSON file so it can be inspected without querying OpenCode's private database. Dataset paths and state are permission-restricted and reject symlinked roots/files. A dataset-state pointer records CURRENT, one PREVIOUS generation with a 24-hour expiry, and hidden STAGING operations. Shared reader locks keep a generation alive during DuckDB execution; publication, pruning and explicit removal use an exclusive lock. SQLite's local-dataset registry is repairable from the verified filesystem pointer.
+
+DuckDB returns query data through Arrow before converting values for the API. This keeps the local query path aligned with the required PyArrow runtime and supports dates, timezone-aware and naive timestamps, decimals, binary values, nulls, arrays, maps, structs and nested combinations consistently with the transfer codec. Nested values remain structured in API results, decimal and temporal values use stable text forms, and binary values use Base64. The UI shows the logical Analytics model policy as GPT 6 Luna; provider/model identity and the no-fallback setting are available in the accessible label details and service status.
 
 ## Shared Databricks capability
 
-Catalog, SQL warehouse discovery, warehouse start, preview, SQL and Arrow transfer operations route through `scripts/analytics/databricks.py` to the existing `scripts/databricks.py` capability. Its `ComputePort` and metadata adapter retain the existing CLI/SDK strategy and Anvil-owned auth boundary. Warehouse discovery returns sanitized display metadata and caches it briefly. A stopped warehouse starts only after route resolution selects Databricks SQL; STARTING is polled without duplicate starts, and LOCAL/AUTO-to-LOCAL never starts compute. The UI never reads tokens or warehouse HTTP paths. Metadata calls do not invoke a model. Preview, SQL and materialization occur only after user intent; an agent request reaches the same capability through the bounded local tool bridge.
+Catalog, SQL warehouse discovery, warehouse start, preview, SQL and Arrow transfer operations route through `scripts/analytics/databricks.py` to the existing `scripts/databricks.py` capability. Its `ComputePort` and metadata adapter retain the existing CLI/SDK strategy and Anvil-owned auth boundary. Warehouse discovery returns sanitized display metadata and caches it briefly. Remote SQL can start a selected stopped warehouse after a user query; explicit Make local can choose an available stopped warehouse when transfer is needed. STARTING is polled without duplicate starts, and LOCAL/AUTO-to-LOCAL never starts compute. The UI never reads tokens or warehouse HTTP paths. Metadata calls do not invoke a model. Preview, SQL and materialization occur only after user intent; an agent request reaches the same capability through the bounded local tool bridge.
 
 ## Catalog metadata lifecycle
 

@@ -23,6 +23,7 @@ ROOT = pathlib.Path(sys.argv[1]).resolve()
 ANVIL_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 sys.path.insert(0, str(ROOT / "scripts"))
 import lifecycle_state  # noqa: E402
+from analytics.store import SCHEMA_VERSION as ANALYTICS_SCHEMA_VERSION  # noqa: E402
 from semver import compare as compare_versions, parse as parse_version, supported_migration  # noqa: E402
 CANDIDATE_V2 = pathlib.Path(sys.argv[2]).resolve()
 VERSION_V2 = sys.argv[3]
@@ -1251,8 +1252,13 @@ def managed_file_repair_test(temp: pathlib.Path) -> None:
     check(file_hash(user_script) == user_hash,
           "upgrade overwrote an unowned user file during managed drift repair")
     with sqlite3.connect(context_database) as connection:
-        check(connection.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 3
-              and "progress_current" in {row[1] for row in connection.execute("PRAGMA table_info(catalog_hydration)")},
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        check(connection.execute("SELECT max(version) FROM schema_migrations").fetchone()[0]
+              == ANALYTICS_SCHEMA_VERSION
+              and "progress_current" in {row[1] for row in connection.execute(
+                  "PRAGMA table_info(catalog_hydration)")}
+              and "local_datasets" in tables,
               "successful convergence did not migrate the lifecycle-owned Analytics control store")
     check(lifecycle_state_for_env(env) == "READY", "verified managed drift upgrade did not converge to READY")
     database_after_success = file_hash(context_database)

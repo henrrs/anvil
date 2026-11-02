@@ -6,18 +6,21 @@ import getpass
 import json
 import logging
 import os
+import re
 import shutil
 import threading
 import time
 from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import replace
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from .catalog import CatalogService
 from .context import ContextResolver
-from .coverage import CoverageRegistry
+from .coverage import CoverageRegistry, dataset_identity, schema_identity
 from .databricks import ComputePort, SharedDatabricksCatalogClient, _shared_module
 from .errors import (AnalyticsError, ConflictError, CoverageError, ProviderError,
                      UnavailableError, ValidationError)
@@ -25,7 +28,7 @@ from .materialization import MaterializationService
 from .models import MaterializationState, OperationRecord, QueryRoute
 from .opencode import create_adapter
 from .paths import AnalyticsPaths
-from .planner import ensure_read_only, parse_local_query
+from .planner import QueryPlan, ensure_read_only, parse_local_query
 from .query import DuckDBLocalEngine, QueryRouter
 from .runtime import AnalyticsRuntimeManager
 from .sessions import AnalyticsSessionManager
@@ -37,7 +40,29 @@ MAX_CHAT_CHARS = 16_000
 MAX_ACTIVE_CONTEXT_CHARS = 10_000
 WAREHOUSE_CACHE_TTL_SECONDS = 60
 WAREHOUSE_STATES = {"RUNNING", "STOPPED", "STARTING", "STOPPING", "DELETED", "UNAVAILABLE", "UNKNOWN"}
+@dataclass(frozen=True)
+class AnalyticsModelPolicy:
+    logical_model: str = "anvil-analytics"
+    display_name: str = "GPT 6 Luna"
+    provider_id: str = "opencode"
+    model_id: str = "gpt-6-luna"
+    fallback: str = "NONE"
+
+    def selector(self) -> dict[str, str]:
+        return {"providerID": self.provider_id, "modelID": self.model_id}
+
+    def as_dict(self) -> dict[str, str]:
+        return {"logical_model": self.logical_model, "display_name": self.display_name,
+                **self.selector(), "fallback": self.fallback}
+
+
+ANALYTICS_MODEL_POLICY = AnalyticsModelPolicy()
 _LOG = logging.getLogger(__name__)
+
+
+def _analytics_event(level: int, event: str, **details: Any) -> None:
+    _LOG.log(level, json.dumps({"event": event, **details}, sort_keys=True,
+                               separators=(",", ":"), default=str))
 
 
 class AnalyticsService:
@@ -405,6 +430,7 @@ class AnalyticsService:
         return {
             "service": service_state,
             "url": self.url,
+            "model_policy": ANALYTICS_MODEL_POLICY.as_dict(),
             "databricks": {"status": databricks_workspace,
                            "configuration": "READY" if profile.get("name") else "NOT_CONFIGURED",
                            "authentication": "NOT_CHECKED", "workspace": databricks_workspace,
@@ -484,7 +510,10 @@ class AnalyticsService:
         if plan is None:
             return {"route": "DATABRICKS", "local_coverage": False,
                     "reason": "This SQL shape is not in Anvil's provable local subset."}
-        decision = self.coverage.covers(plan)
+        workspace_identity = self._workspace_identity()
+        remote_schema, source_version = self._table_coverage_metadata(plan.source_name)
+        decision = self.coverage.covers(plan, workspace_identity=workspace_identity,
+                                        remote_schema=remote_schema, source_version=source_version)
         if decision.covered and local.available:
             return {"route": "LOCAL", "local_coverage": True,
                     "snapshot_id": decision.snapshot_id, "reason": decision.reason}
@@ -495,8 +524,13 @@ class AnalyticsService:
 
     def run_query(self, sql: str, *, route: str = "AUTO", warehouse_id: str = "",
                   profile: str | None = None, timeout: int = 120) -> dict[str, Any]:
+        plan = parse_local_query(ensure_read_only(sql))
+        remote_schema, source_version = (self._table_coverage_metadata(plan.source_name)
+                                         if plan else (None, None))
         return self.query.execute(sql, route=route, warehouse_id=warehouse_id or None,
-                                  profile=profile, timeout=timeout)
+                                  profile=profile, timeout=timeout,
+                                  workspace_identity=self._workspace_identity(),
+                                  remote_schema=remote_schema, source_version=source_version)
 
     def query_history(self, *, limit: int = 50) -> list[dict[str, Any]]:
         return self.store.query_recent(limit=max(1, min(limit, 100)))
@@ -593,27 +627,185 @@ class AnalyticsService:
                            "At least one result was truncated, so equality could not be proven.")}
 
     def local_coverage(self, full_name: str, *, sql: str = "") -> dict[str, Any]:
+        workspace_identity = self._workspace_identity()
         if sql:
             plan = parse_local_query(ensure_read_only(sql))
-            if plan is None or plan.source_name != full_name:
+            if plan is None or plan.source_name.casefold() != full_name.casefold():
                 return {"covered": False, "reason": "SQL cannot be proven against one local source."}
-            decision = self.coverage.covers(plan)
+            remote_schema, source_version = self._table_coverage_metadata(full_name)
+            decision = self.coverage.covers(plan, workspace_identity=workspace_identity,
+                                            remote_schema=remote_schema, source_version=source_version)
             return {"covered": decision.covered, "reason": decision.reason,
                     "missing_columns": list(decision.missing_columns),
-                    "snapshot_id": decision.snapshot_id}
-        snapshot = self.coverage.current(full_name)
+                    "snapshot_id": decision.snapshot_id, "state": decision.state,
+                    "reasons": list(decision.reasons)}
+        snapshot = self.coverage.current(full_name, workspace_identity)
         if not snapshot:
-            return {"covered": False, "reason": "No local snapshot exists for this source."}
+            return {"covered": False, "reason": "No local copy exists for this table.",
+                    "state": "NOT_COVERED", "freshness": "UNKNOWN"}
         manifest = snapshot["manifest"]
-        return {"covered": bool(manifest.get("complete")), "snapshot_id": snapshot["snapshot_id"],
-                "columns": manifest.get("columns", []), "predicate": manifest.get("predicate", ""),
+        columns_mode = str(manifest.get("columns_mode") or
+                           ("ALL" if manifest.get("all_columns") else "SELECTED")).upper()
+        selected_columns = manifest.get("selected_columns")
+        if not isinstance(selected_columns, list):
+            selected_columns = [] if columns_mode == "ALL" else manifest.get("columns", [])
+        coverage_columns = (("*",) if columns_mode == "ALL" else
+                            tuple(str(item) for item in manifest.get("columns", []) if isinstance(item, str)))
+        remote_schema, source_version = self._table_coverage_metadata(full_name)
+        own_coverage = self.coverage.covers(
+            QueryPlan("", full_name, coverage_columns, str(manifest.get("predicate") or "")),
+            workspace_identity=workspace_identity, remote_schema=remote_schema,
+            source_version=source_version)
+        freshness = ("STALE_SCHEMA" if "schema_changed" in own_coverage.reasons else
+                     "STALE_DATA" if "source_version_changed" in own_coverage.reasons else
+                     "CURRENT" if own_coverage.state == "FULLY_COVERED" else "UNKNOWN")
+        return {"covered": own_coverage.covered, "state": own_coverage.state,
+                "freshness": freshness, "reason": own_coverage.reason,
+                "reasons": list(own_coverage.reasons), "snapshot_id": snapshot["snapshot_id"],
+                "dataset_id": dataset_identity(workspace_identity, full_name),
+                "columns": (manifest.get("columns", []) if columns_mode == "ALL" else selected_columns),
+                "predicate": manifest.get("predicate", ""),
                 "source_version": manifest.get("source_version", ""),
-                "rows": manifest.get("row_count", 0), "bytes": manifest.get("bytes", 0)}
+                "rows": manifest.get("row_count", 0),
+                "bytes": manifest.get("parquet_bytes", manifest.get("bytes", 0)),
+                "updated_at": manifest.get("created_at", ""),
+                "columns_mode": columns_mode,
+                "rows_mode": manifest.get("rows_mode") or
+                    ("FILTERED" if manifest.get("predicate") else "FULL"),
+                "workspace_identity": manifest.get("workspace_identity", "")}
+
+    def local_datasets(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        workspace_identity = self._workspace_identity()
+        if not workspace_identity:
+            return []
+        return self.coverage.list_local_datasets(workspace_identity, limit=limit)
+
+    def delete_local_dataset(self, dataset_id: str) -> dict[str, Any]:
+        # Serialize removal with materialization submission so a planned job
+        # cannot appear after the running-operation check but before deletion.
+        with self._job_guard:
+            return self._delete_local_dataset_locked(dataset_id)
+
+    def _delete_local_dataset_locked(self, dataset_id: str) -> dict[str, Any]:
+        workspace_identity = self._workspace_identity()
+        if not workspace_identity:
+            raise UnavailableError("Select the Databricks workspace that owns this local copy",
+                                   code="PROFILE_NOT_SELECTED", retryable=False)
+        if not isinstance(dataset_id, str) or len(dataset_id) != 64 or any(
+                char not in "0123456789abcdef" for char in dataset_id):
+            raise ValidationError("Local dataset identity is invalid")
+        record = self.store.local_dataset_get(dataset_id)
+        if not record or record["workspace_identity"] != workspace_identity:
+            raise ValidationError("Local dataset was not found in the selected workspace")
+        source_name = str(record["source_name"])
+        for operation in self.store.operation_recent(limit=500):
+            payload = operation.get("payload") if isinstance(operation.get("payload"), dict) else {}
+            plan = payload.get("plan") if isinstance(payload.get("plan"), dict) else {}
+            if (plan.get("source_name") == source_name and
+                    plan.get("workspace_identity") == workspace_identity and
+                    operation.get("state") in {"PLANNED", "RUNNING", "VALIDATING"}):
+                raise ConflictError("A local copy cannot be removed while its update is running",
+                                    code="DATASET_UPDATE_RUNNING")
+        active = [operation_id for operation_id, future in self._jobs.items()
+                  if not future.done()]
+        for operation_id in active:
+            operation = self.store.operation_get(operation_id)
+            plan = operation.payload.get("plan") if operation and isinstance(operation.payload, dict) else {}
+            if (isinstance(plan, dict) and plan.get("source_name") == source_name and
+                    plan.get("workspace_identity") == workspace_identity):
+                raise ConflictError("A local copy cannot be removed while its update is running",
+                                    code="DATASET_UPDATE_RUNNING")
+        roots = {self.coverage.dataset_root(source_name, workspace_identity),
+                 self.coverage.dataset_root(source_name)}
+        from .coverage import dataset_lock, dataset_state
+        removed = []
+        for root in roots:
+            if not root.exists() and not root.is_symlink():
+                continue
+            with dataset_lock(root, exclusive=True):
+                state = dataset_state(root)
+                snapshot_ids = set()
+                for key in ("current", "previous"):
+                    item = state.get(key)
+                    if isinstance(item, dict) and re.fullmatch(r"[a-f0-9]{64}", str(item.get("snapshot_id") or "")):
+                        snapshot_ids.add(str(item["snapshot_id"]))
+                staging_ids = state.get("staging") if isinstance(state.get("staging"), list) else []
+                snapshots_dir = root / "snapshots"
+                if snapshots_dir.exists() and (snapshots_dir.is_symlink() or not snapshots_dir.is_dir()):
+                    raise ValidationError("Local dataset snapshot path is unsafe")
+                if snapshots_dir.is_dir():
+                    for directory in snapshots_dir.iterdir():
+                        if not re.fullmatch(r"[a-f0-9]{64}", directory.name):
+                            continue
+                        manifest_path = directory / "manifest.json"
+                        if directory.is_symlink() or not directory.is_dir() or manifest_path.is_symlink() or not manifest_path.is_file():
+                            continue
+                        manifest = self.coverage._read_json(manifest_path, maximum_bytes=2 * 1024 * 1024)
+                        if (manifest.get("state") == "READY" and manifest.get("snapshot_id") == directory.name
+                                and manifest.get("source_name") == source_name
+                                and manifest.get("workspace_identity") == workspace_identity):
+                            snapshot_ids.add(directory.name)
+                for snapshot_id in snapshot_ids:
+                    directory = snapshots_dir / snapshot_id
+                    if directory.is_symlink() or not directory.is_dir():
+                        continue
+                    manifest_path = directory / "manifest.json"
+                    if manifest_path.is_symlink() or not manifest_path.is_file():
+                        continue
+                    manifest = self.coverage._read_json(manifest_path, maximum_bytes=2 * 1024 * 1024)
+                    if (manifest.get("snapshot_id") == snapshot_id and
+                            manifest.get("source_name") == source_name and
+                            manifest.get("state") == "READY" and
+                            manifest.get("workspace_identity") == workspace_identity):
+                        shutil.rmtree(directory)
+                        removed.append(snapshot_id)
+                for operation_id in staging_ids:
+                    if not isinstance(operation_id, str) or not re.fullmatch(r"[a-f0-9]{64}", operation_id):
+                        continue
+                    operation = self.store.operation_get(operation_id)
+                    plan = operation.payload.get("plan") if operation and isinstance(operation.payload, dict) else {}
+                    if (isinstance(plan, dict) and plan.get("source_name") == source_name and
+                            plan.get("workspace_identity") == workspace_identity):
+                        if operation and operation.state.value not in {"READY", "FAILED", "CANCELLED"}:
+                            raise ConflictError("A local copy cannot be removed while its update is active",
+                                                code="DATASET_UPDATE_RUNNING")
+                        partial = snapshots_dir / ("." + operation_id + ".partial")
+                        if partial.is_symlink():
+                            raise ValidationError("Local dataset staging path is unsafe")
+                        if partial.is_dir():
+                            shutil.rmtree(partial)
+                if snapshots_dir.is_dir():
+                    for partial in snapshots_dir.iterdir():
+                        match = re.fullmatch(r"\.([a-f0-9]{64})\.partial", partial.name)
+                        if not match:
+                            continue
+                        operation_id = match.group(1)
+                        operation = self.store.operation_get(operation_id)
+                        plan = (operation.payload.get("plan") if operation and
+                                isinstance(operation.payload, dict) else {})
+                        if (not isinstance(plan, dict) or plan.get("source_name") != source_name or
+                                plan.get("workspace_identity") != workspace_identity):
+                            continue
+                        if operation.state.value not in {"READY", "FAILED", "CANCELLED"}:
+                            raise ConflictError("A local copy cannot be removed while its update is active",
+                                                code="DATASET_UPDATE_RUNNING")
+                        if partial.is_symlink():
+                            raise ValidationError("Local dataset staging path is unsafe")
+                        if partial.is_dir():
+                            shutil.rmtree(partial)
+                for pointer in (root / "dataset-state.json", root / "current.json"):
+                    if pointer.is_symlink():
+                        raise ValidationError("Local dataset pointer is unsafe")
+                    if pointer.exists():
+                        pointer.unlink()
+        self.store.local_dataset_delete(dataset_id)
+        self.store.materialization_delete(removed)
+        _analytics_event(logging.INFO, "local_dataset_removed", dataset_id=dataset_id,
+                         source_name=source_name, generation_count=len(set(removed)))
+        return {"dataset_id": dataset_id, "source_name": source_name,
+                "deleted": True, "removed_generations": len(set(removed))}
 
     def submit_materialization(self, body: dict[str, Any]) -> dict[str, Any]:
-        if not self.materializations.transfer.codec.available:
-            raise UnavailableError("PyArrow is not installed; Parquet materialization is unavailable",
-                                   code="PYARROW_MISSING", retryable=False)
         table_name = str(body.get("source_name") or "")
         columns = body.get("columns")
         if not isinstance(columns, list) or any(not isinstance(value, str) for value in columns):
@@ -622,8 +814,6 @@ class AnalyticsService:
         warehouse_id = body.get("warehouse_id")
         if profile is not None and (not isinstance(profile, str) or len(profile) > 128):
             raise ValidationError("Databricks profile name is invalid")
-        if not isinstance(warehouse_id, str) or not warehouse_id:
-            raise ValidationError("Choose a running SQL warehouse before making data local")
         selected_profile = self._profile_selection()
         if not selected_profile.get("name") or not selected_profile.get("host"):
             raise UnavailableError("Select an Anvil-owned Databricks profile before materializing data",
@@ -635,36 +825,82 @@ class AnalyticsService:
         if not isinstance(metadata, dict):
             raise ValidationError("Refresh table metadata before materializing local data")
         source_version = str(metadata.get("source_updated_at") or metadata.get("updated_at") or "")
-        import hashlib
-        workspace_identity = hashlib.sha256(selected_profile["host"].casefold().encode("utf-8")).hexdigest()
+        workspace_identity = self._workspace_identity()
+        predicate = str(body.get("predicate") or "")
+        max_rows = self._integer(body.get("max_rows", 100_000), "row bound", 1, 1_000_000)
+        max_bytes = self._integer(body.get("max_bytes", 512 * 1024 * 1024), "byte bound",
+                                  1024 * 1024, 1024 * 1024 * 1024)
+        full_table_confirmed = body.get("full_table_confirmed") is True
+        force_refresh = body.get("force_refresh") is True
+        remote_schema = metadata.get("columns") if isinstance(metadata.get("columns"), list) else None
+        typed_schema = (remote_schema if remote_schema and all(
+            isinstance(item, dict) and item.get("name") and
+            (item.get("type_text") or item.get("type_name") or item.get("type"))
+            for item in remote_schema) else None)
+        remote_schema_identity = schema_identity(typed_schema) if typed_schema else ""
         plan = self.materializations.plan(
             workspace_identity=workspace_identity,
-            source_name=table_name, projection=columns,
-            predicate=str(body.get("predicate") or ""),
+            source_name=table_name, projection=columns, predicate=predicate,
             source_version=source_version,
-            max_rows=self._integer(body.get("max_rows", 100_000), "row bound", 1, 1_000_000),
-            max_bytes=self._integer(body.get("max_bytes", 512 * 1024 * 1024), "byte bound",
-                                     1024 * 1024, 1024 * 1024 * 1024),
+            max_rows=max_rows, max_bytes=max_bytes,
             estimated_bytes=None,
-            full_table_confirmed=body.get("full_table_confirmed") is True,
-            force_refresh=body.get("force_refresh") is True)
-        existing = self.store.operation_get(plan.operation_id)
-        if existing and existing.state in {MaterializationState.READY, MaterializationState.RUNNING,
-                                           MaterializationState.PLANNED}:
-            return self.materializations.status(plan.operation_id)
-        principal = self.me()["name"]
-        operation_payload = {"plan": plan.as_dict(), "warehouse_id": warehouse_id,
-                             "profile": profile or "", "principal": principal}
-        self.store.operation_put(OperationRecord(plan.operation_id, "MATERIALIZATION",
-                                                  MaterializationState.PLANNED,
-                                                  operation_payload, {"chunks": [], "phase": "PLANNED"}))
+            full_table_confirmed=full_table_confirmed, force_refresh=force_refresh,
+            source_schema_identity=remote_schema_identity)
+        selected_schema_identity = ""
+        if typed_schema and plan.projection != ("*",):
+            columns_by_name = {str(item["name"]).casefold(): item for item in typed_schema}
+            selected_schema = [columns_by_name.get(name.casefold()) for name in plan.projection]
+            if all(item is not None for item in selected_schema):
+                selected_schema_identity = schema_identity(selected_schema)
+        plan = replace(plan, selected_schema_identity=selected_schema_identity)
+        coverage_plan = self.coverage.plan_materialization(
+            workspace_identity=workspace_identity, source_name=table_name,
+            projection=plan.intent_projection or plan.projection, predicate=plan.predicate,
+            source_version=source_version, remote_schema=remote_schema,
+            rows_mode="FILTERED" if predicate.strip() else "FULL")
+        if not force_refresh and not coverage_plan.remote_transfer_required:
+            _analytics_event(logging.INFO, "local_dataset_reused", source_name=table_name,
+                             action=coverage_plan.action, workspace_identity=workspace_identity)
+            return {"operation_id": coverage_plan.snapshot_id, "state": "READY",
+                    "snapshot_id": coverage_plan.snapshot_id, "reused": True,
+                    "action": coverage_plan.action, "message": coverage_plan.reason}
+        if not self.materializations.transfer.codec.available:
+            raise UnavailableError("PyArrow is not installed; Parquet materialization is unavailable",
+                                   code="PYARROW_MISSING", retryable=False)
+        if warehouse_id is not None and (not isinstance(warehouse_id, str) or len(warehouse_id) > 256):
+            raise ValidationError("SQL warehouse selection is invalid")
+        if not warehouse_id:
+            inventory = self.warehouses(refresh=True)
+            candidates = inventory.get("warehouses", []) if isinstance(inventory, dict) else []
+            selected_warehouse = next((item for item in candidates
+                                       if item.get("state") == "RUNNING"), None)
+            if selected_warehouse is None:
+                selected_warehouse = next((item for item in candidates
+                                           if item.get("state") == "STOPPED"), None)
+            if selected_warehouse is None:
+                raise UnavailableError("No available SQL Warehouse can run this explicit local copy request",
+                                       code="WAREHOUSE_UNAVAILABLE", retryable=False)
+            warehouse_id = str(selected_warehouse["warehouse_id"])
         with self._job_guard:
+            existing = self.store.operation_get(plan.operation_id)
+            if existing and existing.state in {MaterializationState.READY, MaterializationState.RUNNING,
+                                               MaterializationState.PLANNED}:
+                return self.materializations.status(plan.operation_id)
+            principal = self.me()["name"]
+            operation_payload = {"plan": plan.as_dict(), "warehouse_id": warehouse_id,
+                                 "profile": profile or "", "principal": principal}
+            self.store.operation_put(OperationRecord(plan.operation_id, "MATERIALIZATION",
+                                                      MaterializationState.PLANNED,
+                                                      operation_payload, {"chunks": [], "phase": "PLANNED"}))
             future = self._jobs.get(plan.operation_id)
             if future and not future.done():
                 return self.materializations.status(plan.operation_id)
             self._jobs[plan.operation_id] = self._executor.submit(
                 self.materializations.run, plan, warehouse_id, profile=profile,
                 principal=principal)
+        _analytics_event(logging.INFO, "local_dataset_rematerialization_started",
+                         source_name=table_name, action=coverage_plan.action,
+                         workspace_identity=workspace_identity)
         return self.materializations.status(plan.operation_id)
 
     def materialization(self, operation_id: str) -> dict[str, Any]:
@@ -694,8 +930,11 @@ class AnalyticsService:
         if not self._chat_lock.acquire(blocking=False):
             raise ConflictError("Anvil is finishing another Analytics chat response", code="SESSION_BUSY")
         try:
+            _analytics_event(logging.INFO, "ask_anvil_request_started",
+                             deep_investigation=bool(deep_investigation))
             if event:
                 event("status", {"state": "starting", "message": "Preparing the Analytics session"})
+            _analytics_event(logging.INFO, "ask_anvil_activity_changed", state="starting")
             canonical = self.sessions.ensure_canonical()
             canonical_id = canonical["session_id"]
             adapter = self.runtime.adapter
@@ -713,7 +952,13 @@ class AnalyticsService:
                            + query_context + "\n\nUser question:\n" + question)
             if event:
                 event("status", {"state": "thinking", "message": "Asking Anvil in the canonical Analytics session"})
-            result = adapter.prompt(session_id, full_prompt)
+            _analytics_event(logging.INFO, "ask_anvil_activity_changed", state="thinking")
+            _analytics_event(logging.INFO, "analytics_model_resolved",
+                             logical_model=ANALYTICS_MODEL_POLICY.logical_model,
+                             provider_id=ANALYTICS_MODEL_POLICY.provider_id,
+                             model_id=ANALYTICS_MODEL_POLICY.model_id,
+                             fallback=ANALYTICS_MODEL_POLICY.fallback)
+            result = adapter.prompt(session_id, full_prompt, model=ANALYTICS_MODEL_POLICY.selector())
             if getattr(adapter, "generation", 1) == 2:
                 result = adapter.wait_for_response(session_id, timeout=timeout)
             answer = self._assistant_text(result)
@@ -743,6 +988,25 @@ class AnalyticsService:
             return {"name": name, "host": host}
         except Exception:
             return {}
+
+    def _workspace_identity(self) -> str:
+        host = self._profile_selection().get("host", "").strip().rstrip("/").casefold()
+        if not host:
+            return ""
+        import hashlib
+        return hashlib.sha256(host.encode("utf-8")).hexdigest()
+
+    def _table_coverage_metadata(self, full_name: str) -> tuple[list[dict[str, Any]] | None, str | None]:
+        parts = full_name.split(".")
+        if len(parts) != 3:
+            return None, None
+        cached = next((item for item in self.store.catalog_list(parent=".".join(parts[:2]), limit=2000)
+                       if str(item.get("full_name") or "").casefold() == full_name.casefold()), None)
+        if not cached:
+            return None, None
+        columns = cached.get("columns") if isinstance(cached.get("columns"), list) else None
+        version = str(cached.get("source_updated_at") or cached.get("updated_at") or "")
+        return columns, version or None
 
     def _data_bytes(self) -> int:
         total = 0

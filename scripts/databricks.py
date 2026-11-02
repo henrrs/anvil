@@ -697,9 +697,13 @@ def start_sql_transfer(statement: str, warehouse_id: str, *, profile: str | None
     if not 5 <= timeout <= 600:
         raise DatabricksError("INVALID_INPUT", "transfer timeout must be between 5 and 600 seconds")
     found = discover_warehouses(selected)
-    warehouse = next((item for item in found["running"] if item["warehouse_id"] == warehouse_id), None)
+    all_warehouses = found.get("warehouses") if isinstance(found.get("warehouses"), list) else []
+    warehouse = next((item for item in all_warehouses if item.get("warehouse_id") == warehouse_id), None)
     if warehouse is None:
-        raise DatabricksError("WAREHOUSE_STOPPED", "materialization requires a selected running SQL warehouse")
+        raise DatabricksError("WAREHOUSE_NOT_FOUND", "the selected SQL warehouse is not available in this workspace")
+    # Materialization is an explicit user action, so this is the one Analytics
+    # flow that may start a stopped warehouse without a separate manual step.
+    warehouse = ensure_warehouse_running(warehouse, selected)
     body: dict[str, Any] = {"statement": normalized, "warehouse_id": warehouse_id,
         "wait_timeout": "10s", "on_wait_timeout": "CONTINUE", "disposition": "EXTERNAL_LINKS",
         "format": "ARROW_STREAM", "row_limit": max_rows, "byte_limit": max_bytes}

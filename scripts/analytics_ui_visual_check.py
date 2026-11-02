@@ -32,6 +32,7 @@ VIEWS = {
     "healthy": "home",
     "home-populated": "home",
     "table-remote": "table-overview",
+    "table-local": "local-copy",
     "query-results": "query-results",
     "ask-anvil": "ask-anvil",
 }
@@ -163,7 +164,8 @@ def certify_active_indicator(browser: Browser, selector: str, content_selector: 
       const lineLeft = parseFloat(line.left);
       const lineRight = parseFloat(line.right);
       const lineBottom = parseFloat(line.bottom);
-      const lineWidth = parseFloat(line.width);
+      const computedLineWidth = parseFloat(line.width);
+      const lineWidth = Number.isFinite(computedLineWidth) ? computedLineWidth : contentRect.width - lineLeft - lineRight;
       const scrollRect = scroller.getBoundingClientRect();
       const trackLeft = contentRect.left + lineLeft;
       const trackRight = contentRect.right - lineRight;
@@ -385,10 +387,132 @@ def metrics(browser: Browser) -> dict:
     """)
 
 
+def certify_local_intelligence(browser: Browser, base: str) -> None:
+    browser.load(f"{base}/dev/?scenario=ask-anvil", 1920, 1080)
+    browser.js("window.sendChat('Summarize the table grain and freshness.'); return true;")
+    for _ in range(40):
+        if browser.js("const answer=document.querySelector('.chat-message.assistant:last-child .message-text'); return Boolean(answer && answer.textContent.includes('does not call a model.'));"):
+            break
+        time.sleep(.1)
+    markdown = browser.js("""
+      const answer = document.querySelector('.chat-message.assistant:last-child .message-text');
+      const scroller = answer?.querySelector('.markdown-table-scroll');
+      const unsafe = document.createElement('div');
+      renderSafeMarkdown(unsafe, '<img src=x onerror=alert(1)>');
+      return {table: Boolean(scroller && scroller.querySelectorAll('thead th').length === 2
+          && scroller.querySelectorAll('tbody tr').length === 2),
+        accessible: scroller?.getAttribute('role') === 'region' && scroller.tabIndex === 0,
+        activityFinished: !document.querySelector('.assistant-activity'),
+        completeResponse: answer?.textContent.includes('does not call a model.'),
+        model: document.querySelector('#analytics-model-label').textContent === 'GPT 6 Luna'
+          && document.querySelector('#analytics-model-label').title.includes('Fallback: NONE'),
+        safe: !unsafe.querySelector('img') && unsafe.textContent.includes('<img')};
+    """)
+    require(all(markdown.values()), f"Ask Anvil Markdown, activity, completion, model policy, or HTML safety failed: {markdown}")
+    browser.screenshot("ask-anvil-markdown-table-1920x1080.png")
+
+    browser.load(f"{base}/dev/?scenario=table-local", 1920, 1080)
+    browser.js("document.querySelector('.table-tab[data-section=local]').click(); return true;")
+    certify_active_indicator(browser, ".table-tab.active", ".table-tab-content", ".table-tabs",
+                             "local data tab 1920")
+    state = browser.js("""
+      const action = document.querySelector('#table-make-local');
+      const originalConfirm = window.confirm;
+      let removalMessage = '';
+      window.confirm = (message) => { removalMessage = message; return false; };
+      document.querySelector('.table-tab[data-section=local]').click();
+      document.querySelector('.local-data-actions button').click();
+      window.confirm = originalConfirm;
+      action.click();
+      const dialog = document.querySelector('#materialize-dialog');
+      const allRows = document.querySelector('#materialize-all-rows');
+      const filter = document.querySelector('#materialize-filter');
+      document.querySelector('#materialize-all-columns').click();
+      return {button: action.textContent === 'Local ✓', title: document.querySelector('#materialize-title').textContent === 'Update local copy',
+        removal: removalMessage.includes('remote Databricks table will not be changed'),
+        noTechnicalBounds: !document.querySelector('#materialize-rows') && !document.querySelector('#materialize-mib'),
+        allRowsDefault: allRows.checked && filter.disabled,
+        confirmationRequired: !document.querySelector('#confirm-full-table-row').classList.contains('hidden'),
+        noGenerationId: !document.querySelector('#table-section-content').textContent.includes('snapshot-'),
+        dialog: dialog.open};
+    """)
+    require(all(state.values()), f"local-copy lifecycle controls are incomplete: {state}")
+    browser.screenshot("local-copy-acquisition-dialog-1920x1080.png")
+
+    payload = browser.js("""
+      document.querySelector('#confirm-full-table').checked = true;
+      const client = window.anvilAnalyticsApi;
+      const request = client.request.bind(client);
+      client.request = (path, options = {}) => {
+        if (path === '/api/materializations') {
+          window.__capturedMaterialization = JSON.parse(options.body);
+          return Promise.resolve({operation_id:'mock-materialize-captured', phase:'DOWNLOADING_ARROW', state:'RUNNING'});
+        }
+        if (path === '/api/materializations/mock-materialize-captured') {
+          return Promise.resolve({operation_id:'mock-materialize-captured', phase:'WRITING_PARQUET', state:'RUNNING'});
+        }
+        return request(path, options);
+      };
+      const nativeTimeout = window.setTimeout.bind(window);
+      window.setTimeout = (callback, delay) => delay === 1800 ? 0 : nativeTimeout(callback, delay);
+      document.querySelector('#confirm-materialize').click();
+      return window.__capturedMaterialization;
+    """)
+    require(payload and payload["columns"] == ["*"] and payload["full_table_confirmed"]
+            and payload["predicate"] == "" and payload["max_rows"] == 1_000_000
+            and payload["max_bytes"] == 1_073_741_824,
+            f"all-column/all-row acquisition request was not explicit or correctly bounded: {payload}")
+    for _ in range(20):
+        progress = browser.js("return document.querySelector('#materialize-feedback').textContent;")
+        if "Writing local Parquet files" in progress:
+            break
+        time.sleep(.05)
+    require("Writing local Parquet files" in progress,
+            f"materialization phase was not shown in the dialog: {progress}")
+    require(browser.js("return document.querySelector('#table-make-local').disabled && document.querySelector('#table-make-local').textContent === 'Updating…';"),
+            "table action did not show the active local-copy update")
+
+    browser.load(f"{base}/dev/?scenario=table-local", 1920, 1080)
+    browser.js("document.querySelector('#table-make-local').click(); document.querySelector('#materialize-filtered-rows').click(); document.querySelector('#materialize-filter').value = \"status = 'SETTLED'\"; return true;")
+    filtered = browser.js("""
+      const filter = document.querySelector('#materialize-filter');
+      return filter.disabled === false && document.querySelector('#materialize-filtered-rows').checked
+        && !document.querySelector('#materialize-all-rows').checked;
+    """)
+    require(filtered, "filtered-row selection did not enable its predicate field independently")
+    browser.screenshot("local-copy-filtered-rows-1920x1080.png")
+
+    browser.load(f"{base}/dev/?scenario=query-results", 1920, 1080)
+    browser.js("""
+      const client = window.anvilAnalyticsApi;
+      const request = client.request.bind(client);
+      client.request = (path, options = {}) => path === '/api/query'
+        ? new Promise((resolve) => window.setTimeout(() => request(path, options).then(resolve), 900))
+        : request(path, options);
+      window.runQuery();
+      return true;
+    """)
+    for _ in range(30):
+        if browser.js("return Boolean(document.querySelector('#query-results .query-progress'));"):
+            break
+        time.sleep(.05)
+    query_progress = browser.js("""
+      const progress = document.querySelector('#query-results .query-progress');
+      return {visible: Boolean(progress), role: progress?.getAttribute('role'),
+        message: progress?.textContent || '', hasTechnicalId: /operation[_ -]?id|snapshot[_ -]?id/i.test(progress?.textContent || '')};
+    """)
+    require(query_progress["visible"] and query_progress["role"] == "status"
+            and "Executing query" in query_progress["message"] and not query_progress["hasTechnicalId"],
+            f"query progress is not visible and user-readable in Results: {query_progress}")
+    browser.screenshot("query-progress-1920x1080.png")
+
+
 def certify(browser: Browser, base: str) -> None:
     for scenario, name in VIEWS.items():
         for width, height in SIZES:
             browser.load(f"{base}/dev/?scenario={scenario}", width, height)
+            if scenario == "table-local":
+                browser.js("document.querySelector('[data-section=local]').click(); return true;")
             m = metrics(browser)
             certify_active_indicator(browser, ".workspace-tab.active", ".workspace-tab-content", "#workspace-tabs",
                                      f"{scenario} workspace tab {width}")
@@ -411,6 +535,11 @@ def certify(browser: Browser, base: str) -> None:
             if scenario == "table-remote":
                 require(browser.js("return document.querySelector('.table-summary-main')?.textContent.includes('6 columns') && document.querySelector('.table-local-state')?.textContent === 'Remote only' && !document.querySelector('.table-facts');"),
                         f"remote overview contains unavailable metrics: {width}")
+            if scenario == "table-local":
+                local_details = browser.js("const text=document.querySelector('#table-section-content').textContent; return {hasCoverage:text.includes('Local copy covers this table'),facts:document.querySelectorAll('.fact-card').length,hasSnapshotId:text.includes('snapshot-'),hasGenerationId:text.includes('generation')};")
+                require(local_details["hasCoverage"] and local_details["facts"] == 5
+                        and not local_details["hasSnapshotId"] and not local_details["hasGenerationId"],
+                        f"local copy details expose internal IDs or omit coverage facts: {width}: {local_details}")
             if scenario == "query-results":
                 require(m["editorFont"] >= 14 and m["gridFont"] >= 13,
                         f"SQL workspace text too small: {width}: {m}")
@@ -436,7 +565,7 @@ def certify(browser: Browser, base: str) -> None:
             "favorite action or filter failed")
     browser.screenshot("catalog-favorites-1920x1080.png")
     browser.load(f"{base}/dev/?scenario=table-local")
-    require(browser.js("document.querySelector('[data-section=local]').click(); return document.querySelector('.coverage-card')?.textContent.includes('Complete local snapshot') && document.querySelectorAll('.fact-card').length === 4;"),
+    require(browser.js("document.querySelector('[data-section=local]').click(); return document.querySelector('.coverage-card')?.textContent.includes('Local copy covers this table') && document.querySelectorAll('.fact-card').length === 5;"),
             "local data details are missing from their tab")
     browser.screenshot("table-local-data-1920x1080.png")
     browser.load(f"{base}/dev/?scenario=large-catalog&expand=first")
@@ -464,6 +593,7 @@ def certify(browser: Browser, base: str) -> None:
     certify_clear_conversation(browser, base)
     certify_tab_close(browser, base)
     certify_query_splitter(browser, base)
+    certify_local_intelligence(browser, base)
     for width, height in ((1920, 1080), (3840, 2160)):
         browser.load(f"{base}/dev/?scenario=home-populated&tabs=many", width, height)
         require(browser.js("return document.querySelector('#workspace-tabs').scrollWidth >= document.querySelector('#workspace-tabs').clientWidth && document.querySelector('.workspace-tab.active .workspace-tab-label')?.textContent === 'Query 9';"),

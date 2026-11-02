@@ -5,7 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.analytics.coverage import CoverageRegistry, source_key
+from scripts.analytics.coverage import (CoverageRegistry, dataset_lock, predicates_cover,
+                                        schema_identity, source_key)
 from scripts.analytics.errors import (CoverageError, IntegrityError, ReadOnlyError,
                                       UnavailableError, ValidationError)
 from scripts.analytics.materialization import MaterializationService
@@ -121,15 +122,17 @@ class QueryCoverageTests(unittest.TestCase):
         self.source = "main.silver.orders"
 
     def publish(self, *, columns=("order_id", "status"), predicate="", complete=True,
-                snapshot_id="a" * 64):
-        root = self.paths.datasets / source_key(self.source)
+                snapshot_id="a" * 64, workspace_identity=None, manifest_workspace_identity=None,
+                all_columns=False):
+        root = self.paths.datasets / source_key(self.source, workspace_identity)
         snapshot = root / "snapshots" / snapshot_id
         snapshot.mkdir(parents=True, mode=0o700)
         data = snapshot / "part-00000.parquet"
         data.write_bytes(b"parquet-fixture")
         manifest = {"state": "READY", "snapshot_id": snapshot_id,
                     "source_name": self.source, "source_version": "version-1",
-                    "columns": list(columns), "all_columns": columns == ("*",),
+                    "workspace_identity": manifest_workspace_identity or workspace_identity or "",
+                    "columns": list(columns), "all_columns": all_columns or columns == ("*",),
                     "predicate": predicate, "complete": complete, "row_count": 10,
                     "bytes": data.stat().st_size, "files": [data.name],
                     "file_bytes": {data.name: data.stat().st_size}}
@@ -176,6 +179,127 @@ class QueryCoverageTests(unittest.TestCase):
         with self.assertRaises(IntegrityError):
             self.coverage.current(self.source)
 
+    def test_coverage_is_scoped_to_the_workspace_and_predicate_subsets_are_proven(self):
+        self.publish(columns=("order_id", "status", "event_date"),
+                     workspace_identity="workspace-a",
+                     predicate="event_date >= DATE '2026-01-01'")
+        plan = parse_local_query("SELECT order_id FROM main.silver.orders WHERE event_date >= DATE '2026-02-01'")
+        self.assertTrue(self.coverage.covers(plan, workspace_identity="workspace-a").covered)
+        self.assertFalse(self.coverage.covers(plan, workspace_identity="workspace-b").covered)
+        self.assertFalse(predicates_cover("status = 'failed'", "status = 'failed' OR status = 'queued'"))
+        self.assertTrue(predicates_cover("amount >= 10 AND amount < 20", "amount = 12"))
+        self.assertFalse(predicates_cover("amount >= 10", "amount >= 9"))
+
+    def test_materialization_planner_reuses_broad_copy_and_expands_partial_copy(self):
+        self.publish(columns=("order_id", "status", "amount"), all_columns=True,
+                     workspace_identity="workspace-a")
+        narrow = self.coverage.plan_materialization(workspace_identity="workspace-a",
+            source_name=self.source, projection=("order_id", "status"),
+            source_version="version-1", rows_mode="FULL")
+        self.assertEqual(narrow.action, "REUSE_WITH_PROJECTION")
+        self.assertFalse(narrow.remote_transfer_required)
+
+        self.publish(columns=("order_id", "status"), workspace_identity="workspace-b",
+                     snapshot_id="d" * 64)
+        expanded = self.coverage.plan_materialization(workspace_identity="workspace-b",
+            source_name=self.source, projection=("*",), source_version="version-1",
+            rows_mode="FULL")
+        self.assertEqual(expanded.action, "REMATERIALIZE")
+        self.assertTrue(expanded.remote_transfer_required)
+
+    def test_legacy_duplicate_reconciliation_selects_the_broadest_verified_generation(self):
+        self.publish(columns=("order_id",), snapshot_id="e" * 64,
+                     workspace_identity="workspace-a")
+        self.publish(columns=("order_id", "status", "amount"), all_columns=True,
+                     snapshot_id="f" * 64, manifest_workspace_identity="workspace-a")
+        current = self.coverage.current(self.source, "workspace-a")
+        self.assertEqual(current["snapshot_id"], "f" * 64)
+        local_rows = self.coverage.list_local_datasets("workspace-a")
+        self.assertEqual(len(local_rows), 1)
+        self.assertEqual(local_rows[0]["snapshot_id"], "f" * 64)
+
+    def test_selected_intent_survives_an_unrequested_new_remote_column(self):
+        self.publish(columns=("order_id", "status"), workspace_identity="workspace-a")
+        current = self.coverage.current(self.source, "workspace-a")
+        old_schema = [{"name": "order_id", "type_text": "BIGINT"},
+                      {"name": "status", "type_text": "STRING"},
+                      {"name": "amount", "type_text": "DECIMAL(18,2)"}]
+        selected_schema = old_schema[:2]
+        manifest_path = current["snapshot_dir"] / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest.update({"columns_mode": "SELECTED", "selected_columns": ["order_id", "status"],
+                         "source_schema_identity": schema_identity(old_schema),
+                         "selected_schema_identity": schema_identity(selected_schema),
+                         "source_version": "old-version"})
+        manifest_path.write_text(json.dumps(manifest))
+        remote_schema = old_schema + [{"name": "new_note", "type_text": "STRING"}]
+        plan = parse_local_query("SELECT order_id FROM main.silver.orders")
+
+        decision = self.coverage.covers(plan, workspace_identity="workspace-a",
+                                        remote_schema=remote_schema, source_version="new-version")
+        self.assertTrue(decision.covered)
+        self.assertEqual(decision.state, "UNKNOWN")
+        materialization = self.coverage.plan_materialization(
+            workspace_identity="workspace-a", source_name=self.source,
+            projection=("order_id",), source_version="new-version",
+            remote_schema=remote_schema, rows_mode="FULL")
+        self.assertFalse(materialization.remote_transfer_required)
+
+    def test_all_intent_and_selected_type_changes_are_stale_schema(self):
+        old_schema = [{"name": "order_id", "type_text": "BIGINT"},
+                      {"name": "status", "type_text": "STRING"}]
+        new_schema = old_schema + [{"name": "created_at", "type_text": "TIMESTAMP"}]
+        self.publish(columns=("order_id", "status"), workspace_identity="workspace-a",
+                     all_columns=True)
+        current = self.coverage.current(self.source, "workspace-a")
+        manifest_path = current["snapshot_dir"] / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest.update({"columns_mode": "ALL", "all_columns": True,
+                         "source_schema_identity": schema_identity(old_schema),
+                         "schema_identity": schema_identity(old_schema)})
+        manifest_path.write_text(json.dumps(manifest))
+        query = parse_local_query("SELECT order_id FROM main.silver.orders")
+        decision = self.coverage.covers(query, workspace_identity="workspace-a",
+                                        remote_schema=new_schema, source_version="version-1")
+        self.assertFalse(decision.covered)
+        self.assertEqual(decision.state, "STALE")
+        self.assertIn("schema_changed", decision.reasons)
+
+        self.publish(columns=("order_id", "status"), workspace_identity="workspace-b",
+                     snapshot_id="c" * 64)
+        current = self.coverage.current(self.source, "workspace-b")
+        manifest_path = current["snapshot_dir"] / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest.update({"columns_mode": "SELECTED", "all_columns": False,
+                         "selected_columns": ["order_id", "status"],
+                         "source_schema_identity": schema_identity(old_schema),
+                         "selected_schema_identity": schema_identity(old_schema)})
+        manifest_path.write_text(json.dumps(manifest))
+        changed_type = [{"name": "order_id", "type_text": "BIGINT"},
+                        {"name": "status", "type_text": "BOOLEAN"}]
+        decision = self.coverage.covers(query, workspace_identity="workspace-b",
+                                        remote_schema=changed_type, source_version="version-1")
+        self.assertFalse(decision.covered)
+        self.assertEqual(decision.state, "STALE")
+        self.assertIn("schema_changed", decision.reasons)
+
+    def test_local_coverage_requires_filter_columns_for_duckdb_execution(self):
+        self.publish(columns=("order_id",), workspace_identity="workspace-a")
+        query = parse_local_query(
+            "SELECT order_id FROM main.silver.orders WHERE status = 'failed'")
+        decision = self.coverage.covers(query, workspace_identity="workspace-a")
+        self.assertFalse(decision.covered)
+        self.assertEqual(decision.missing_columns, ("status",))
+
+    def test_shared_snapshot_reader_lock_blocks_exclusive_generation_cleanup(self):
+        self.publish(workspace_identity="workspace-a")
+        root = self.coverage.dataset_root(self.source, "workspace-a")
+        with self.coverage.locked_snapshot(self.source, "workspace-a") as snapshot:
+            self.assertIsNotNone(snapshot)
+            with self.assertRaises(BlockingIOError):
+                with dataset_lock(root, exclusive=True, blocking=False):
+                    pass
+
     def test_local_routing_needs_proven_coverage_and_never_calls_remote(self):
         self.publish()
         local = FakeLocalEngine()
@@ -189,6 +313,19 @@ class QueryCoverageTests(unittest.TestCase):
         with self.assertRaises(CoverageError):
             router.execute("SELECT amount FROM main.silver.orders", route="LOCAL")
         self.assertEqual(remote.calls, [])
+
+    def test_auto_route_uses_only_the_selected_workspace_local_copy(self):
+        self.publish(workspace_identity="workspace-a")
+        remote = FakeRemote()
+        local = FakeLocalEngine()
+        router = QueryRouter(self.store, self.coverage, remote, local=local)
+        sql = "SELECT order_id FROM main.silver.orders"
+        local_result = router.execute(sql, route="AUTO", workspace_identity="workspace-a")
+        remote_result = router.execute(sql, route="AUTO", workspace_identity="workspace-b",
+                                        warehouse_id="wh-test")
+        self.assertEqual(local_result["route"], "LOCAL")
+        self.assertEqual(remote_result["route"], "DATABRICKS")
+        self.assertEqual(len(remote.calls), 1)
 
     def test_auto_falls_back_to_remote_for_mismatch_or_missing_duckdb(self):
         self.publish()
@@ -281,9 +418,12 @@ class QueryCoverageTests(unittest.TestCase):
         self.assertEqual(result["rows"], 3)
         self.assertEqual(provider.submit_count, 1)
         self.assertEqual(provider.chunk_requests, [1])
-        self.assertEqual(self.coverage.current(self.source)["manifest"]["operation_id"], plan.operation_id)
+        self.assertEqual(self.coverage.current(self.source, "workspace-hash")["manifest"]["operation_id"], plan.operation_id)
         self.assertTrue(self.coverage.covers(parse_local_query(
-            "SELECT order_id FROM main.silver.orders")).covered)
+            "SELECT order_id FROM main.silver.orders"), workspace_identity="workspace-hash").covered)
+        rows = self.coverage.list_local_datasets("workspace-hash")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source_name"], self.source)
         record = self.store.operation_get(plan.operation_id)
         self.assertEqual(record.state.value, "READY")
         self.assertNotIn("sig=secret", json.dumps(record.as_dict() if hasattr(record, "as_dict") else record.checkpoint))
@@ -310,8 +450,8 @@ class QueryCoverageTests(unittest.TestCase):
         self.assertEqual(downloader.calls.count("https://storage.example/chunk-1?sig=secret"), 2)
 
     def test_failed_refresh_keeps_the_previous_current_snapshot(self):
-        self.publish()
-        before = self.coverage.current(self.source)["snapshot_id"]
+        self.publish(workspace_identity="workspace-hash")
+        before = self.coverage.current(self.source, "workspace-hash")["snapshot_id"]
         provider = FakeTransferProvider()
         downloader = FakeDownloader(fail_url_once="https://storage.example/chunk-0?sig=secret")
         service = MaterializationTransfer(self.paths, self.store, provider,
@@ -319,7 +459,7 @@ class QueryCoverageTests(unittest.TestCase):
         plan = self.make_transfer_plan()
         with self.assertRaises(UnavailableError):
             service.run(plan, "warehouse-1")
-        self.assertEqual(self.coverage.current(self.source)["snapshot_id"], before)
+        self.assertEqual(self.coverage.current(self.source, "workspace-hash")["snapshot_id"], before)
 
     def test_missing_pyarrow_degrades_before_remote_query(self):
         provider = FakeTransferProvider()

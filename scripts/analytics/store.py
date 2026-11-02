@@ -14,11 +14,12 @@ from .models import (CatalogObject, KnowledgeItem, MaterializationState,
                      OperationRecord, QueryRecord)
 from .paths import AnalyticsPaths
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 MIGRATION_ROLLBACK_POLICIES = {
     1: "BACKWARD_COMPATIBLE",
     2: "BACKUP_RESTORE_REQUIRED",
     3: "BACKUP_RESTORE_REQUIRED",
+    4: "BACKUP_RESTORE_REQUIRED",
 }
 
 
@@ -118,6 +119,10 @@ class ContextStore:
                 if current < 3:
                     self._migration_3(db)
                     db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES(3, ?)", (_now(),))
+                    current = 3
+                if current < 4:
+                    self._migration_4(db)
+                    db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES(4, ?)", (_now(),))
                 db.execute("COMMIT")
             except Exception:
                 db.execute("ROLLBACK")
@@ -237,6 +242,35 @@ class ContextStore:
         db.execute("ALTER TABLE catalog_hydration ADD COLUMN phase TEXT NOT NULL DEFAULT ''")
         db.execute("ALTER TABLE catalog_hydration ADD COLUMN progress_current INTEGER NOT NULL DEFAULT 0")
         db.execute("ALTER TABLE catalog_hydration ADD COLUMN progress_total INTEGER NOT NULL DEFAULT 0")
+
+    @staticmethod
+    def _migration_4(db: sqlite3.Connection) -> None:
+        db.execute("""
+            CREATE TABLE local_datasets (
+                dataset_id TEXT PRIMARY KEY,
+                workspace_identity TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                columns_mode TEXT NOT NULL DEFAULT 'UNKNOWN'
+                    CHECK(columns_mode IN ('ALL','SELECTED','UNKNOWN')),
+                selected_columns_json TEXT NOT NULL DEFAULT '[]',
+                rows_mode TEXT NOT NULL DEFAULT 'UNKNOWN'
+                    CHECK(rows_mode IN ('FULL','FILTERED','UNKNOWN')),
+                predicate TEXT NOT NULL DEFAULT '',
+                schema_identity TEXT NOT NULL DEFAULT '',
+                source_version TEXT NOT NULL DEFAULT '',
+                freshness TEXT NOT NULL DEFAULT 'UNKNOWN'
+                    CHECK(freshness IN ('CURRENT','STALE_SCHEMA','STALE_DATA','UNKNOWN')),
+                state TEXT NOT NULL DEFAULT 'UNKNOWN',
+                current_generation TEXT NOT NULL DEFAULT '',
+                previous_generation TEXT NOT NULL DEFAULT '',
+                previous_expires_at TEXT NOT NULL DEFAULT '',
+                row_count INTEGER NOT NULL DEFAULT 0 CHECK(row_count >= 0),
+                size_bytes INTEGER NOT NULL DEFAULT 0 CHECK(size_bytes >= 0),
+                updated_at TEXT NOT NULL,
+                UNIQUE(workspace_identity, source_name)
+            )
+        """)
+        db.execute("CREATE INDEX local_datasets_updated ON local_datasets(updated_at DESC)")
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -545,6 +579,92 @@ class ContextStore:
                 value[key] = json.loads(value.pop(column))
             result.append(value)
         return result
+
+    def local_dataset_put(self, value: dict[str, Any]) -> None:
+        """Persist one logical table copy; generations remain implementation details."""
+        required = ("dataset_id", "workspace_identity", "source_name")
+        if any(not isinstance(value.get(key), str) or not value[key].strip() for key in required):
+            raise ValidationError("Local dataset identity, workspace and source are required")
+        dataset_id = value["dataset_id"]
+        if len(dataset_id) != 64 or any(char not in "0123456789abcdef" for char in dataset_id):
+            raise ValidationError("Local dataset identity is invalid")
+        columns_mode = str(value.get("columns_mode", "UNKNOWN")).upper()
+        rows_mode = str(value.get("rows_mode", "UNKNOWN")).upper()
+        freshness = str(value.get("freshness", "UNKNOWN")).upper()
+        if columns_mode not in {"ALL", "SELECTED", "UNKNOWN"}:
+            raise ValidationError("Local dataset column intent is invalid")
+        if rows_mode not in {"FULL", "FILTERED", "UNKNOWN"}:
+            raise ValidationError("Local dataset row intent is invalid")
+        if freshness not in {"CURRENT", "STALE_SCHEMA", "STALE_DATA", "UNKNOWN"}:
+            raise ValidationError("Local dataset freshness state is invalid")
+        selected = value.get("selected_columns", [])
+        if not isinstance(selected, list) or len(selected) > 1000 or any(
+                not isinstance(item, str) or not item or len(item) > 512 for item in selected):
+            raise ValidationError("Local dataset selected columns are invalid")
+        row_count = value.get("row_count", 0)
+        size_bytes = value.get("size_bytes", 0)
+        if type(row_count) is not int or row_count < 0 or type(size_bytes) is not int or size_bytes < 0:
+            raise ValidationError("Local dataset statistics must be non-negative integers")
+        with self.transaction() as db:
+            db.execute("""
+                INSERT INTO local_datasets(dataset_id,workspace_identity,source_name,columns_mode,
+                    selected_columns_json,rows_mode,predicate,schema_identity,source_version,freshness,
+                    state,current_generation,previous_generation,previous_expires_at,row_count,size_bytes,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(dataset_id) DO UPDATE SET workspace_identity=excluded.workspace_identity,
+                    source_name=excluded.source_name,columns_mode=excluded.columns_mode,
+                    selected_columns_json=excluded.selected_columns_json,rows_mode=excluded.rows_mode,
+                    predicate=excluded.predicate,schema_identity=excluded.schema_identity,
+                    source_version=excluded.source_version,freshness=excluded.freshness,
+                    state=excluded.state,current_generation=excluded.current_generation,
+                    previous_generation=excluded.previous_generation,
+                    previous_expires_at=excluded.previous_expires_at,row_count=excluded.row_count,
+                    size_bytes=excluded.size_bytes,updated_at=excluded.updated_at
+            """, (dataset_id, value["workspace_identity"], value["source_name"], columns_mode,
+                  _json(selected), rows_mode, str(value.get("predicate", ""))[:8192],
+                  str(value.get("schema_identity", ""))[:128], str(value.get("source_version", ""))[:200],
+                  freshness, str(value.get("state", "LOCAL_CURRENT"))[:40].upper(),
+                  str(value.get("current_generation", ""))[:64],
+                  str(value.get("previous_generation", ""))[:64],
+                  str(value.get("previous_expires_at", ""))[:40], row_count, size_bytes, _now()))
+
+    def local_dataset_get(self, dataset_id: str) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute("SELECT * FROM local_datasets WHERE dataset_id=?", (dataset_id,)).fetchone()
+        if row is None:
+            return None
+        value = dict(row)
+        value["selected_columns"] = json.loads(value.pop("selected_columns_json"))
+        return value
+
+    def local_dataset_recent(self, *, workspace_identity: str | None = None,
+                             limit: int = 50) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 500:
+            raise ValidationError("Local dataset limit must be between 1 and 500")
+        with self._connect() as db:
+            if workspace_identity:
+                rows = db.execute("SELECT * FROM local_datasets WHERE workspace_identity=? "
+                                  "ORDER BY updated_at DESC LIMIT ?", (workspace_identity, limit)).fetchall()
+            else:
+                rows = db.execute("SELECT * FROM local_datasets ORDER BY updated_at DESC LIMIT ?",
+                                  (limit,)).fetchall()
+        result = []
+        for row in rows:
+            value = dict(row)
+            value["selected_columns"] = json.loads(value.pop("selected_columns_json"))
+            result.append(value)
+        return result
+
+    def local_dataset_delete(self, dataset_id: str) -> None:
+        with self.transaction() as db:
+            db.execute("DELETE FROM local_datasets WHERE dataset_id=?", (dataset_id,))
+
+    def materialization_delete(self, materialization_ids: list[str]) -> None:
+        if not materialization_ids:
+            return
+        with self.transaction() as db:
+            db.executemany("DELETE FROM materializations WHERE materialization_id=?",
+                           [(item,) for item in materialization_ids])
 
     def operation_put(self, record: OperationRecord) -> None:
         now = _now()

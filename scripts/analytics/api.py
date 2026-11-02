@@ -99,6 +99,14 @@ class AnalyticsAPI:
         if method == "GET" and path == "/api/materializations":
             return 200, {"items": self.service.materializations_recent(
                 limit=self._int_query(query, "limit", 50, 1, 100))}
+        if method == "GET" and path == "/api/datasets":
+            return 200, {"items": self.service.local_datasets(
+                limit=self._int_query(query, "limit", 100, 1, 500))}
+        if method == "DELETE" and path.startswith("/api/datasets/"):
+            dataset_id = unquote(path.removeprefix("/api/datasets/"))
+            if "/" in dataset_id or "\\" in dataset_id:
+                raise ValidationError("Local dataset path is invalid")
+            return 200, self.service.delete_local_dataset(dataset_id)
         if method == "GET" and path == "/api/operations":
             return 200, {"items": self.service.operations_recent(
                 limit=self._int_query(query, "limit", 50, 1, 100))}

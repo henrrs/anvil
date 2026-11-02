@@ -12,7 +12,7 @@ from scripts.analytics.models import (CatalogObject, CatalogObjectType,
                                       KnowledgeItem, MaterializationState,
                                       OperationRecord, QueryRecord, QueryRoute)
 from scripts.analytics.paths import AnalyticsPaths
-from scripts.analytics.store import ContextStore
+from scripts.analytics.store import ContextStore, SCHEMA_VERSION, migration_rollback_policy
 
 
 class AnalyticsContextStoreTests(unittest.TestCase):
@@ -31,7 +31,7 @@ class AnalyticsContextStoreTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(self.paths.database.stat().st_mode), 0o600)
         with self.store._connect() as db:
             self.assertEqual(db.execute("PRAGMA journal_mode").fetchone()[0].lower(), "wal")
-            self.assertEqual(db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 3)
+            self.assertEqual(db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], SCHEMA_VERSION)
 
     def test_catalog_hydration_progress_is_persisted_and_bounded(self) -> None:
         self.store.catalog_hydration_set("tree", "", "LOADING", phase="tables",
@@ -46,7 +46,7 @@ class AnalyticsContextStoreTests(unittest.TestCase):
             self.store.catalog_hydration_set("tree", "", "LOADING", progress_current=10,
                                               progress_total=9)
 
-    def test_v2_catalog_hydration_schema_migrates_to_v3(self) -> None:
+    def test_v2_catalog_hydration_schema_migrates_to_v4_and_preserves_rows(self) -> None:
         legacy_paths = AnalyticsPaths.from_root(Path(self.temp.name) / "legacy-anvil", create=True)
         with sqlite3.connect(legacy_paths.database) as db:
             db.execute("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
@@ -54,9 +54,31 @@ class AnalyticsContextStoreTests(unittest.TestCase):
             db.execute("CREATE TABLE catalog_hydration(scope TEXT NOT NULL,parent_name TEXT NOT NULL DEFAULT '',state TEXT NOT NULL,error_code TEXT NOT NULL DEFAULT '',error_message TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,object_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,PRIMARY KEY(scope,parent_name))")
         migrated = ContextStore(paths=legacy_paths)
         with migrated._connect() as db:
-            self.assertEqual(db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 3)
+            self.assertEqual(db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 4)
             columns = {row[1] for row in db.execute("PRAGMA table_info(catalog_hydration)")}
+            tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertTrue({"phase", "progress_current", "progress_total"} <= columns)
+        self.assertIn("local_datasets", tables)
+        self.assertEqual(migration_rollback_policy(3, 4)["policy"], "BACKUP_RESTORE_REQUIRED")
+
+    def test_local_dataset_metadata_is_unique_and_round_trips(self) -> None:
+        dataset = {"dataset_id": "a" * 64, "workspace_identity": "workspace-hash",
+                   "source_name": "main.silver.orders", "columns_mode": "SELECTED",
+                   "selected_columns": ["order_id", "status"], "rows_mode": "FILTERED",
+                   "predicate": "status = 'failed'", "schema_identity": "schema-hash",
+                   "source_version": "v-10", "freshness": "CURRENT",
+                   "state": "LOCAL_CURRENT", "current_generation": "b" * 64,
+                   "previous_generation": "c" * 64,
+                   "previous_expires_at": "2026-11-03T12:00:00Z", "row_count": 14,
+                   "size_bytes": 4096}
+        self.store.local_dataset_put(dataset)
+        self.store.local_dataset_put({**dataset, "row_count": 15})
+        value = self.store.local_dataset_get("a" * 64)
+        self.assertEqual(value["selected_columns"], ["order_id", "status"])
+        self.assertEqual(value["row_count"], 15)
+        self.assertEqual(self.store.local_dataset_recent(workspace_identity="workspace-hash"), [value])
+        self.store.local_dataset_delete("a" * 64)
+        self.assertIsNone(self.store.local_dataset_get("a" * 64))
 
     def test_catalog_knowledge_query_and_operations_are_durable(self) -> None:
         self.assertEqual(self.store.catalog_upsert([

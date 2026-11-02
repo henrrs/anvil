@@ -7,13 +7,13 @@ flowchart LR
   Intent[User intent or explicit SQL] --> Plan[Read-only planner and coverage]
   Plan -->|AUTO: exact local coverage| DuckDB[DuckDB over Parquet]
   Plan -->|Remote query or uncovered data| Shared[Shared Databricks capability]
-  Plan -->|Make local| Acquire[Bounded acquisition plan]
+  Plan -->|Keep or update local copy| Acquire[Explicit acquisition plan]
   Shared -->|bounded result| UI[Analytics UI]
   Acquire --> Statement[SQL statement / Arrow transfer]
   Statement --> External[Databricks Arrow result links]
   External --> Verify[Download, verify chunks and limits]
   Verify --> Staging[Private staging Parquet snapshot]
-  Staging --> Commit[Atomic current-pointer publication]
+  Staging --> Commit[Atomic CURRENT/PREVIOUS pointer publication]
   Commit --> DuckDB
   Plan --> SQLite[(SQLite query and operation history)]
   Commit --> SQLite
@@ -39,17 +39,21 @@ Metadata failure keeps the prior cache and reports browse-only status. `search_c
 
 ## Make local and transfer
 
-An acquisition request includes a fully-qualified source table, selected columns, optional supported filter, source version, selected warehouse, principal and row/byte limits. Defaults are 100,000 rows and 512 MiB; the service enforces up to 1,000,000 rows and 1 GiB. A full-table selection requires explicit confirmation and OpenCode materialization tools require an additional user approval prompt. Free disk space is checked before transfer.
+An acquisition request includes a fully-qualified source table, selected or all columns, all rows or an optional supported filter, source version, principal and service-managed safety bounds. The interactive UI hides technical limits and uses a ceiling of 1,000,000 rows and 1 GiB; direct API/tool requests default to 100,000 rows and 512 MiB. These are hard acquisition limits: if the result exceeds them, Anvil fails the operation and preserves the active local copy rather than publishing a truncated dataset. Keeping all columns requires explicit confirmation, and OpenCode materialization tools require an additional user approval prompt. Free disk space is checked before transfer.
+
+Keep local and Update local copy are available without a previously selected running warehouse. Anvil first plans against the current local copy. It reuses a broader copy for a narrower projection or a contained filter. If a transfer is required, it selects a running warehouse when available; otherwise it starts an available stopped warehouse because the user explicitly requested local acquisition. This does not start a warehouse merely to browse the catalog or inspect local data. The UI reports warehouse startup, query execution, Arrow download, Parquet writing, validation and activation as distinct observable phases.
 
 The shared Databricks capability submits one read-only statement and returns bounded Arrow result metadata/links. Analytics downloads those links directly to its private data plane using a no-redirect client; result bytes are not sent through the model. Each chunk has checksums and is checkpointed for resume. Repeated chunks, corrupt payloads, excessive rows/bytes, incomplete manifests or disk failure stop publication.
 
-Chunks are converted to Parquet under a private staging snapshot. Anvil validates files/manifest and atomically switches the current snapshot pointer only after all chunks succeed. The prior snapshot remains current on failure. Duplicate plans are idempotent; force-refresh creates a distinct operation. Interrupted transfers can resume by operation ID; unknown Databricks submission state requires a new explicit operation rather than risking duplicate acquisition.
+Chunks are converted to Parquet under a private hidden staging generation. Anvil validates files and manifest, then atomically publishes one logical dataset pointer only after all chunks succeed. The current generation remains active on failure. A successful update retains one previous generation for 24 hours; readers hold a shared generation lock, and cleanup/deletion waits for those readers to finish. Expired previous generations and terminal staging folders are pruned on dataset listing or successful publication. Duplicate plans are idempotent; force-refresh creates a distinct operation. Interrupted transfers can resume by operation ID; unknown Databricks submission state requires a new explicit operation rather than risking duplicate acquisition.
 
 ## Coverage and consistency
 
-Coverage refers to the current committed snapshot, its recorded workspace/source/version/projection/filter and completion state. Partial or malformed snapshots are never reported as complete. A selected filter must match exactly; projected and predicate columns must exist in the snapshot. Table metadata version can be unavailable, in which case the plan records `UNVERIFIED`; users can refresh metadata and explicitly refresh their local snapshot when data needs to be current.
+Coverage refers to one logical workspace/table copy, its recorded source version, schema identity, selected/all-column intent, full/filtered-row intent and completion state. Partial or malformed copies are never reported as complete. AUTO and explicit acquisition use the same conservative coverage planner: full-column data can serve a projection, full-row data can serve a contained simple filter, and numeric/date ranges are reused only when implication can be proven. Predicate columns must also be present in the local copy. Unsupported predicates, missing columns, incompatible selected-column types, all-column schema drift, other workspace identities and partial row coverage fall back to Databricks or require a new acquisition. A selected-column copy may remain usable after unrelated source columns are added only when the selected column types are still proven; freshness is then unknown. Table metadata version can be unavailable, in which case freshness is reported as unknown; users can refresh metadata and explicitly update their local copy when data needs to be current.
 
-Refresh metadata updates catalog state only. Refresh local repeats or resumes a materialization. Neither operation silently downloads all data. A snapshot is an explicit local copy at its recorded acquisition point; it is not a live mirror of Databricks.
+SQLite stores one local_datasets row per workspace/table, including acquisition intent, source/schema identities, freshness, current/previous pointers and size. Individual generation identifiers and transfer operation identifiers stay internal to the UI. Home and the table's Local data tab expose one logical copy and a confirmed Remove action that deletes verified local files for the selected workspace while preserving unrelated or unrecognized files. The confirmation explicitly says that the remote Databricks table is not changed. Existing table-only copies are reused only when their manifest proves the workspace identity; duplicate legacy copies are reconciled by selecting the broadest healthy copy.
+
+Refresh metadata updates catalog state only. Refresh local repeats or resumes a materialization. Neither operation silently downloads all data. A local copy is an explicit acquisition at its recorded point; it is not a live mirror of Databricks.
 
 ## Lineage and profiling
 

@@ -55,6 +55,9 @@ class AcquisitionPlan:
     max_bytes: int
     estimated_bytes: int | None
     force_refresh: bool
+    intent_projection: tuple[str, ...] | None = None
+    source_schema_identity: str = ""
+    selected_schema_identity: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -308,12 +311,14 @@ def plan_materialization(*, workspace_identity: str, source_name: str,
                          max_bytes: int = 512 * 1024 * 1024,
                          estimated_bytes: int | None = None,
                          full_table_confirmed: bool = False,
-                         force_refresh: bool = False) -> AcquisitionPlan:
+                         force_refresh: bool = False,
+                         source_schema_identity: str = "") -> AcquisitionPlan:
     source_parts = source_name.split(".")
     if len(source_parts) != 3 or any(not part or any(ord(char) < 32 or char in "/\\" for char in part)
                                      for part in source_parts):
         raise ValidationError("Materialization source must be one fully qualified table")
     columns = tuple(projection)
+    intent_projection = columns
     if not columns:
         raise ValidationError("Materialization requires at least one projected column")
     if columns == ("*",) and not full_table_confirmed:
@@ -341,13 +346,14 @@ def plan_materialization(*, workspace_identity: str, source_name: str,
     if columns != ("*",) and parsed.predicate:
         # The local snapshot must include filter inputs even when they are not
         # part of the user's visible SELECT projection.
-        required = _predicate_columns(parsed.predicate)
+        required = predicate_columns(parsed.predicate)
         present = {column.casefold() for column in columns}
         columns = (*columns, *(column for column in required if column.casefold() not in present))
         if len(columns) > 1000:
             raise ValidationError("Materialization requires more than 1000 projected and filter columns")
     identity = {"workspace": workspace_identity, "source": source_name,
                 "source_version": source_version, "projection": columns,
+                "source_schema_identity": source_schema_identity,
                 "predicate": re.sub(r"\s+", " ", parsed.predicate).strip(),
                 "max_rows": max_rows, "max_bytes": max_bytes}
     if force_refresh:
@@ -356,10 +362,11 @@ def plan_materialization(*, workspace_identity: str, source_name: str,
                                                separators=(",", ":")).encode()).hexdigest()
     return AcquisitionPlan(operation_id, workspace_identity, source_name, source_version,
                            columns, parsed.predicate, max_rows, max_bytes,
-                           estimated_bytes, force_refresh)
+                           estimated_bytes, force_refresh, intent_projection,
+                           source_schema_identity)
 
 
-def _predicate_columns(predicate: str) -> tuple[str, ...]:
+def predicate_columns(predicate: str) -> tuple[str, ...]:
     keywords = {"and", "or", "not", "is", "null", "like", "in", "between", "true", "false"}
     found: list[str] = []
     seen: set[str] = set()

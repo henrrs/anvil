@@ -29,14 +29,16 @@ class MaterializationService:
              max_bytes: int = 512 * 1024 * 1024,
              estimated_bytes: int | None = None,
              full_table_confirmed: bool = False,
-             force_refresh: bool = False) -> AcquisitionPlan:
+             force_refresh: bool = False,
+             source_schema_identity: str = "") -> AcquisitionPlan:
         return plan_materialization(workspace_identity=workspace_identity,
                                     source_name=source_name, projection=projection,
                                     predicate=predicate, source_version=source_version,
                                     max_rows=max_rows, max_bytes=max_bytes,
                                     estimated_bytes=estimated_bytes,
                                     full_table_confirmed=full_table_confirmed,
-                                    force_refresh=force_refresh)
+                                    force_refresh=force_refresh,
+                                    source_schema_identity=source_schema_identity)
 
     def run(self, plan: AcquisitionPlan, warehouse_id: str, *, profile: str | None = None,
             principal: str = "", timeout: int = 1800,
@@ -71,7 +73,10 @@ class MaterializationService:
                 str(plan_value["source_name"]), str(plan_value["source_version"]),
                 tuple(plan_value["projection"]), str(plan_value["predicate"]),
                 int(plan_value["max_rows"]), int(plan_value["max_bytes"]),
-                plan_value.get("estimated_bytes"), bool(plan_value.get("force_refresh")))
+                plan_value.get("estimated_bytes"), bool(plan_value.get("force_refresh")),
+                tuple(plan_value.get("intent_projection") or plan_value["projection"]),
+                str(plan_value.get("source_schema_identity") or ""),
+                str(plan_value.get("selected_schema_identity") or ""))
         except (KeyError, TypeError, ValueError) as exc:
             raise ConflictError("Saved materialization plan is invalid", code="OPERATION_STATE_INVALID") from exc
         if plan.operation_id != operation_id:

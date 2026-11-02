@@ -52,16 +52,16 @@ class FakeOpenCode:
     def add_context(self, session_id, text):
         self.context.append((session_id, text))
 
-    def prompt(self, session_id, text):
-        self.prompts.append((session_id, text))
+    def prompt(self, session_id, text, *, model=None):
+        self.prompts.append((session_id, text, model))
         return {"accepted": True}
 
 
 class ChatFakeOpenCode(FakeOpenCode):
     generation = 1
 
-    def prompt(self, session_id, text):
-        self.prompts.append((session_id, text))
+    def prompt(self, session_id, text, *, model=None):
+        self.prompts.append((session_id, text, model))
         return {"parts": [{"type": "text", "text": "Analytics answer from the shared Anvil runtime."}]}
 
 
@@ -244,7 +244,8 @@ class OpenCodeRuntimeTests(unittest.TestCase):
                     created = adapter.create_session("task", parent_id="ses-parent")
                     self.assertEqual(created["id"], "ses-created")
                     adapter.add_context("ses-created", "context")
-                    accepted = adapter.prompt("ses-created", "hello")
+                    selected_model = {"providerID": "opencode", "modelID": "gpt-6-luna"}
+                    accepted = adapter.prompt("ses-created", "hello", model=selected_model)
                     if generation == 2:
                         self.assertTrue(accepted.get("accepted"))
                         answer = adapter.wait_for_response("ses-created", timeout=5)
@@ -260,6 +261,9 @@ class OpenCodeRuntimeTests(unittest.TestCase):
                                 else any(path.endswith("/message") for path in paths))
                 if generation == 2:
                     self.assertIn("/api/session/ses-created/wait", paths)
+                prompt_request = next(req for req in RuntimeHTTPHandler.requests
+                                      if req[0] == "POST" and req[2] and req[2].get("model"))
+                self.assertEqual(prompt_request[2]["model"], selected_model)
                 creation = next(req for req in RuntimeHTTPHandler.requests
                                 if req[0] == "POST" and urlsplit(req[1]).path == prefix + "/session")
                 self.assertEqual(creation[2]["parentID"], "ses-parent")
@@ -359,6 +363,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
                 "columns": ["status"], "preview": {"columns": ["status"], "rows": [["failed"]]},
             })
             self.assertIn("Analytics answer", result["text"])
+            self.assertEqual(adapter.prompts[0][2], {"providerID": "opencode", "modelID": "gpt-6-luna"})
             self.assertIn("failed orders cluster after midnight UTC", adapter.prompts[0][1])
             self.assertIn("main.ops.orders", adapter.prompts[0][1])
             canonical_id = adapter.prompts[0][0]

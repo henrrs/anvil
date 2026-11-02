@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import logging
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -19,6 +21,12 @@ from .store import ContextStore
 
 MAX_QUERY_ROWS = 100
 MAX_QUERY_BYTES = 1_000_000
+_LOG = logging.getLogger(__name__)
+
+
+def _query_event(event: str, **details: Any) -> None:
+    _LOG.info(json.dumps({"event": event, **details}, sort_keys=True,
+                         separators=(",", ":"), default=str))
 
 
 class RemoteQueryPort(Protocol):
@@ -60,8 +68,9 @@ class DuckDBLocalEngine:
             requested_limit = min(plan.limit, max_rows + 1) if plan.limit is not None else max_rows + 1
             statement += f" LIMIT {requested_limit}"
             cursor = connection.execute(statement)
-            columns = [str(item[0]) for item in (cursor.description or [])]
-            raw_rows = cursor.fetchmany(max_rows + 1)
+            arrow_result = cursor.to_arrow_table()
+            columns = list(arrow_result.column_names)
+            raw_rows = list(zip(*(column.to_pylist() for column in arrow_result.columns)))
             truncated = len(raw_rows) > max_rows
             rows: list[list[Any]] = []
             size = 0
@@ -97,6 +106,12 @@ class DuckDBLocalEngine:
             return value.isoformat()
         if isinstance(value, Decimal):
             return str(value)
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return base64.b64encode(bytes(value)).decode("ascii")
+        if isinstance(value, dict):
+            return {str(key): DuckDBLocalEngine._value(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [DuckDBLocalEngine._value(item) for item in value]
         return str(value)
 
 
@@ -110,7 +125,9 @@ class QueryRouter:
 
     def execute(self, sql: str, *, route: QueryRoute | str = QueryRoute.AUTO,
                 warehouse_id: str | None = None, profile: str | None = None,
-                timeout: int = 120) -> dict[str, Any]:
+                timeout: int = 120, workspace_identity: str | None = None,
+                remote_schema: list[dict[str, Any]] | None = None,
+                source_version: str | None = None) -> dict[str, Any]:
         try:
             route_value = route.value if isinstance(route, QueryRoute) else str(route).upper()
             selected_route = QueryRoute(route_value)
@@ -118,34 +135,41 @@ class QueryRouter:
             raise ValidationError("Query route must be AUTO, LOCAL or DATABRICKS") from exc
         normalized_sql = ensure_read_only(sql)
         plan = parse_local_query(normalized_sql)
-        decision = (self.coverage.covers(plan) if plan else
-                    CoverageDecisionFallback(False, "This SQL shape is not supported by the local coverage checker."))
-        if selected_route == QueryRoute.LOCAL:
-            if not plan or not decision.covered:
-                raise CoverageError(decision.reason, code="LOCAL_COVERAGE_MISMATCH")
-            if not self.local.available:
-                raise UnavailableError("DuckDB is not installed; local SQL is unavailable",
-                                       code="LOCAL_ENGINE_MISSING", retryable=False)
-            actual_route = QueryRoute.LOCAL
-        elif selected_route == QueryRoute.DATABRICKS:
-            actual_route = QueryRoute.DATABRICKS
-        elif plan and decision.covered and self.local.available:
-            actual_route = QueryRoute.LOCAL
-        else:
-            actual_route = QueryRoute.DATABRICKS
+        decision = CoverageDecisionFallback(False, "This SQL shape is not supported by the local coverage checker.")
+        snapshot: dict[str, Any] | None = None
+        actual_route = QueryRoute.DATABRICKS
 
         started = time.monotonic()
         status = "FAILED"
         error_code = ""
         result: dict[str, Any]
         try:
-            if actual_route == QueryRoute.LOCAL:
-                assert plan is not None
-                snapshot = self.coverage.snapshot_for(plan.source_name)
-                if snapshot is None:
-                    raise CoverageError("The current local snapshot is unavailable")
-                result = self.local.query(plan, snapshot)
-            else:
+            if selected_route != QueryRoute.DATABRICKS and plan:
+                with self.coverage.locked_snapshot(plan.source_name, workspace_identity) as locked_snapshot:
+                    decision = self.coverage.covers(plan, workspace_identity=workspace_identity,
+                                                    remote_schema=remote_schema,
+                                                    source_version=source_version)
+                    _query_event("local_coverage_evaluated", source_name=plan.source_name,
+                                 workspace_identity=workspace_identity or "", covered=decision.covered,
+                                 state=decision.state, reasons=decision.reasons)
+                    wants_local = selected_route == QueryRoute.LOCAL or decision.covered
+                    if selected_route == QueryRoute.LOCAL and not decision.covered:
+                        raise CoverageError(decision.reason, code="LOCAL_COVERAGE_MISMATCH")
+                    if wants_local and not self.local.available:
+                        if selected_route == QueryRoute.LOCAL:
+                            raise UnavailableError("DuckDB is not installed; local SQL is unavailable",
+                                                   code="LOCAL_ENGINE_MISSING", retryable=False)
+                    elif wants_local:
+                        if locked_snapshot is None:
+                            raise CoverageError("The current local snapshot is unavailable")
+                        actual_route = QueryRoute.LOCAL
+                        snapshot = locked_snapshot
+                        result = self.local.query(plan, snapshot)
+                    else:
+                        actual_route = QueryRoute.DATABRICKS
+            elif selected_route == QueryRoute.LOCAL:
+                raise CoverageError(decision.reason, code="LOCAL_COVERAGE_MISMATCH")
+            if actual_route == QueryRoute.DATABRICKS:
                 if not self.remote:
                     raise UnavailableError("Databricks SQL is not configured", code="PROVIDER_NOT_CONFIGURED")
                 if not warehouse_id:
@@ -155,6 +179,15 @@ class QueryRouter:
                 if not isinstance(result, dict) or not isinstance(result.get("rows"), list):
                     raise UnavailableError("Databricks returned an invalid SQL result", code="SQL_RESULT_INVALID")
                 result = _bound_remote_result(result)
+            if selected_route == QueryRoute.AUTO:
+                _query_event("auto_route_selected", route=actual_route.value,
+                             source_name=plan.source_name if plan else "",
+                             coverage_state=decision.state,
+                             reason_code=(decision.reasons[0] if decision.reasons else ""))
+            if actual_route == QueryRoute.LOCAL:
+                _query_event("local_dataset_reused", source_name=plan.source_name if plan else "",
+                             workspace_identity=workspace_identity or "",
+                             snapshot_id=decision.snapshot_id)
             status = "SUCCEEDED"
             return {**result, "route": actual_route.value,
                     "coverage": {"covered": decision.covered, "reason": decision.reason,

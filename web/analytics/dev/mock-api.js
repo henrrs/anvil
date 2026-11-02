@@ -85,6 +85,13 @@
       if (pathname === "/api/query/history") return { items: this._queryHistory() };
       if (pathname === "/api/operations") return { items: this.operations.map((item) => ({ ...item })) };
       if (pathname === "/api/materializations" && method === "GET") return { items: this._materializations() };
+      if (pathname === "/api/datasets" && method === "GET") return { items: this._datasets() };
+      if (pathname.startsWith("/api/datasets/") && method === "DELETE") {
+        const datasetId = pathname.slice("/api/datasets/".length);
+        this.deletedDatasets ||= new Set();
+        this.deletedDatasets.add(datasetId);
+        return { dataset_id: datasetId, deleted: true, removed_generations: 1 };
+      }
       if (pathname === "/api/investigations/recent") return { items: this._investigations() };
       if (pathname === "/api/query/explain" && method === "POST") return this._explain(body.sql || "");
       if (pathname === "/api/query" && method === "POST") return this._query(body);
@@ -96,16 +103,18 @@
     async streamChat(body, onEvent) {
       const prompt = String(body?.prompt || "").trim();
       if (!prompt) throw this._error("INVALID_REQUEST", "Ask Anvil requires a question.");
-      onEvent?.("status", { message: "Reading the active Analytics context…" });
+      onEvent?.("status", { message: "Preparing Analytics session…" });
       await new Promise((resolve) => global.setTimeout(resolve, 90));
       if (this.scenario === "degraded") {
         throw this._error("RUNTIME_UNAVAILABLE", "The configured OpenCode runtime is unavailable in this scenario.", 503);
       }
+      onEvent?.("status", { message: "Asking Anvil in the canonical session…" });
       const table = body.context?.table;
       const answer = table
-        ? `For ${table}, start by checking the table grain and freshness. The mock catalog contains descriptive column metadata and a small safe preview. This response is fixture driven; it does not call a model.`
-        : `I can help you explore this Analytics workspace. Try opening a table, reviewing its local coverage, or asking how AUTO query routing chooses between DuckDB and Databricks. This response is fixture driven; it does not call a model.`;
-      for (const part of answer.match(/.{1,42}(?:\s|$)/g) || [answer]) {
+        ? "For " + table + ", start by checking the table grain and freshness.\n\n| Check | What to verify |\n| --- | --- |\n| Grain | One row per business key |\n| Freshness | Latest source update |\n\nThis response is fixture driven; it does not call a model."
+        : "I can help you explore this Analytics workspace. Try opening a table, reviewing its local coverage, or asking how AUTO query routing chooses between DuckDB and Databricks. This response is fixture driven; it does not call a model.";
+      for (let offset = 0; offset < answer.length; offset += 42) {
+        const part = answer.slice(offset, offset + 42);
         onEvent?.("chunk", { text: part });
         await new Promise((resolve) => global.setTimeout(resolve, 35));
       }
@@ -121,6 +130,8 @@
         status: {
           runtime: { status: degraded ? "DEGRADED" : "READY", generation: 2,
             ...(degraded ? { error: { code: "RUNTIME_UNAVAILABLE", message: "OpenCode runtime is unavailable." } } : {}) },
+          model_policy: { logical_model: "anvil-analytics", display_name: "GPT 6 Luna",
+            provider: "opencode", model: "gpt-6-luna", fallback: "NONE" },
           databricks: { status: offline ? "DEGRADED" : "READY", profile: "anvil-demo", workspace: "https://adb-demo.azuredatabricks.net" },
           catalog: { status: offline ? "BROWSE_ONLY" : "AVAILABLE", cached_objects: this.scenario === "large-catalog" ? 30_000 : 842 },
           local: { duckdb: "READY", pyarrow: "READY", storage_bytes: 18_400_000_000 },
@@ -201,8 +212,23 @@
       if (isPreview) return { status: "READY", columns: COLUMNS.slice(0, 5).map((column) => column.name), rows: ROWS.slice(0, 5).map((row) => row.slice(0, 5)), row_count: 5, truncated: false };
       if (isCoverage) {
         const local = fullName.endsWith("transactions") ? "full" : fullName.endsWith("payment_events") ? "partial" : "remote";
-        return { covered: local === "full", snapshot_id: local === "remote" ? "" : `snapshot-${local}-20261031`, rows: local === "remote" ? 0 : local === "full" ? 482_211 : 84_200,
-          bytes: local === "remote" ? 0 : local === "full" ? 2_118_342_144 : 18_400_000, columns: local === "full" ? COLUMNS.map((item) => item.name) : ["transaction_id", "event_ts"], reason: local === "full" ? "Complete snapshot covers the table." : local === "partial" ? "Snapshot contains a bounded projection of recent events." : "No local snapshot is available." };
+        const sourceIsFull = local === "full";
+        const sourceIsPartial = local === "partial";
+        return {
+          covered: sourceIsFull,
+          freshness: sourceIsFull ? "CURRENT" : "UNKNOWN",
+          state: sourceIsFull ? "FULLY_COVERED" : sourceIsPartial ? "PARTIALLY_COVERED" : "NOT_COVERED",
+          snapshot_id: local === "remote" ? "" : "snapshot-" + local + "-20261031",
+          dataset_id: local === "remote" ? "" : sourceIsFull ? "mock-dataset-transactions" : "mock-dataset-payment-events",
+          rows: local === "remote" ? 0 : sourceIsFull ? 482211 : 84200,
+          bytes: local === "remote" ? 0 : sourceIsFull ? 2118342144 : 18400000,
+          columns: sourceIsFull ? COLUMNS.map((item) => item.name) : ["transaction_id", "event_ts"],
+          columns_mode: sourceIsFull ? "ALL" : "SELECTED",
+          rows_mode: sourceIsPartial ? "FILTERED" : "FULL",
+          updated_at: local === "remote" ? "" : isoDaysAgo(0.3),
+          reason: sourceIsFull ? "Local copy covers the table." : sourceIsPartial
+            ? "Local copy contains selected columns and filtered rows." : "No local copy is available.",
+        };
       }
       if (isLineage) return { status: "READY", rows: [
         { event_time: isoDaysAgo(1), source_table_full_name: "lakehouse.silver.processor_events", target_table_full_name: fullName },
@@ -230,6 +256,18 @@
       ];
     }
 
+    _datasets() {
+      return [
+        { dataset_id: "mock-dataset-transactions", source_name: "main.finance.transactions", state: "READY",
+          columns: COLUMNS.map((column) => column.name), columns_mode: "ALL", rows_mode: "FULL",
+          rows: 482_211, bytes: 2_118_342_144, updated_at: isoDaysAgo(0.3) },
+        { dataset_id: "mock-dataset-payment-events", source_name: "main.finance.payment_events", state: "READY",
+          columns: COLUMNS.slice(0, 3).map((column) => column.name), columns_mode: "SELECTED", rows_mode: "FILTERED",
+          rows: 84_200, bytes: 18_400_000, updated_at: isoDaysAgo(1) },
+      ].concat([...((this.localCopies || new Map()).values())])
+        .filter((item) => !this.deletedDatasets?.has(item.dataset_id));
+    }
+
     _investigations() {
       return [{ investigation_id: "inv-2026-104", title: "Refund rate anomaly", state: "COMPLETED",
         summary: "Refunds increased in mobile orders; the shift aligns with a processor retry change.", updated_at: isoDaysAgo(1) }];
@@ -255,7 +293,8 @@
     _startMaterialization(body) {
       const operationId = `mock-materialize-${++this.operationCounter}`;
       const operation = { operation_id: operationId, kind: "MATERIALIZATION", state: "RUNNING",
-        source_name: String(body.source_name || "main.finance.transactions"), rows: 0, bytes: 0, progress: 8 };
+        source_name: String(body.source_name || "main.finance.transactions"), rows: 0, bytes: 0, progress: 8,
+        phase: "STARTING_WAREHOUSE" };
       this.operations.unshift(operation);
       this.materializationStarted.set(operationId, Date.now());
       return { operation_id: operationId, state: "RUNNING" };
@@ -276,10 +315,19 @@
       const started = this.materializationStarted.get(id);
       if (started && Date.now() - started > 9000 && operation.state === "RUNNING") {
         operation.state = "READY";
+        operation.phase = "ACTIVATING";
         operation.progress = 100;
         operation.rows = 100_000;
         operation.bytes = 24_100_000;
+        this.materializationStarted.delete(id);
+        this.localCopies ||= new Map();
+        const datasetId = `mock-dataset-${encodeURIComponent(operation.source_name).replace(/%/g, "-")}`;
+        this.localCopies.set(datasetId, { dataset_id: datasetId, source_name: operation.source_name,
+          state: "READY", columns: COLUMNS.map((column) => column.name), columns_mode: "SELECTED",
+          rows_mode: "FULL", rows: operation.rows, bytes: operation.bytes, updated_at: new Date().toISOString() });
       }
+      if (started && Date.now() - started > 2800 && operation.state === "RUNNING") operation.phase = "WRITING_PARQUET";
+      else if (started && Date.now() - started > 900 && operation.state === "RUNNING") operation.phase = "DOWNLOADING_ARROW";
       return { ...operation, kind: "MATERIALIZATION" };
     }
 

@@ -232,7 +232,9 @@ class AnalyticsCatalogTests(unittest.TestCase):
         old_record = shared._record_runtime_outcome
         try:
             shared.resolve_profile = lambda profile: (profile or "anvil-test", "https://example.invalid", [])
-            shared.discover_warehouses = lambda _profile: {"running": [{"warehouse_id": "wh-test"}]}
+            shared.discover_warehouses = lambda _profile: {
+                "running": [{"warehouse_id": "wh-test", "state": "RUNNING"}],
+                "warehouses": [{"warehouse_id": "wh-test", "state": "RUNNING"}]}
 
             def invoke(capability, operation, arguments, **kwargs):
                 calls.append((capability, operation, arguments, kwargs))
@@ -265,6 +267,38 @@ class AnalyticsCatalogTests(unittest.TestCase):
         self.assertEqual(chunk["external_links"][0]["chunk_index"], 0)
         self.assertTrue(cancelled["cancelled"])
         self.assertEqual({call[0] for call in calls}, {"sql.execute"})
+
+    def test_explicit_transfer_starts_a_stopped_warehouse(self):
+        shared = _shared_module()
+        calls = []
+        old_resolve = shared.resolve_profile
+        old_warehouses = shared.discover_warehouses
+        old_ensure = shared.ensure_warehouse_running
+        old_call = shared._call_provider
+        old_record = shared._record_runtime_outcome
+        try:
+            shared.resolve_profile = lambda profile: (profile or "anvil-test", "https://example.invalid", [])
+            stopped = {"warehouse_id": "wh-stopped", "name": "BI", "state": "STOPPED"}
+            shared.discover_warehouses = lambda _profile: {"warehouses": [stopped], "running": [], "stopped": [stopped]}
+
+            def ensure(warehouse, profile):
+                calls.append(("ensure", warehouse["state"], profile))
+                return {**warehouse, "state": "RUNNING"}
+
+            shared.ensure_warehouse_running = ensure
+            shared._call_provider = lambda *_args, **_kwargs: {
+                "value": {"statement_id": "statement-stopped"}, "provider": "sdk"}
+            shared._record_runtime_outcome = lambda *_args, **_kwargs: None
+            result = shared.start_sql_transfer("SELECT order_id FROM main.silver.orders", "wh-stopped",
+                                               profile="anvil-test")
+        finally:
+            shared.resolve_profile = old_resolve
+            shared.discover_warehouses = old_warehouses
+            shared.ensure_warehouse_running = old_ensure
+            shared._call_provider = old_call
+            shared._record_runtime_outcome = old_record
+        self.assertEqual(calls, [("ensure", "STOPPED", "anvil-test")])
+        self.assertEqual(result["statement_id"], "statement-stopped")
 
     def test_sdk_worker_submits_external_arrow_with_existing_workspace_client(self):
         calls = {}

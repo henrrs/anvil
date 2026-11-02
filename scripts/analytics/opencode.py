@@ -32,7 +32,7 @@ class OpenCodeRuntimePort(Protocol):
     def get_session(self, session_id: str) -> dict[str, Any] | None: ...
     def create_session(self, title: str, parent_id: str | None = None) -> dict[str, Any]: ...
     def add_context(self, session_id: str, text: str) -> None: ...
-    def prompt(self, session_id: str, text: str) -> dict[str, Any]: ...
+    def prompt(self, session_id: str, text: str, *, model: dict[str, str] | None = None) -> dict[str, Any]: ...
     def wait_for_response(self, session_id: str, *, timeout: float = 300.0) -> dict[str, Any]: ...
 
 
@@ -129,8 +129,11 @@ class _HttpAdapter:
     def add_context(self, session_id: str, text: str) -> None:
         self._add_context(session_id, text)
 
-    def prompt(self, session_id: str, text: str) -> dict[str, Any]:
-        result = self._prompt(session_id, text)
+    def prompt(self, session_id: str, text: str, *, model: dict[str, str] | None = None) -> dict[str, Any]:
+        if model is not None and (set(model) != {"providerID", "modelID"} or
+                                  any(not isinstance(value, str) or not value for value in model.values())):
+            raise ValidationError("OpenCode model selection is invalid")
+        result = self._prompt(session_id, text, model=model)
         return self._object(result)
 
     def _session_list_path(self) -> str:
@@ -148,7 +151,7 @@ class _HttpAdapter:
     def _add_context(self, session_id: str, text: str) -> None:
         raise NotImplementedError
 
-    def _prompt(self, session_id: str, text: str) -> Any:
+    def _prompt(self, session_id: str, text: str, *, model: dict[str, str] | None = None) -> Any:
         raise NotImplementedError
 
 
@@ -168,9 +171,12 @@ class OpenCode1xRuntimeAdapter(_HttpAdapter):
         self._request("POST", self._session_item_path(session_id) + "/message",
                       {"noReply": True, "parts": [{"type": "text", "text": text}]})
 
-    def _prompt(self, session_id: str, text: str) -> Any:
+    def _prompt(self, session_id: str, text: str, *, model: dict[str, str] | None = None) -> Any:
+        body: dict[str, Any] = {"parts": [{"type": "text", "text": text}]}
+        if model:
+            body["model"] = model
         return self._request("POST", self._session_item_path(session_id) + "/message",
-                             {"parts": [{"type": "text", "text": text}]}, timeout=300.0)
+                             body, timeout=300.0)
 
     def wait_for_response(self, session_id: str, *, timeout: float = 300.0) -> dict[str, Any]:
         del session_id, timeout
@@ -199,13 +205,15 @@ class OpenCode2xRuntimeAdapter(_HttpAdapter):
         self._request("POST", self._session_item_path(session_id) + "/synthetic",
                       {"text": text, "description": "Rehydrate persistent Analytics context", "resume": False})
 
-    def _prompt(self, session_id: str, text: str) -> Any:
+    def _prompt(self, session_id: str, text: str, *, model: dict[str, str] | None = None) -> Any:
         previous = self.list_messages(session_id, limit=1)
         previous_info = (previous[0].get("info") if previous and isinstance(previous[0].get("info"), dict)
                          else previous[0] if previous else {})
         previous_id = str(previous_info.get("id") or "")
-        result = self._request("POST", self._session_item_path(session_id) + "/prompt",
-                               {"text": text, "resume": True})
+        body: dict[str, Any] = {"text": text, "resume": True}
+        if model:
+            body["model"] = model
+        result = self._request("POST", self._session_item_path(session_id) + "/prompt", body)
         self._prompt_baselines[session_id] = previous_id
         return self._object(result)
 

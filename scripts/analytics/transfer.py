@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import logging
 import os
+import re
 import shutil
 import socket
 import ssl
@@ -20,12 +22,20 @@ from urllib.parse import urlsplit
 
 from .errors import (ConflictError, IntegrityError, UnavailableError,
                      ValidationError)
+from .coverage import (LocalCoverageService, atomic_dataset_state, dataset_lock,
+                       dataset_state, schema_identity, source_key)
 from .paths import AnalyticsPaths
 from .planner import AcquisitionPlan
 from .store import ContextStore
 
 MAX_CHUNKS = 100_000
 DOWNLOAD_TIMEOUT_SECONDS = 120
+_LOG = logging.getLogger(__name__)
+
+
+def _transfer_event(event: str, **details: Any) -> None:
+    _LOG.info(json.dumps({"event": event, **details}, sort_keys=True,
+                         separators=(",", ":"), default=str))
 
 
 class TransferProvider(Protocol):
@@ -217,7 +227,7 @@ class MaterializationTransfer:
             raise ValidationError("A valid running SQL warehouse is required")
         if timeout < 5 or timeout > 24 * 60 * 60:
             raise ValidationError("Materialization timeout must be between 5 seconds and 24 hours")
-        root = self._source_root(plan.source_name)
+        root = self._source_root(plan.source_name, plan.workspace_identity)
         snapshots = root / "snapshots"
         staging = snapshots / ("." + plan.operation_id + ".partial")
         lock_path = root / (plan.operation_id + ".lock")
@@ -237,6 +247,13 @@ class MaterializationTransfer:
                 raise IntegrityError("Materialization staging directory must not be a symlink")
             staging.mkdir(mode=0o700, exist_ok=True)
             self.paths.secure_directory(staging)
+            with dataset_lock(root, exclusive=True):
+                state = dataset_state(root)
+                staging_ids = state.get("staging") if isinstance(state.get("staging"), list) else []
+                staging_ids = [item for item in staging_ids if isinstance(item, str)]
+                if plan.operation_id not in staging_ids:
+                    staging_ids.append(plan.operation_id)
+                atomic_dataset_state(root, {**state, "version": 1, "staging": staging_ids[-100:]})
             operation = self.store.operation_get(plan.operation_id)
             payload = {"plan": plan.as_dict(), "warehouse_id": warehouse_id,
                        "profile": profile or "", "principal": principal[:256]}
@@ -258,6 +275,10 @@ class MaterializationTransfer:
                 if not statement_id:
                     checkpoint["phase"] = "SUBMITTING"
                     self._put_operation(plan, payload, "RUNNING", checkpoint)
+                    _transfer_event("materialization_remote_transfer_started",
+                                    source_name=plan.source_name,
+                                    workspace_identity=plan.workspace_identity,
+                                    warehouse_id=warehouse_id)
                     submitted = self.provider.transfer_submit(
                         plan.statement(), warehouse_id, profile=profile,
                         max_rows=plan.max_rows, max_bytes=plan.max_bytes, timeout=min(timeout, 600))
@@ -286,6 +307,8 @@ class MaterializationTransfer:
                 if isinstance(total_bytes, int) and total_bytes > plan.max_bytes:
                     raise ConflictError("The result exceeded the configured byte limit",
                                         code="MATERIALIZATION_LIMIT_REACHED")
+                checkpoint["phase"] = "DOWNLOADING_ARROW"
+                self._put_operation(plan, payload, "RUNNING", checkpoint)
                 count = manifest.get("total_chunk_count", 0)
                 if not isinstance(count, int) or count < 0 or count > MAX_CHUNKS:
                     raise IntegrityError("Databricks returned an invalid result chunk count")
@@ -336,6 +359,8 @@ class MaterializationTransfer:
                             raise ConflictError("The transfer exceeded its configured byte limit",
                                                 code="MATERIALIZATION_LIMIT_REACHED")
                         parquet_path = staging / (f"chunk-{index:06d}.parquet.tmp")
+                        checkpoint["phase"] = "WRITING_PARQUET"
+                        self._put_operation(plan, payload, "RUNNING", checkpoint)
                         stats = self.codec.write_parquet(arrow_path, parquet_path)
                         parquet_bytes = parquet_path.stat().st_size
                         if parquet_bytes <= 0:
@@ -360,7 +385,7 @@ class MaterializationTransfer:
                             "parquet_sha256": _file_hash(target), "file": target.name})
                         checkpoint["schema_fingerprint"] = stats.schema_fingerprint
                         checkpoint["columns"] = list(stats.columns or expected_columns)
-                        checkpoint["phase"] = "FETCHING"
+                        checkpoint["phase"] = "DOWNLOADING_ARROW"
                         self._put_operation(plan, payload, "RUNNING", checkpoint)
                         _unlink(arrow_path)
                         _unlink(parquet_path)
@@ -385,6 +410,8 @@ class MaterializationTransfer:
                                              "file": target.name}]
                     checkpoint["schema_fingerprint"] = empty_stats.schema_fingerprint
                     checkpoint["columns"] = list(empty_stats.columns)
+                checkpoint["phase"] = "VALIDATING"
+                self._put_operation(plan, payload, "RUNNING", checkpoint)
                 committed = self._publish(plan, staging, root, checkpoint, manifest,
                                           principal=principal)
                 self._put_operation(plan, payload, "READY", {**checkpoint, "phase": "READY",
@@ -392,6 +419,11 @@ class MaterializationTransfer:
                 if progress:
                     progress({"operation_id": plan.operation_id, "state": "READY",
                               "snapshot_id": committed["snapshot_id"]})
+                _transfer_event("local_dataset_switched", source_name=plan.source_name,
+                                workspace_identity=plan.workspace_identity,
+                                snapshot_id=committed["snapshot_id"],
+                                rows=committed["row_count"],
+                                bytes=committed["parquet_bytes"])
                 return {"operation_id": plan.operation_id, "state": "READY",
                         "snapshot_id": committed["snapshot_id"], "rows": committed["row_count"],
                         "bytes": committed["byte_count"], "reused": False}
@@ -509,13 +541,33 @@ class MaterializationTransfer:
                     "workspace_identity": plan.workspace_identity,
                     "source_version": plan.source_version,
                     "columns": checkpoint.get("columns", []),
-                    "all_columns": plan.projection == ("*",),
+                    "selected_columns": list(plan.intent_projection or plan.projection),
+                    "all_columns": (plan.intent_projection or plan.projection) == ("*",),
+                    "columns_mode": "ALL" if (plan.intent_projection or plan.projection) == ("*",) else "SELECTED",
+                    "rows_mode": "FILTERED" if plan.predicate else "FULL",
                     "predicate": plan.predicate, "complete": True,
                     "row_count": rows, "bytes": total_bytes,
                     "parquet_bytes": parquet_bytes, "files": file_names,
                     "file_bytes": {item["file"]: item["parquet_bytes"] for item in chunks},
                     "file_sha256": {item["file"]: item["parquet_sha256"] for item in chunks},
                     "principal": principal[:256], "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        remote_schema = remote_manifest.get("schema")
+        schema_columns = remote_schema.get("columns") if isinstance(remote_schema, dict) else None
+        if (isinstance(schema_columns, list) and schema_columns and
+                all(isinstance(item, dict) and (item.get("type_text") or item.get("type_name") or item.get("type"))
+                    for item in schema_columns)):
+            manifest["parquet_schema_identity"] = schema_identity(schema_columns)
+        if plan.source_schema_identity:
+            manifest["schema_identity"] = plan.source_schema_identity
+            manifest["source_schema_identity"] = plan.source_schema_identity
+        elif manifest.get("parquet_schema_identity"):
+            # Compatibility for plans created before full table schema identity
+            # was recorded by the catalog metadata path.
+            manifest["schema_identity"] = manifest["parquet_schema_identity"]
+        if plan.selected_schema_identity:
+            manifest["selected_schema_identity"] = plan.selected_schema_identity
+        manifest["freshness"] = ("CURRENT" if plan.source_version not in {"", "UNVERIFIED", "UNKNOWN"}
+                                  else "UNKNOWN")
         manifest_path = staging / "manifest.json"
         _atomic_json(manifest_path, manifest)
         final_dir = source_root / "snapshots" / snapshot_id
@@ -536,24 +588,84 @@ class MaterializationTransfer:
                            "state": "READY", "files": file_names,
                            "byte_count": total_bytes, "principal": principal[:256]}
         self.store.materialization_put(materialization)
-        pointer_path = source_root / "current.json"
-        _atomic_json(pointer_path, {"snapshot_id": snapshot_id})
+        now = time.time()
+        with dataset_lock(source_root, exclusive=True):
+            old_state = dataset_state(source_root)
+            old_pointer = old_state.get("current") if isinstance(old_state.get("current"), dict) else None
+            previous = None
+            if old_pointer and old_pointer.get("snapshot_id") != snapshot_id:
+                previous = {"snapshot_id": old_pointer["snapshot_id"],
+                            "expires_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + 86400))}
+            elif old_pointer and old_pointer.get("snapshot_id") == snapshot_id:
+                previous = old_state.get("previous")
+            else:
+                old_previous = old_state.get("previous")
+                if isinstance(old_previous, dict):
+                    try:
+                        if time.strptime(str(old_previous.get("expires_at") or ""),
+                                         "%Y-%m-%dT%H:%M:%SZ") > time.gmtime(now):
+                            previous = old_previous
+                    except ValueError:
+                        previous = None
+            stage_ids = old_state.get("staging") if isinstance(old_state.get("staging"), list) else []
+            stage_ids = [item for item in stage_ids if item != plan.operation_id and isinstance(item, str)]
+            published = {"version": 1,
+                         "current": {"snapshot_id": snapshot_id,
+                                     "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))},
+                         "previous": previous, "staging": stage_ids[-100:]}
+            operation = self.store.operation_get(plan.operation_id)
+            if operation and isinstance(operation.payload, dict):
+                self._put_operation(plan, operation.payload, "RUNNING",
+                                    {**checkpoint, "phase": "ACTIVATING"})
+            atomic_dataset_state(source_root, published)
+            coverage = LocalCoverageService(self.paths, self.store)
+            current = coverage.current(plan.source_name, plan.workspace_identity)
+            if current is None:
+                raise IntegrityError("Published local dataset could not be read back")
+            coverage.publish_dataset_record(current)
+            keep = {snapshot_id}
+            if previous and isinstance(previous.get("snapshot_id"), str):
+                keep.add(previous["snapshot_id"])
+            self._prune_generations(source_root, plan, keep)
         return {"snapshot_id": snapshot_id, "row_count": rows, "byte_count": total_bytes,
                 "parquet_bytes": parquet_bytes}
 
-    def _source_root(self, source_name: str) -> Path:
-        from .coverage import source_key
+    def _source_root(self, source_name: str, workspace_identity: str) -> Path:
         datasets = self.paths.datasets
         if datasets.is_symlink():
             raise IntegrityError("Analytics data root must not be a symlink")
         datasets.mkdir(mode=0o700, exist_ok=True)
         self.paths.secure_directory(datasets)
-        root = datasets / source_key(source_name)
+        root = datasets / source_key(source_name, workspace_identity)
         if root.is_symlink():
             raise IntegrityError("Materialization source directory must not be a symlink")
         root.mkdir(mode=0o700, exist_ok=True)
         self.paths.secure_directory(root)
         return root
+
+    def _prune_generations(self, root: Path, plan: AcquisitionPlan, keep: set[str]) -> None:
+        snapshots = root / "snapshots"
+        if snapshots.is_symlink() or not snapshots.is_dir():
+            return
+        removed = []
+        for directory in snapshots.iterdir():
+            if directory.name in keep or not re.fullmatch(r"[a-f0-9]{64}", directory.name):
+                continue
+            if directory.is_symlink() or not directory.is_dir():
+                continue
+            manifest_path = directory / "manifest.json"
+            if manifest_path.is_symlink() or not manifest_path.is_file():
+                continue
+            try:
+                manifest = _read_json(manifest_path)
+            except (IntegrityError, OSError, ValueError):
+                continue
+            if (manifest.get("state") == "READY" and manifest.get("snapshot_id") == directory.name
+                    and manifest.get("source_name") == plan.source_name
+                    and manifest.get("workspace_identity") == plan.workspace_identity):
+                shutil.rmtree(directory)
+                removed.append(directory.name)
+        self.store.materialization_delete(removed)
 
     def _put_operation(self, plan: AcquisitionPlan, payload: dict[str, Any], state: str,
                        checkpoint: dict[str, Any], error_code: str = "") -> None:
