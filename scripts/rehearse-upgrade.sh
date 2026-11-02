@@ -5,8 +5,8 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source "$ROOT/scripts/lib/common.sh"
 source "$ROOT/scripts/lib/install.sh"
 
-if [[ $# -lt 4 || $# -gt 5 ]]; then
-  printf 'usage: rehearse-upgrade.sh CANDIDATE_BINARY EXACT_VERSION SOURCE_MAJOR TARGET_MAJOR [reuse-config]\n' >&2
+if [[ $# -lt 4 || $# -gt 6 ]]; then
+  printf 'usage: rehearse-upgrade.sh CANDIDATE_BINARY EXACT_VERSION SOURCE_MAJOR TARGET_MAJOR [reuse-config] [prepared-config]\n' >&2
   exit 2
 fi
 candidate="$1"
@@ -15,6 +15,7 @@ expected_version="${expected_version#v}"
 source_major="$3"
 target_major="$4"
 reuse_config="${5:-no}"
+prepared_config="${6:-}"
 [[ "$source_major" == 1 || "$source_major" == 2 ]] || { anvil_error "Unsupported source OpenCode major: $source_major"; exit 2; }
 [[ "$target_major" == 1 || "$target_major" == 2 ]] || { anvil_error "Unsupported target OpenCode major: $target_major"; exit 2; }
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/anvil-upgrade-rehearsal.XXXXXX")"
@@ -73,7 +74,13 @@ rehearsal_env=(env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$test_home" \
   ANVIL_TEST_MODE="${ANVIL_TEST_MODE:-0}" \
   ANVIL_TEST_FAIL_CANDIDATE_VALIDATION="${ANVIL_TEST_FAIL_CANDIDATE_VALIDATION:-0}" \
   ANVIL_TEST_FAIL_REHEARSAL="${ANVIL_TEST_FAIL_REHEARSAL:-0}")
-if [[ "$reuse_config" == yes ]]; then
+if [[ -n "$prepared_config" ]]; then
+  [[ -d "$prepared_config" && ! -L "$prepared_config" ]] || {
+    anvil_error 'The prepared target config is missing or unsafe for lifecycle rehearsal.'
+    exit 1
+  }
+  cp -a -- "$prepared_config/." "$tmp_root/target-config/"
+elif [[ "$reuse_config" == yes ]]; then
   cp -a -- "$tmp_root/v1-config/." "$tmp_root/target-config/"
 else
   "${rehearsal_env[@]}" bash -c '
@@ -86,13 +93,13 @@ mkdir -p -- "$test_config_home/opencode"
 cp -a -- "$tmp_root/target-config/." "$test_config_home/opencode/"
 chmod 600 -- "$test_config_home/opencode/opencode.jsonc"
 if [[ "$target_major" == 1 ]]; then
-  if [[ "$reuse_config" == yes ]]; then
+  if [[ "$reuse_config" == yes && -z "$prepared_config" ]]; then
     python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$test_config_home/opencode/opencode.jsonc"
   else
     python3 "$ROOT/scripts/configure.py" audit-v1 "$test_config_home/opencode/opencode.jsonc"
   fi
 else
-  if [[ "$reuse_config" == yes ]]; then
+  if [[ "$reuse_config" == yes && -z "$prepared_config" ]]; then
     python3 "$ROOT/scripts/configure.py" audit-compatible "$test_config_home/opencode/opencode.jsonc"
   else
     python3 "$ROOT/scripts/configure.py" audit "$test_config_home/opencode/opencode.jsonc"
@@ -112,7 +119,7 @@ except (OSError,ValueError):
 print(value.get("anvil_version") or "")
 PY
 )"
-if [[ "$reuse_config" != yes ]]; then
+if [[ "$reuse_config" != yes || -n "$prepared_config" ]]; then
   source_anvil_version="$(cat "$ROOT/VERSION")"
 fi
 python3 - "$test_data_home/anvil/installation.json" "$expected_version" "$source_anvil_version" "$target_major" <<'PY'

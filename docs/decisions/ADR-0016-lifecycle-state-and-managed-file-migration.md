@@ -14,13 +14,15 @@ Model installed source, repository target, and transition independently. Numeric
 
 New installations receive `.anvil-managed.json`, which lists Anvil-owned relative file paths and SHA-256 digests. `opencode.jsonc` is listed with a null digest because user provider/model settings are user-editable and separately audited. Installation metadata stores the SHA-256 of the manifest. Unknown extra files are user-owned and preserved; a collision with a target-owned path blocks the transition. The target staging tree is validated before the real operation.
 
+The target release inventory also pins SHA-256 hashes for managed replacement artifacts. A regular checksum mismatch in an explicitly owned installed path is classified as `RECOVERABLE` only when the target inventory contains and verifies the replacement. Upgrade snapshots exact current bytes before activation; inspect/doctor show the finding and recommend `make upgrade`. Missing paths, symlinks, malformed ownership data, target omissions and hash failures remain unsafe. User-owned state remains outside this repair path.
+
 After a verified snapshot, mutating lifecycle commands create a durable transaction journal before the first live rename. Config is copied to a sibling staging directory and activated by rename. A later invocation validates and restores the snapshot before retrying an interrupted transaction. The journal is removed only after successful postflight or successful automatic rollback. `inspect` and dry run remain read-only.
 
 Anvil product updates and OpenCode runtime changes remain separate. Anvil upgrade keeps the exact supported runtime. Same-major runtime updates preserve installed Anvil metadata and config. Runtime-major migration requires current Anvil so its config manifest and installed-release metadata cannot diverge.
 
 ## Consequences
 
-- `inspect` and doctor can distinguish `MIGRATION_REQUIRED`, `UNSUPPORTED`, `CORRUPTED`, and `RECOVERY_REQUIRED`.
+- `inspect` and doctor can distinguish `MIGRATION_REQUIRED`, `RECOVERABLE`, `UNSUPPORTED`, `CORRUPTED`, and `RECOVERY_REQUIRED`.
 - Legacy 2.6.x/2.7.x profiles are inferred from their recorded source release until their first manifest-backed upgrade.
 - Reforge can rebuild missing or modified managed files when the manifest itself is intact; an unreadable or mismatched manifest still blocks automatic ownership decisions.
 - Rollback to a supported earlier release is a migration state, not corruption.

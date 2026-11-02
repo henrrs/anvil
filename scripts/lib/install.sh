@@ -3,7 +3,7 @@
 # This library assumes common.sh and paths.sh have already been sourced.
 
 anvil_build_config() {
-  local destination="$1" prior_config="${2:-}" preserve_cli="${3:-no}" major="${4:-2}" source_version="${5:-}" recover_managed="${6:-no}" source_manifest_sha256=""
+  local destination="$1" prior_config="${2:-}" preserve_cli="${3:-no}" major="${4:-2}" source_version="${5:-}" recover_managed="${6:-no}" allow_repairable_drift="${7:-no}" source_manifest_sha256=""
   [[ -n "$destination" && "$destination" != / ]] || { anvil_error 'Invalid generated config destination.'; return 1; }
   [[ "$major" == 1 || "$major" == 2 ]] || { anvil_error "Unsupported OpenCode runtime major: $major"; return 1; }
   mkdir -p -- "$destination"
@@ -93,14 +93,28 @@ PY
   if [[ -n "$source_version" ]]; then prepare_args+=(--source-version "$source_version"); fi
   if [[ -n "$source_manifest_sha256" ]]; then prepare_args+=(--source-manifest-sha256 "$source_manifest_sha256"); fi
   if [[ "$recover_managed" == yes ]]; then prepare_args+=(--recover-managed); fi
+  if [[ "$allow_repairable_drift" == yes ]]; then prepare_args+=(--allow-repairable-drift); fi
   python3 "$ANVIL_ROOT/scripts/managed_config.py" "${prepare_args[@]}"
 }
 
 anvil_print_config_plan() {
-  local source_config="$1" target_config="$2" source_version="${3:-}" target_version="${4:-$(cat "$ANVIL_ROOT/VERSION")}" recover_managed="${5:-no}"
+  local source_config="$1" target_config="$2" source_version="${3:-}" target_version="${4:-$(cat "$ANVIL_ROOT/VERSION")}" recover_managed="${5:-no}" allow_repairable_drift="${6:-no}" source_manifest_sha256=""
   local plan_args=(plan --source "$source_config" --target "$target_config" --target-version "$target_version")
   if [[ -n "$source_version" ]]; then plan_args+=(--source-version "$source_version"); fi
   if [[ "$recover_managed" == yes ]]; then plan_args+=(--recover-managed); fi
+  if [[ "$allow_repairable_drift" == yes ]]; then
+    plan_args+=(--allow-repairable-drift)
+    if [[ -f "$ANVIL_DATA_DIR/installation.json" ]]; then
+      source_manifest_sha256="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
+import json,sys
+try: value=json.load(open(sys.argv[1],encoding="utf-8"))
+except (OSError,ValueError): value={}
+print(value.get("managed_config_manifest_sha256") or "")
+PY
+)"
+      if [[ -n "$source_manifest_sha256" ]]; then plan_args+=(--source-manifest-sha256 "$source_manifest_sha256"); fi
+    fi
+  fi
   (
     set -o pipefail
     python3 "$ANVIL_ROOT/scripts/managed_config.py" "${plan_args[@]}" | python3 -c '
@@ -125,6 +139,22 @@ print("  runtime action    " + plan["runtime_action"])
 print("  shared config     merge Anvil-owned profile keys; preserve external providers, plugins, MCP, references and user preferences")
 print("  local environment package, proxy, certificate, shell and credential-reference files outside OpenCode config remain untouched")
 print("  snapshot          scoped Anvil files plus shared profile/preferences before mutation; config values are not displayed")
+drift = plan.get("managed_drift") or {}
+findings = drift.get("findings", [])
+if findings:
+    print(f"\nManaged drift         {len(findings)} verified replacement(s)")
+    print("  source checkout    " + (findings[0].get("target_release") or "unknown"))
+    print("  installed release  " + (findings[0].get("installed_release") or "unknown"))
+    print("  target release     " + (findings[0].get("target_release") or "unknown"))
+    for item in findings:
+        print("  path               " + item["path"])
+        print("    ownership        " + item["ownership"])
+        print("    expected hash    " + item["expected_hash"])
+        print("    current hash     " + item["current_hash"])
+        print("    target hash      " + item["target_hash"])
+        print("    action           snapshot then install verified target artifact")
+    print("  classification    REPAIRABLE_MANAGED_DRIFT")
+    print("  user-owned state  preserved")
 '
   )
 }

@@ -135,6 +135,7 @@ def evaluate() -> dict[str, Any]:
     backup_inventory = _backup_inventory(locations["backups"])
     managed_config_result: dict[str, Any] | None = None
     managed_config_error: str | None = None
+    managed_drift: dict[str, Any] | None = None
     if config_present and locations["config"].is_dir():
         try:
             managed_config_result = managed_config.validate_installed(
@@ -143,6 +144,16 @@ def evaluate() -> dict[str, Any]:
             )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             managed_config_error = str(exc)
+            manifest_path = locations["config"] / managed_config.MANIFEST_NAME
+            if manifest_path.exists() or manifest_path.is_symlink():
+                try:
+                    managed_drift = managed_config.classify_installed_drift(
+                        locations["config"], recorded_version if recorded_version_valid else None,
+                        repository_version, record.get("managed_config_manifest_sha256") if isinstance(record, dict) else None,
+                    )
+                except (OSError, ValueError, json.JSONDecodeError) as drift_exc:
+                    managed_drift = {"classification": "UNKNOWN_DRIFT", "reason": str(drift_exc),
+                                     "findings": [], "user_changes": []}
 
     record_shape_valid = not record_exists or (record_valid and isinstance(record, dict))
     runtime_record = (runtime_saved.get("runtime") if isinstance(runtime_saved, dict)
@@ -165,9 +176,20 @@ def evaluate() -> dict[str, Any]:
         blockers.append("Anvil runtime metadata is malformed.")
     partial_legacy_config = (not runtime.get("installed") and managed_config_error
                              and managed_config_error.startswith("source profile is missing files required by its own release:"))
-    if managed_config_error and not partial_legacy_config:
+    repairable_drift = (managed_drift is not None
+                        and managed_drift.get("classification") == "REPAIRABLE_MANAGED_DRIFT"
+                        and runtime_usable and config_valid)
+    if managed_config_error and not partial_legacy_config and not repairable_drift:
         corrupted = True
-        blockers.append(managed_config_error)
+        if managed_drift and managed_drift.get("classification") == "UNSAFE_MANAGED_DRIFT":
+            blockers.append("UNSAFE_MANAGED_DRIFT: " + str(managed_drift.get("reason") or managed_config_error))
+        elif managed_drift and managed_drift.get("classification") == "UNKNOWN_DRIFT":
+            blockers.append("UNKNOWN_DRIFT: installed managed state could not be classified: "
+                            + str(managed_drift.get("reason") or managed_config_error))
+        else:
+            blockers.append(managed_config_error)
+    elif repairable_drift:
+        warnings.append(f"{len(managed_drift.get('findings', []))} Anvil-managed file(s) differ from the installed manifest; the target release has verified replacements and make upgrade can preserve them for rollback.")
     if config_present and config_major == 0 and not (version_relation is not None and version_relation > 0):
         corrupted = True
         blockers.append("The managed OpenCode config failed Anvil's supported profile audit.")
@@ -215,6 +237,8 @@ def evaluate() -> dict[str, Any]:
     elif runtime.get("installed") and not runtime.get("supported"):
         lifecycle = "UNSUPPORTED"
         blockers.append(f"Installed OpenCode {runtime.get('version') or 'unknown'} is outside the supported runtime policy.")
+    elif repairable_drift:
+        lifecycle = "RECOVERABLE"
     elif not config_valid or not runtime_usable:
         lifecycle = "PARTIALLY_INSTALLED"
         if not config_valid:
@@ -278,7 +302,7 @@ def evaluate() -> dict[str, Any]:
                                              "newer" if version_relation is not None and version_relation > 0 else
                                              "unknown"),
                         "migration_required": lifecycle == "MIGRATION_REQUIRED",
-                        "upgrade_available": lifecycle in {"STALE", "MIGRATION_REQUIRED"},
+                        "upgrade_available": lifecycle in {"STALE", "MIGRATION_REQUIRED", "RECOVERABLE"},
                         "migration_supported": (supported_migration(recorded_version, repository_version)
                                                 if version_relation is not None and version_relation < 0 else
                                                 version_relation == 0)},
@@ -291,7 +315,8 @@ def evaluate() -> dict[str, Any]:
                             "owned_files": len(managed_config_result.get("owned_files", [])) if managed_config_result else 0,
                             "user_files": managed_config_result.get("user_files", []) if managed_config_result else [],
                             "external_symlinks": managed_config_result.get("external_symlinks", []) if managed_config_result else [],
-                            "error": managed_config_error},
+                            "error": managed_config_error,
+                            "drift": managed_drift},
         "transaction": transaction,
         "runtime": {"present": bool(runtime.get("installed")), "usable": runtime_usable,
                     "supported": bool(runtime.get("supported")), "version": runtime.get("version"),
@@ -307,6 +332,9 @@ def evaluate() -> dict[str, Any]:
 
 def _recovery_plan(lifecycle: str, config_error: str | None, runtime_usable: bool,
                    unsafe_path: Path | None, transaction: dict[str, Any]) -> dict[str, Any]:
+    if lifecycle == "RECOVERABLE":
+        return {"applicable": True, "command": "make upgrade",
+                "instruction": "Run make upgrade to replace the verified Anvil-managed artifact; the current file will be preserved in the rollback snapshot."}
     if lifecycle == "MIGRATION_REQUIRED":
         return {"applicable": True, "command": "make upgrade",
                 "instruction": "Run make upgrade to migrate this valid installation."}
@@ -351,6 +379,7 @@ def _human(value: dict[str, Any]) -> str:
              "STALE": "STALE", "MIGRATION_REQUIRED": "MIGRATION_REQUIRED", "UNSUPPORTED": "UNSUPPORTED",
              "TRANSITION_IN_PROGRESS": "TRANSITION_IN_PROGRESS",
              "RECOVERY_REQUIRED": "RECOVERY_REQUIRED",
+             "RECOVERABLE": "RECOVERABLE",
              "CORRUPTED": "CORRUPTED"}
     lines = ["Anvil lifecycle", "────────────────", f"Status                {names.get(value['lifecycle'], value['lifecycle'])}",
              f"Installed release     {value['transition']['source_version'] or 'unknown'}",
@@ -365,6 +394,25 @@ def _human(value: dict[str, Any]) -> str:
         if values:
             lines.extend(["", label])
             lines.extend(f"  {item}" for item in values)
+    drift = value["managed_config"].get("drift")
+    if drift:
+        lines.extend(["", "Managed drift",
+                      f"  source checkout     {value['repository']['version'] or 'invalid'}",
+                      f"  installed release   {drift.get('installed_release') or 'unknown'}",
+                      f"  target release      {drift.get('target_release') or 'unknown'}",
+                      f"  classification      {drift.get('classification', 'UNKNOWN_DRIFT')}"])
+        for finding in drift.get("findings", []):
+            lines.extend([f"  path                {finding.get('path', 'unknown')}",
+                          f"    ownership         {finding.get('ownership', 'unknown')}",
+                          f"    expected hash     {finding.get('expected_hash') or 'unavailable'}",
+                          f"    current hash      {finding.get('current_hash') or 'unavailable'}",
+                          f"    target hash       {finding.get('target_hash') or 'unavailable'}",
+                          f"    action            {finding.get('action', 'review manually')}"])
+        user_changes = drift.get("user_changes", [])
+        if user_changes:
+            lines.append(f"  user-owned paths    {drift.get('user_change_count', len(user_changes))} preserved")
+            if drift.get("user_changes_truncated"):
+                lines.append("  user-owned display  first 25 paths shown in structured output")
     external_links = value["managed_config"].get("external_symlinks", [])
     if external_links:
         lines.extend(["", "External config state",
@@ -391,7 +439,7 @@ def main() -> int:
             print("BLOCKED: No verified Anvil rollback snapshot is available. Run make upgrade or make reforge to create a snapshot before rollback.", file=sys.stderr)
         return 1
     if args.action == "require-installed":
-        if value["lifecycle"] in {"INSTALLED", "READY", "DEGRADED", "STALE", "MIGRATION_REQUIRED"}:
+        if value["lifecycle"] in {"INSTALLED", "READY", "DEGRADED", "STALE", "MIGRATION_REQUIRED", "RECOVERABLE"}:
             return 0
         print(_human(value), file=sys.stderr)
         if value["lifecycle"] == "UNSUPPORTED":

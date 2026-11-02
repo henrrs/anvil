@@ -169,6 +169,13 @@ if [[ -n "$recorded_major" && "$recorded_major" != "$major" ]]; then
   warning=1
 fi
 
+if [[ "$lifecycle_status" == RECOVERABLE ]]; then
+  printf 'Runtime profile        opencode-v%s config is valid and supported\n' "$major"
+  anvil_warn 'An Anvil-managed file has a checksum-pinned replacement in the target release. Run make upgrade; the current file will be preserved for rollback.'
+  printf '\nStatus: UPGRADE AVAILABLE (managed drift is recoverable)\n'
+  exit 0
+fi
+
 # A valid prior Anvil config remains usable. Explain the product upgrade before
 # comparing a legacy installation record with the checkout's release version.
 if (( broken == 0 )) && [[ "$recorded_anvil" != "$expected_anvil" ]]; then

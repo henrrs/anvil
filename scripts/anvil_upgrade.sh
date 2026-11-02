@@ -11,7 +11,23 @@ anvil_need python3 tar cp mv install chmod date
 ANVIL_VERSION="$(cat "$ROOT/VERSION")"
 
 anvil_recover_pending
-anvil_require_installed
+if ! anvil_require_installed; then
+  python3 "$ROOT/scripts/lifecycle_state.py" inspect --format json 2>/dev/null | python3 -c '
+import json,sys
+try: state=json.load(sys.stdin)
+except (ValueError,IndexError): raise SystemExit(0)
+drift=state.get("managed_config",{}).get("drift") or {}
+if drift.get("classification") in {"UNSAFE_MANAGED_DRIFT","UNKNOWN_DRIFT"}:
+    findings=drift.get("findings") or [{"path":"unknown","ownership":"unknown"}]
+    for item in findings:
+        print(json.dumps({"event":"unsafe_drift_blocked","path":item.get("path"),
+                          "ownership":item.get("ownership"),
+                          "classification":drift["classification"],
+                          "installed_release":drift.get("installed_release"),
+                          "target_release":drift.get("target_release")},sort_keys=True))
+'
+  exit 1
+fi
 if [[ -L "$ANVIL_CONFIG_DIR" || -L "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_BIN" ]] || \
    ! anvil_safe_managed_path "$ANVIL_CONFIG_DIR" "$ANVIL_CONFIG_DIR" || \
    [[ "$ANVIL_INSTALL_ROOT" != "$ANVIL_HOME_DIR/.opencode" || "$ANVIL_INSTALL_ROOT" == / || "$ANVIL_INSTALL_ROOT" == "$ANVIL_HOME_DIR" ]]; then
@@ -59,6 +75,8 @@ chmod 700 -- "$tmp_root"
 backup_dir=""
 transaction_active=0
 runtime_stopped=0
+drift_file=""
+drift_count=0
 
 cleanup() {
   for target in "$ready_config" "$tmp_root"; do
@@ -74,6 +92,18 @@ on_error() {
   local status=$?
   trap - ERR INT TERM
   if (( transaction_active )) && [[ -n "$backup_dir" ]]; then
+    if (( drift_count > 0 )); then
+      python3 - "$drift_file" "$status" <<'PY' >&2
+import json,sys
+try: value=json.load(open(sys.argv[1],encoding="utf-8"))
+except (ValueError,IndexError): value={}
+for item in value.get("findings",[]):
+    print(json.dumps({"event":"managed_drift_repair_failed","path":item.get("path"),
+                      "ownership":item.get("ownership"),"classification":item.get("classification"),
+                      "installed_release":item.get("installed_release"),
+                      "target_release":item.get("target_release"),"exit_status":int(sys.argv[2])},sort_keys=True))
+PY
+    fi
     anvil_error "Anvil upgrade failed after config replacement (exit $status); restoring the Anvil-only snapshot."
     if ANVIL_INTERNAL_MODE=1 bash "$ROOT/scripts/rollback.sh" --backup "$backup_dir" --internal; then
       python3 "$ROOT/scripts/lifecycle_transaction.py" clear || anvil_error 'Automatic rollback completed, but the recovery journal could not be cleared.'
@@ -91,13 +121,47 @@ on_error() {
 trap on_error ERR INT TERM
 trap cleanup EXIT
 
-anvil_build_config "$ready_config/generated" "$ANVIL_CONFIG_DIR" yes "$major"
+anvil_build_config "$ready_config/generated" "$ANVIL_CONFIG_DIR" yes "$major" "$old_anvil_version" no yes
+manifest_sha256="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
+import json,sys
+try: value=json.load(open(sys.argv[1],encoding="utf-8"))
+except (OSError,ValueError): value={}
+print(value.get("managed_config_manifest_sha256") or "")
+PY
+)"
+drift_file="$tmp_root/managed-drift.json"
+python3 "$ROOT/scripts/managed_config.py" classify --root "$ANVIL_CONFIG_DIR" \
+  --installed-version "$old_anvil_version" --target-version "$ANVIL_VERSION" \
+  --manifest-sha256 "$manifest_sha256" > "$drift_file"
+drift_count="$(python3 - "$drift_file" <<'PY'
+import json,sys
+value=json.load(open(sys.argv[1],encoding="utf-8"))
+if value.get("classification") not in {"CLEAN","REPAIRABLE_MANAGED_DRIFT"}:
+    raise SystemExit("upgrade cannot safely repair managed state: "+str(value.get("reason")))
+print(len(value.get("findings",[])))
+PY
+)"
+if (( drift_count > 0 )); then
+  printf '\nAn Anvil-managed file differs from the version originally installed.\n'
+  printf 'The target release has a verified replacement; the current file will be preserved for rollback.\n'
+  python3 - "$drift_file" <<'PY' >&2
+import json,sys
+for item in json.load(open(sys.argv[1],encoding="utf-8")).get("findings",[]):
+    for event in ("managed_drift_detected","managed_drift_classified"):
+        print(json.dumps({"event":event,"path":item.get("path"),"ownership":item.get("ownership"),
+                          "classification":item.get("classification"),
+                          "installed_release":item.get("installed_release"),
+                          "target_release":item.get("target_release"),
+                          "expected_hash":item.get("expected_hash"),"current_hash":item.get("current_hash"),
+                          "target_hash":item.get("target_hash")},sort_keys=True))
+PY
+fi
 if [[ "$major" == 1 ]]; then
   python3 "$ROOT/scripts/configure.py" audit-v1 "$ready_config/generated/opencode.jsonc" >/dev/null
 else
   python3 "$ROOT/scripts/configure.py" audit "$ready_config/generated/opencode.jsonc" >/dev/null
 fi
-bash "$ROOT/scripts/rehearse-upgrade.sh" "$binary" "$runtime_version" "$major" "$major"
+bash "$ROOT/scripts/rehearse-upgrade.sh" "$binary" "$runtime_version" "$major" "$major" no "$ready_config/generated"
 
 # Check backup prerequisites before interrupting the user's runtime. This is
 # read-only: backup creation itself remains after quiescence and final approval.
@@ -143,7 +207,7 @@ printf '\nUpgrade behavior\n'
 printf '  countdown           %ss\n' "${ANVIL_UPGRADE_COUNTDOWN_SECONDS:-5}"
 printf '  graceful shutdown   enabled (SIGTERM first)\n'
 printf '  force termination   fallback only\n'
-anvil_print_config_plan "$ANVIL_CONFIG_DIR" "$ready_config/generated" "$old_anvil_version" "$ANVIL_VERSION"
+anvil_print_config_plan "$ANVIL_CONFIG_DIR" "$ready_config/generated" "$old_anvil_version" "$ANVIL_VERSION" no yes
 anvil_print_analytics_plan "$ready_config/generated"
 
 if [[ "${DRY_RUN:-0}" == 1 ]]; then
@@ -194,6 +258,17 @@ fi
 python3 "$ROOT/scripts/lifecycle_transaction.py" begin --operation anvil-upgrade \
   --backup "$backup_dir" --source-version "$old_anvil_version" --target-version "$ANVIL_VERSION" --owner-pid "$$"
 transaction_active=1
+if (( drift_count > 0 )); then
+  printf 'Repairing %s Anvil-managed drifted artifact(s)...\n' "$drift_count"
+  python3 - "$drift_file" <<'PY' >&2
+import json,sys
+for item in json.load(open(sys.argv[1],encoding="utf-8")).get("findings",[]):
+    print(json.dumps({"event":"managed_drift_repair_started","path":item.get("path"),
+                      "ownership":item.get("ownership"),"classification":item.get("classification"),
+                      "installed_release":item.get("installed_release"),
+                      "target_release":item.get("target_release")},sort_keys=True))
+PY
+fi
 python3 "$ROOT/scripts/lifecycle_transaction.py" phase applying-config
 anvil_apply_config "$ready_config/generated"
 python3 "$ROOT/scripts/lifecycle_transaction.py" phase config-applied
@@ -233,6 +308,16 @@ python3 "$ROOT/scripts/lifecycle_transaction.py" clear
 transaction_active=0
 anvil_ok "Anvil $ANVIL_VERSION installed; OpenCode $runtime_version was preserved exactly."
 anvil_ok "Anvil-only rollback snapshot: $backup_dir"
+if (( drift_count > 0 )); then
+  python3 - "$drift_file" <<'PY' >&2
+import json,sys
+for item in json.load(open(sys.argv[1],encoding="utf-8")).get("findings",[]):
+    print(json.dumps({"event":"managed_drift_repair_completed","path":item.get("path"),
+                      "ownership":item.get("ownership"),"classification":item.get("classification"),
+                      "installed_release":item.get("installed_release"),
+                      "target_release":item.get("target_release")},sort_keys=True))
+PY
+fi
 if (( runtime_stopped )); then
   anvil_log 'OpenCode was stopped during the upgrade. Start it normally when ready.'
 fi

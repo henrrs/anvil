@@ -10,6 +10,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import managed_config  # noqa: E402
 
 
 def main() -> int:
@@ -103,6 +105,17 @@ def main() -> int:
         "docs/decisions/ADR-0017-progressive-engineering-state.md": ["Status:** Accepted", "three separate models", "one model-neutral", "atomic"],
     }
     errors = []
+    if managed_config.RELEASE_ARTIFACT_VERSION != version:
+        errors.append("managed release artifact manifest does not match VERSION")
+    else:
+        for major in (1, 2):
+            try:
+                for relative, digest in managed_config._release_artifacts_for_major(major).items():
+                    if digest is not None:
+                        managed_config._verify_release_artifact(relative, version, major)
+            except (OSError, ValueError, RuntimeError, TypeError) as exc:
+                errors.append(f"managed release artifact manifest is invalid for OpenCode {major}: {exc}")
+                break
     inventory_path = ROOT / "config/managed-inventory.json"
     try:
         inventory = json.loads(inventory_path.read_text(encoding="utf-8"))

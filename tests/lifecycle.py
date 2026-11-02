@@ -1058,22 +1058,94 @@ def interrupted_transaction_recovery_test(temp: pathlib.Path) -> None:
 
 
 def managed_file_repair_test(temp: pathlib.Path) -> None:
-    paths = fixture(temp)
+    paths = fixture(temp / "machine")
+    promote_fixture_to_current_anvil(paths, temp)
+    manifest_path = paths["config"] / ".anvil-managed.json"
+    installed_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for relative in ("VERSION", "config/runtime-policy.json", "runtime/analytics-requirements.lock"):
+        installed_manifest["files"].pop(relative)
+        (paths["config"] / relative).unlink(missing_ok=True)
+    installed_manifest["anvil_version"] = "2.16.0"
+    write_json(manifest_path, installed_manifest)
+    installation_path = paths["anvil_data"] / "installation.json"
+    installation = json.loads(installation_path.read_text(encoding="utf-8"))
+    installation["anvil_version"] = "2.16.0"
+    installation["managed_config_manifest_sha256"] = file_hash(manifest_path)
+    write_json(installation_path, installation)
+
+    managed_script = paths["config"] / "scripts/analytics/runtime.py"
+    managed_script.write_bytes(b"# exact pre-upgrade local change\n")
+    drifted_hash = file_hash(managed_script)
+    user_script = paths["config"] / "scripts/user-helper.py"
+    user_script.write_text("# user-owned content remains untouched\n", encoding="utf-8")
+    user_hash = file_hash(user_script)
     env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_YES="1",
                       ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
-    run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
-    managed_script = paths["config"] / "scripts/memory.py"
-    managed_script.write_text("# injected managed-file modification\n", encoding="utf-8")
+
     inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
-    check("Status                CORRUPTED" in inspect.stdout,
-          "modified manifest-owned script was not diagnosed as corruption")
-    reforge = run(["/usr/bin/make", "--no-print-directory", "reforge"],
-                  dict(env, ANVIL_YES="1"))
-    check("Status: HEALTHY" in reforge.stdout, "reforge could not rebuild a modified manifest-owned file")
-    check(managed_script.read_bytes() == (ROOT / "scripts/memory.py").read_bytes(),
-          "reforge did not restore the shipped Anvil-owned helper")
-    check(lifecycle_state_for_env(env) == "READY", "manifest repair did not restore READY lifecycle state")
-    print("PASS reforge repairs a modified managed file while retaining trusted ownership metadata")
+    check("Status                RECOVERABLE" in inspect.stdout
+          and "REPAIRABLE_MANAGED_DRIFT" in inspect.stdout
+          and "target hash" in inspect.stdout,
+          "manifest-owned runtime drift was not classified with target checksum evidence")
+    doctor = run(["/usr/bin/make", "--no-print-directory", "doctor"], env)
+    check("make upgrade" in doctor.stdout and "make reforge" not in doctor.stdout,
+          "doctor did not recommend upgrade for repairable managed drift")
+
+    observed_roots = [paths["home"], paths["config_home"], paths["data_home"], paths["state_home"]]
+    before_dry = {str(root): filesystem_snapshot(root) for root in observed_roots}
+    dry = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env)
+    check("REPAIRABLE_MANAGED_DRIFT" in dry.stdout and "verified replacement" in dry.stdout
+          and "No changes performed." in dry.stdout,
+          "dry-run did not report the verified managed drift repair plan")
+    check(before_dry == {str(root): filesystem_snapshot(root) for root in observed_roots}
+          and not (paths["anvil_data"] / "backups").exists(),
+          "dry-run mutated installation state or created a rollback snapshot")
+
+    failed = run(["/usr/bin/make", "--no-print-directory", "upgrade"],
+                 dict(env, ANVIL_TEST_FAIL_AFTER_CONFIG="1"), expected=2)
+    check(file_hash(managed_script) == drifted_hash
+          and json.loads(installation_path.read_text(encoding="utf-8"))["anvil_version"] == "2.16.0"
+          and "managed_drift_repair_failed" in failed.stderr
+          and "Automatic Anvil rollback completed" in failed.stderr,
+          "a failed replacement did not restore the exact pre-upgrade drifted file and release metadata")
+
+    upgraded = run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
+    expected_target_hash = lifecycle_state.managed_config.RELEASE_ARTIFACTS["scripts/analytics/runtime.py"]
+    check(file_hash(managed_script) == expected_target_hash
+          and "Repairing 1 Anvil-managed drifted artifact(s)" in upgraded.stdout,
+          "upgrade did not replace the drifted file with its pinned target artifact")
+    check(file_hash(user_script) == user_hash,
+          "upgrade overwrote an unowned user file during managed drift repair")
+    check(lifecycle_state_for_env(env) == "READY", "verified managed drift upgrade did not converge to READY")
+    repeated = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env)
+    check("Repairing 1 Anvil-managed drifted artifact(s)" not in repeated.stdout,
+          "managed drift repair repeated after the installation converged")
+
+    run(["/usr/bin/make", "--no-print-directory", "rollback"], env)
+    check(file_hash(managed_script) == drifted_hash,
+          "rollback did not restore the exact pre-upgrade drifted file bytes")
+    check(json.loads(installation_path.read_text(encoding="utf-8"))["anvil_version"] == "2.16.0",
+          "rollback did not restore the installed source release metadata")
+    check(file_hash(user_script) == user_hash,
+          "rollback changed user-owned content while restoring managed drift")
+
+    with mock.patch.dict(os.environ, {"ANVIL_TEST_MODE": "1"}):
+        unsafe = lifecycle_state.managed_config.classify_installed_drift(
+            paths["config"], "2.16.0", ANVIL_VERSION,
+            json.loads(installation_path.read_text(encoding="utf-8"))["managed_config_manifest_sha256"],
+        )
+    check(unsafe["classification"] == "REPAIRABLE_MANAGED_DRIFT",
+          "rollback did not return to the same explicitly classified repairable state")
+    with mock.patch.dict(lifecycle_state.managed_config.RELEASE_ARTIFACTS,
+                         {"scripts/analytics/runtime.py": None}), \
+            mock.patch.dict(os.environ, {"ANVIL_TEST_MODE": "1"}):
+        unsafe = lifecycle_state.managed_config.classify_installed_drift(
+            paths["config"], "2.16.0", ANVIL_VERSION,
+            json.loads(installation_path.read_text(encoding="utf-8"))["managed_config_manifest_sha256"],
+        )
+    check(unsafe["classification"] == "UNSAFE_MANAGED_DRIFT",
+          "managed drift without a target release artifact was not blocked")
+    print("PASS 2.16→2.17 managed drift classification, dry-run, failure recovery, upgrade, user preservation, exact rollback and idempotency")
 
 
 def future_install_downgrade_test(temp: pathlib.Path) -> None:

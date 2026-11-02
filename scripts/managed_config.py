@@ -7,8 +7,10 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 from pathlib import Path, PurePosixPath
@@ -44,7 +46,46 @@ def _load_inventory() -> tuple[dict[str, tuple[int, int, int]], dict[str, tuple[
     return result[0], result[1]
 
 
+def _load_release_artifacts() -> tuple[str, dict[str, str | None]]:
+    path = ROOT / "config" / "managed-inventory.json"
+    try:
+        inventory = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"managed release artifact inventory is unavailable: {exc}") from exc
+    artifacts = inventory.get("managed_artifacts") if isinstance(inventory, dict) else None
+    if not isinstance(artifacts, dict):
+        raise RuntimeError("managed release artifact inventory has an invalid shape")
+    release = artifacts.get("release")
+    files = artifacts.get("files")
+    if parse_version(release) is None or not isinstance(files, dict):
+        raise RuntimeError("managed release artifact inventory has an invalid shape")
+    normalized: dict[str, str | None] = {}
+    for relative, digest in files.items():
+        if not isinstance(relative, str):
+            raise RuntimeError("managed release artifact inventory contains a non-text path")
+        parsed = PurePosixPath(relative)
+        if parsed.is_absolute() or not parsed.parts or any(part in {".", ".."} for part in parsed.parts):
+            raise RuntimeError(f"managed release artifact inventory contains an unsafe path: {relative}")
+        key = parsed.as_posix()
+        if key in normalized:
+            raise RuntimeError(f"managed release artifact inventory contains a duplicate path: {key}")
+        if digest is not None and (not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+            raise RuntimeError(f"managed release artifact inventory contains an invalid hash: {key}")
+        if digest is None and key != "opencode.jsonc":
+            raise RuntimeError(f"managed release artifact inventory omits a hash: {key}")
+        normalized[key] = digest
+    if normalized.get("opencode.jsonc", "missing") is not None:
+        raise RuntimeError("managed release artifact inventory must mark the merged profile as unhashed")
+    return release, normalized
+
+
 SKILL_INTRODUCED, COMMAND_INTRODUCED = _load_inventory()
+try:
+    RELEASE_ARTIFACT_VERSION, RELEASE_ARTIFACTS = _load_release_artifacts()
+    RELEASE_ARTIFACT_ERROR: str | None = None
+except RuntimeError as exc:
+    RELEASE_ARTIFACT_VERSION, RELEASE_ARTIFACTS = "", {}
+    RELEASE_ARTIFACT_ERROR = str(exc)
 COMMUNICATION_VERSION = SKILL_INTRODUCED.get("anvil-communication", (2, 7, 0))
 ENGINEERING_VERSION = SKILL_INTRODUCED.get("anvil-engineering", (2, 9, 0))
 ANALYSIS_INTELLIGENCE_VERSION = (2, 13, 0)
@@ -70,6 +111,112 @@ def _analytics_workspace_files() -> set[str]:
 
 def _is_optional_managed_file(relative: str) -> bool:
     return any(relative.startswith(prefix) for prefix in OPTIONAL_MANAGED_PREFIXES)
+
+
+def _release_source_path(relative: str, major: int) -> str | None:
+    """Map a generated managed path to its source artifact in this release."""
+    if relative == "AGENTS.md":
+        return "config/AGENTS.md"
+    for prefix in ("commands/", "skills/"):
+        if relative.startswith(prefix):
+            return f"config/{relative}"
+    if relative.startswith("plugins/"):
+        if major == 1 and relative == "plugins/anvil-core-v1.ts":
+            return "config/plugins-v1/anvil-core.ts"
+        if major == 2 and relative.startswith("plugins/anvil-core/"):
+            return f"config/{relative}"
+        return None
+    if relative == "runtime/analytics-requirements.lock":
+        return "config/analytics-requirements.lock"
+    if relative in {"VERSION", "config/runtime-policy.json"}:
+        return relative
+    if relative in {
+        "scripts/memory.py", "scripts/source_registry.py", "scripts/runtime.py", "scripts/runtime_state.py",
+        "scripts/databricks.py", "scripts/databricks_finops.py", "scripts/artifacts.py",
+        "scripts/engineering.py", "scripts/public_errors.py", "scripts/analyze.py",
+    } or relative.startswith(("scripts/engineering/", "scripts/communication/",
+                              "scripts/databricks_providers/", "scripts/analysis/", "scripts/analytics/")):
+        return relative
+    if relative.startswith("web/analytics/") and len(PurePosixPath(relative).parts) == 3:
+        return relative
+    return None
+
+
+def _release_artifacts_for_major(major: int) -> dict[str, str | None]:
+    if RELEASE_ARTIFACT_ERROR:
+        raise ManagedConfigError(RELEASE_ARTIFACT_ERROR)
+    files = dict(RELEASE_ARTIFACTS)
+    if major == 1:
+        files = {path: digest for path, digest in files.items() if not path.startswith("plugins/anvil-core/")}
+    elif major == 2:
+        files.pop("plugins/anvil-core-v1.ts", None)
+    else:
+        raise ManagedConfigError(f"unsupported OpenCode runtime major: {major}")
+    return files
+
+
+def _verify_release_artifact(relative: str, target_version: str, major: int) -> str:
+    if RELEASE_ARTIFACT_ERROR:
+        raise ManagedConfigError(RELEASE_ARTIFACT_ERROR)
+    if RELEASE_ARTIFACT_VERSION != target_version:
+        raise ManagedConfigError(
+            f"target release artifact manifest is for {RELEASE_ARTIFACT_VERSION}, not {target_version}")
+    expected = _release_artifacts_for_major(major).get(relative)
+    if expected is None:
+        raise ManagedConfigError(f"target release has no hashed managed replacement for {relative}")
+    source_relative = _release_source_path(relative, major)
+    if source_relative is None:
+        raise ManagedConfigError(f"target release does not own a replacement path for {relative}")
+    try:
+        actual = _digest_regular(ROOT, source_relative)
+    except (OSError, ManagedConfigError) as exc:
+        raise ManagedConfigError(f"target release artifact is unavailable for {relative}") from exc
+    if actual != expected:
+        raise ManagedConfigError(f"target release artifact failed its manifest checksum: {relative}")
+    return expected
+
+
+def _verify_release_manifest_authority(target_version: str) -> None:
+    """Require a committed source release manifest before automatic repair."""
+    if os.environ.get("ANVIL_TEST_MODE") == "1":
+        return
+    try:
+        committed_version = subprocess.run(
+            ["git", "-C", str(ROOT), "show", "HEAD:VERSION"],
+            check=True, capture_output=True, timeout=5,
+        ).stdout.decode("utf-8").strip()
+        committed_inventory = subprocess.run(
+            ["git", "-C", str(ROOT), "show", "HEAD:config/managed-inventory.json"],
+            check=True, capture_output=True, timeout=5,
+        ).stdout
+        working_inventory = (ROOT / "config" / "managed-inventory.json").read_bytes()
+    except (OSError, UnicodeError, subprocess.SubprocessError) as exc:
+        raise ManagedConfigError("the target release manifest cannot be verified against the source checkout") from exc
+    if committed_version != target_version or committed_inventory != working_inventory:
+        raise ManagedConfigError("the target release manifest is not the committed manifest for this checkout")
+
+
+def _validate_release_target(target_manifest: dict[str, Any], target_version: str,
+                             major: int) -> None:
+    if RELEASE_ARTIFACT_ERROR:
+        raise ManagedConfigError(RELEASE_ARTIFACT_ERROR)
+    if RELEASE_ARTIFACT_VERSION != target_version:
+        raise ManagedConfigError(
+            f"target release artifact manifest is for {RELEASE_ARTIFACT_VERSION}, not {target_version}")
+    expected = _release_artifacts_for_major(major)
+    actual = target_manifest.get("files")
+    if not isinstance(actual, dict):
+        raise ManagedConfigError("staged target manifest has an invalid files map")
+    if set(actual) != set(expected):
+        missing = sorted(set(expected) - set(actual))
+        extra = sorted(set(actual) - set(expected))
+        path = (missing or extra)[0]
+        raise ManagedConfigError(f"staged target membership does not match the release artifact manifest: {path}")
+    for relative, digest in expected.items():
+        if actual[relative] != digest:
+            raise ManagedConfigError(f"staged target artifact does not match its release manifest: {relative}")
+        if digest is not None:
+            _verify_release_artifact(relative, target_version, major)
 
 
 class ManagedConfigError(ValueError):
@@ -369,6 +516,11 @@ def inspect_source(root: Path, source_version: str | None = None,
                 raise ManagedConfigError(f"managed file manifest contains duplicate normalized path: {normalized}")
             owned.add(normalized)
             owned_digests[normalized] = expected
+            if expected is None and normalized != "opencode.jsonc":
+                raise ManagedConfigError(f"managed file manifest omits a checksum for {normalized}")
+            if expected is not None and (not isinstance(expected, str)
+                                         or not re.fullmatch(r"[0-9a-f]{64}", expected)):
+                raise ManagedConfigError(f"managed file manifest contains an invalid checksum for {normalized}")
             managed_link = _check_managed_path(normalized, symlinks, recover_managed=recover_managed)
             if managed_link:
                 managed_links.add(managed_link)
@@ -645,14 +797,22 @@ def restore_merge(source: Path, target: Path) -> dict[str, Any]:
 
 def prepare(source: Path | None, target: Path, source_version: str | None,
             target_version: str, *, recover_managed: bool = False,
-            source_manifest_sha256: str | None = None) -> dict[str, Any]:
+            source_manifest_sha256: str | None = None,
+            allow_repairable_drift: bool = False) -> dict[str, Any]:
     target_files, target_symlinks, target_other = _scan(target)
     target_nodes = set(target_files) | target_symlinks | target_other
     target_owned = target_nodes - {MANIFEST_NAME} - {path for path in target_nodes if _is_user_preference(path)}
     source_state: dict[str, Any] = {"owned_files": [], "user_files": [], "manifest_present": False}
     if source is not None and source.is_dir():
-        source_state = inspect_source(source, source_version, source_manifest_sha256,
-                                      recover_managed=recover_managed, allow_external=True)
+        if allow_repairable_drift:
+            drift = classify_installed_drift(source, source_version, target_version, source_manifest_sha256)
+            if drift["classification"] not in {"CLEAN", "REPAIRABLE_MANAGED_DRIFT"}:
+                raise ManagedConfigError("upgrade cannot safely repair managed state: " + drift["reason"])
+            source_state = inspect_source(source, source_version, source_manifest_sha256,
+                                          recover_managed=True, allow_external=True)
+        else:
+            source_state = inspect_source(source, source_version, source_manifest_sha256,
+                                          recover_managed=recover_managed, allow_external=True)
         target_prefixes: set[str] = set()
         for target_path in target_owned:
             parts = PurePosixPath(target_path).parts
@@ -685,6 +845,8 @@ def prepare(source: Path | None, target: Path, source_version: str | None,
             else:
                 raise ManagedConfigError(f"cannot safely preserve external filesystem node: {relative}")
     manifest = _target_manifest(target, target_version, excluded=set(source_state["user_files"]))
+    target_major, _ = _profile_skills(target)
+    _validate_release_target(manifest, target_version, target_major)
     _write_manifest(target, manifest)
     return plan(source_state, manifest, source_version, target_version)
 
@@ -718,6 +880,94 @@ def validate_installed(root: Path, installed_version: str | None, target_version
     return inspect_source(root, installed_version if parsed_version else None, expected_manifest_sha256)
 
 
+def classify_installed_drift(root: Path, installed_version: str | None, target_version: str,
+                             expected_manifest_sha256: str | None = None) -> dict[str, Any]:
+    """Classify manifest-owned drift against a checksum-pinned target release."""
+    if not (root / MANIFEST_NAME).exists() and not (root / MANIFEST_NAME).is_symlink():
+        legacy_state = inspect_source(root, installed_version, expected_manifest_sha256,
+                                      allow_external=True)
+        return {"classification": "CLEAN", "reason": "Legacy source files pass their supported release audit.",
+                "installed_release": installed_version, "target_release": target_version,
+                "findings": [],
+                "user_changes": [{"path": path, "ownership": "USER_OWNED",
+                                  "classification": "USER_OWNED_CHANGE", "action": "preserve"}
+                                 for path in legacy_state["user_files"][:25]],
+                "user_change_count": len(legacy_state["user_files"]),
+                "user_changes_truncated": len(legacy_state["user_files"]) > 25,
+                "managed_files": len(legacy_state["owned_files"])}
+    source_state = inspect_source(root, installed_version, expected_manifest_sha256,
+                                  recover_managed=True, allow_external=True)
+    actual, symlinks, other = _scan(root)
+    manifest = json.loads(_read_regular(root, MANIFEST_NAME).decode("utf-8"))
+    major, _ = _profile_skills(root)
+    findings: list[dict[str, Any]] = []
+    unsafe: list[str] = []
+    for relative, expected in manifest["files"].items():
+        path = _relative(relative).as_posix()
+        if expected is None and path == "opencode.jsonc":
+            continue
+        link = _symlink_ancestor(path, symlinks)
+        if link:
+            reason = f"Anvil-managed path is a symbolic link: {path}"
+            unsafe.append(reason)
+            findings.append({"path": path, "ownership": "ANVIL_MANAGED", "installed_release": manifest["anvil_version"],
+                             "target_release": target_version, "expected_hash": expected, "current_hash": None,
+                             "target_hash": None, "classification": "UNSAFE_MANAGED_DRIFT", "action": "block upgrade"})
+            continue
+        if path in other or path not in actual:
+            reason = f"Anvil-managed path is missing or not a regular file: {path}"
+            unsafe.append(reason)
+            findings.append({"path": path, "ownership": "ANVIL_MANAGED", "installed_release": manifest["anvil_version"],
+                             "target_release": target_version, "expected_hash": expected, "current_hash": None,
+                             "target_hash": None, "classification": "UNSAFE_MANAGED_DRIFT", "action": "block upgrade"})
+            continue
+        try:
+            current = _digest_regular(root, path)
+        except (OSError, ManagedConfigError):
+            reason = f"Anvil-managed file cannot be safely read: {path}"
+            unsafe.append(reason)
+            findings.append({"path": path, "ownership": "ANVIL_MANAGED", "installed_release": manifest["anvil_version"],
+                             "target_release": target_version, "expected_hash": expected, "current_hash": None,
+                             "target_hash": None, "classification": "UNSAFE_MANAGED_DRIFT", "action": "block upgrade"})
+            continue
+        if current == expected:
+            continue
+        try:
+            _verify_release_manifest_authority(target_version)
+            target_hash = _verify_release_artifact(path, target_version, major)
+            # A regular, readable source file can be copied exactly into the verified rollback archive.
+            _read_regular(root, path)
+        except (OSError, ManagedConfigError) as exc:
+            unsafe.append(str(exc))
+            findings.append({"path": path, "ownership": "ANVIL_MANAGED", "installed_release": manifest["anvil_version"],
+                             "target_release": target_version, "expected_hash": expected,
+                             "current_hash": current, "target_hash": None,
+                             "classification": "UNSAFE_MANAGED_DRIFT", "action": "block upgrade"})
+            continue
+        findings.append({"path": path, "ownership": "ANVIL_MANAGED", "installed_release": manifest["anvil_version"],
+                         "target_release": target_version, "expected_hash": expected,
+                         "current_hash": current, "target_hash": target_hash,
+                         "source_artifact": _release_source_path(path, major),
+                         "classification": "REPAIRABLE_MANAGED_DRIFT",
+                         "action": "snapshot current file and replace with verified target artifact"})
+    user_paths = source_state["user_files"]
+    user_changes = [{"path": path, "ownership": "USER_OWNED", "classification": "USER_OWNED_CHANGE",
+                     "action": "preserve"} for path in user_paths[:25]]
+    if unsafe:
+        classification = "UNSAFE_MANAGED_DRIFT"
+        reason = unsafe[0]
+    elif findings:
+        classification = "REPAIRABLE_MANAGED_DRIFT"
+        reason = "Anvil-owned changes have verified target replacements and can be snapshotted."
+    else:
+        classification = "CLEAN"
+        reason = "No Anvil-managed checksum drift was detected."
+    return {"classification": classification, "reason": reason, "installed_release": manifest["anvil_version"],
+            "target_release": target_version, "findings": findings, "user_changes": user_changes,
+            "user_change_count": len(user_paths), "user_changes_truncated": len(user_paths) > len(user_changes),
+            "managed_files": len(manifest["files"])}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -727,6 +977,7 @@ def main() -> int:
     p_prepare.add_argument("--source-version", default="")
     p_prepare.add_argument("--target-version", required=True)
     p_prepare.add_argument("--recover-managed", action="store_true")
+    p_prepare.add_argument("--allow-repairable-drift", action="store_true")
     p_prepare.add_argument("--source-manifest-sha256", default="")
     p_plan = sub.add_parser("plan")
     p_plan.add_argument("--source", type=Path)
@@ -734,6 +985,8 @@ def main() -> int:
     p_plan.add_argument("--source-version", default="")
     p_plan.add_argument("--target-version", required=True)
     p_plan.add_argument("--recover-managed", action="store_true")
+    p_plan.add_argument("--allow-repairable-drift", action="store_true")
+    p_plan.add_argument("--source-manifest-sha256", default="")
     p_snapshot = sub.add_parser("snapshot")
     p_snapshot.add_argument("--source", type=Path, required=True)
     p_snapshot.add_argument("--target", type=Path, required=True)
@@ -746,22 +999,46 @@ def main() -> int:
     p_inspect.add_argument("--target-version", required=True)
     p_inspect.add_argument("--manifest-sha256", default="")
     p_inspect.add_argument("--format", choices=("text", "json"), default="text")
+    p_classify = sub.add_parser("classify")
+    p_classify.add_argument("--root", type=Path, required=True)
+    p_classify.add_argument("--installed-version", default="")
+    p_classify.add_argument("--target-version", required=True)
+    p_classify.add_argument("--manifest-sha256", default="")
     args = parser.parse_args()
     try:
         if args.action == "prepare":
             result = prepare(args.source, args.target, args.source_version or None, args.target_version,
                              recover_managed=args.recover_managed,
-                             source_manifest_sha256=args.source_manifest_sha256 or None)
+                             source_manifest_sha256=args.source_manifest_sha256 or None,
+                             allow_repairable_drift=args.allow_repairable_drift)
         elif args.action == "plan":
-            source_state = inspect_source(args.source, args.source_version or None,
-                                          recover_managed=args.recover_managed, allow_external=True) if args.source else {
-                "owned_files": [], "user_files": []}
+            drift = None
+            if args.source:
+                if args.allow_repairable_drift:
+                    drift = classify_installed_drift(args.source, args.source_version or None, args.target_version,
+                                                     args.source_manifest_sha256 or None)
+                    if drift["classification"] not in {"CLEAN", "REPAIRABLE_MANAGED_DRIFT"}:
+                        raise ManagedConfigError("upgrade cannot safely repair managed state: " + drift["reason"])
+                    source_state = inspect_source(args.source, args.source_version or None,
+                                                  args.source_manifest_sha256 or None,
+                                                  recover_managed=True, allow_external=True)
+                else:
+                    source_state = inspect_source(args.source, args.source_version or None,
+                                                  args.source_manifest_sha256 or None,
+                                                  recover_managed=args.recover_managed, allow_external=True)
+            else:
+                source_state = {"owned_files": [], "user_files": []}
             manifest = json.loads((args.target / MANIFEST_NAME).read_text(encoding="utf-8"))
             result = plan(source_state, manifest, args.source_version or None, args.target_version)
+            if drift is not None:
+                result["managed_drift"] = drift
         elif args.action == "snapshot":
             result = snapshot(args.source, args.target)
         elif args.action == "restore-merge":
             result = restore_merge(args.source, args.target)
+        elif args.action == "classify":
+            result = classify_installed_drift(args.root, args.installed_version or None,
+                                              args.target_version, args.manifest_sha256 or None)
         else:
             result = validate_installed(args.root, args.installed_version or None, args.target_version,
                                         args.manifest_sha256 or None)
