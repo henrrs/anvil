@@ -133,7 +133,7 @@ def _release_source_path(relative: str, major: int) -> str | None:
     if relative in {
         "scripts/memory.py", "scripts/source_registry.py", "scripts/runtime.py", "scripts/runtime_state.py",
         "scripts/databricks.py", "scripts/databricks_finops.py", "scripts/artifacts.py",
-        "scripts/engineering.py", "scripts/public_errors.py", "scripts/analyze.py",
+        "scripts/engineering.py", "scripts/public_errors.py", "scripts/analyze.py", "scripts/lifecycle_model.py",
     } or relative.startswith(("scripts/engineering/", "scripts/communication/",
                               "scripts/databricks_providers/", "scripts/analysis/", "scripts/analytics/")):
         return relative

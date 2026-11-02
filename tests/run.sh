@@ -87,9 +87,28 @@ for forbidden in ("install-opencode.sh", "opencode_release.py", "opencode_v1_rel
     assert forbidden not in upgrade, f"Anvil-only upgrade imports runtime resolver/installer: {forbidden}"
 doctor=(root/"scripts/doctor.sh").read_text(encoding="utf-8")
 assert '"$ROOT/scripts/databricks.py" status' in doctor and "--format text" in doctor
-assert "ANVIL_DOCTOR_LOCAL" in doctor, "doctor has no local-only mode for lifecycle postflight"
-for name in ("scripts/anvil_upgrade.sh", "scripts/reforge.sh", "scripts/upgrade.sh", "scripts/rehearse-upgrade.sh"):
-    assert "ANVIL_DOCTOR_LOCAL=1" in (root/name).read_text(encoding="utf-8"), f"{name} may contact Databricks during lifecycle validation"
+assert "ANVIL_DOCTOR_LOCAL" in doctor, "doctor has no local-only mode for explicit local health checks"
+for name in ("scripts/anvil_upgrade.sh", "scripts/reforge.sh", "scripts/upgrade.sh"):
+    command=(root/name).read_text(encoding="utf-8")
+    assert "lifecycle_verify.py" in command and 'bash "$ROOT/scripts/doctor.sh"' not in command, \
+        f"{name} still uses human doctor as its transaction gate"
+    assert "lifecycle_plan.py" in command and "anvil_lifecycle_execute" in command, \
+        f"{name} bypasses the shared planning or transaction execution boundary"
+    assert "anvil_lifecycle_validate_plan" in command and "change-plan.json" in command, \
+        f"{name} does not hand its serialized ChangePlan to the lifecycle executor"
+    assert "--render-file" in command, f"{name} does not render the accepted plan for dry-run UX"
+runner=(root/"scripts/lib/lifecycle-operation.sh").read_text(encoding="utf-8")
+assert "lifecycle_executor.py" in runner and '"$plan_file"' in runner, \
+    "the shared transaction runner does not consume and validate the supplied ChangePlan"
+rollback=(root/"scripts/rollback.sh").read_text(encoding="utf-8")
+assert "lifecycle_plan.py" in rollback and "lifecycle_verify.py" in rollback, \
+    "rollback does not plan the selected snapshot and structurally verify the restored state"
+makefile=(root/"Makefile").read_text(encoding="utf-8")
+for target in ("analytics", "databricks-setup"):
+    recipe=makefile.split(f"{target}:\n",1)[1].split("\n\n",1)[0]
+    assert "lifecycle_plan.py" in recipe, f"{target} bypasses the lifecycle contributor planner"
+assert "ANVIL_DOCTOR_LOCAL=1" in (root/"scripts/rehearse-upgrade.sh").read_text(encoding="utf-8"), \
+    "isolated runtime rehearsal may contact a live Databricks workspace"
 assert "local_status()" in (root/"scripts/databricks.py").read_text(encoding="utf-8")
 print("OK local Anvil-upgrade dependency boundary and tracked-file hygiene")
 PY
@@ -266,6 +285,10 @@ for result in data["long_horizon_replay_comparison"].values():
     assert result["state_write_delta"] == 0
 PY
 pass 'Adaptive activation separates task risk from project size and reuses valid scoped architecture evidence'
+python3 "$ROOT/tests/lifecycle_model.py" || fail 'lifecycle state normalization'
+python3 "$ROOT/tests/lifecycle_plan.py" || fail 'lifecycle planning'
+python3 "$ROOT/tests/lifecycle_execution.py" || fail 'lifecycle plan execution contract'
+python3 "$ROOT/tests/configure_first_install.py" || fail 'first-install configuration characterization'
 python3 "$ROOT/tests/lifecycle.py" "$ROOT" "$candidate_v2" "$version_v2" "$candidate_v1" "$version_v1" "$tmp_root" || fail 'upgrade/reforge/migrate-runtime/rollback lifecycle integration'
 python3 "$ROOT/tests/analytics_lifecycle.py" || fail 'Analytics fresh install, upgrade, dry-run and rollback integration'
 PYTHONPATH="$ROOT:$ROOT/tests/fixtures/network-denied" python3 -m unittest discover -s "$ROOT/tests/analytics" -p 'test_*.py' || fail 'Analytics runtime, catalog, query, transfer, BFF and tool regressions'

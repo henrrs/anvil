@@ -7,11 +7,23 @@ import argparse
 import fcntl
 import json
 import os
+import secrets
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+PHASE_SEQUENCES = {
+    "upgrade": ("applying-config", "config-applied", "before-installation-metadata", "postflight-validated"),
+    "anvil-upgrade": ("applying-config", "config-applied", "before-installation-metadata", "postflight-validated"),
+    "reforge": ("applying-config", "config-applied", "before-installation-metadata", "postflight-validated"),
+    "update-runtime": ("before-installation-metadata", "postflight-validated"),
+    "migrate-runtime": ("applying-config", "config-applied", "before-installation-metadata", "postflight-validated"),
+    "rollback": ("restoring-snapshot", "restoring-config", "restoring-metadata",
+                 "verifying-restored-state", "postflight-validated"),
+}
 
 
 def paths() -> tuple[Path, Path]:
@@ -112,10 +124,14 @@ def begin(operation: str, backup: str, source: str, target: str, owner_pid: int)
     with _transaction_lock():
         if _read() is not None:
             raise ValueError("another lifecycle transaction is already pending recovery")
-        data = {"schema_version": 1, "operation": operation, "backup": str(Path(backup).absolute()),
+        started = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        operation_id = f"{operation}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(3)}"
+        data = {"schema_version": 1, "operation": operation, "operation_id": operation_id,
+                "backup": str(Path(backup).absolute()),
                 "source_version": source or None, "target_version": target or None,
                 "owner_pid": owner_pid,
-                "phase": "snapshot-verified", "started_utc": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+                "phase": "snapshot-verified", "started_utc": started,
+                "events": [{"phase": "snapshot-verified", "at": started}]}
         _write(data)
 
 
@@ -124,8 +140,24 @@ def phase(value: str) -> None:
         current = _read()
         if current is None:
             raise ValueError("cannot update a missing lifecycle transaction journal")
+        sequence = PHASE_SEQUENCES.get(str(current.get("operation")))
+        if sequence is not None:
+            events = current.get("events")
+            completed = [item.get("phase") for item in events if isinstance(item, dict)] if isinstance(events, list) else []
+            expected_index = len(completed) - 1
+            expected = sequence[expected_index] if 0 <= expected_index < len(sequence) else None
+            if value != expected:
+                raise ValueError(f"invalid {current.get('operation')} lifecycle phase transition: "
+                                 f"expected {expected or 'no further phase'}, received {value}")
+        elif value not in {"applying-config", "config-applied", "before-installation-metadata",
+                           "postflight-validated", "restoring-snapshot", "restoring-config",
+                           "restoring-metadata", "verifying-restored-state"}:
+            raise ValueError(f"unknown lifecycle phase: {value}")
         current["phase"] = value
         current["updated_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        events = current.get("events")
+        if isinstance(events, list) and len(events) < 64:
+            events.append({"phase": value, "at": current["updated_utc"]})
         _write(current)
 
 

@@ -6,9 +6,10 @@ source "$ROOT/scripts/lib/common.sh"
 anvil_need python3
 
 expected_anvil="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").strip())' "$ROOT/VERSION")"
-lifecycle_json="$(python3 "$ROOT/scripts/lifecycle_state.py" inspect --format json)"
+observation="$(python3 "$ROOT/scripts/lifecycle_resolver.py")"
+lifecycle_json="$(python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["current"]["lifecycle"]))' <<<"$observation")"
 lifecycle_status="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["lifecycle"])' <<<"$lifecycle_json")"
-lifecycle_text="$(python3 "$ROOT/scripts/lifecycle_state.py" inspect)"
+lifecycle_text="$(python3 -c 'import json,sys; sys.path.insert(0,sys.argv[1]); import lifecycle_state; print(lifecycle_state._human(json.load(sys.stdin)["current"]["lifecycle"]))' "$ROOT/scripts" <<<"$observation")"
 policy_json="$(python3 "$ROOT/scripts/runtime.py" policy)"
 read -r policy_major policy_majors automatic_major_upgrade < <(python3 - "$policy_json" <<'PY'
 import json,sys
@@ -16,7 +17,7 @@ opencode=json.loads(sys.argv[1])["opencode"]
 print(opencode["default_major"], ",".join(map(str,opencode["supported_majors"])), str(opencode["allow_automatic_major_upgrade"]))
 PY
 )
-binary="$(anvil_open_code_binary || true)"
+binary="$(python3 -c 'import json,sys; runtime=json.load(sys.stdin)["current"]["active_runtime"].get("runtime") or {}; print(runtime.get("executable") or "")' <<<"$observation")"
 record_file="$ANVIL_DATA_DIR/installation.json"
 recorded_opencode=""
 recorded_anvil=""
@@ -26,6 +27,7 @@ if [[ -f "$record_file" ]]; then
 import json,sys
 try: value=json.load(open(sys.argv[1],encoding="utf-8"))
 except (OSError,ValueError): value={}
+if not isinstance(value,dict): value={}
 print(f"{value.get('version', '')}\t{value.get('anvil_version', '')}\t{value.get('runtime_major', value.get('generation', ''))}")
 PY
 )
@@ -34,12 +36,12 @@ fi
 printf '%s\n' 'Anvil Doctor' '────────────'
 printf '%s\n' "$lifecycle_text"
 printf '\n'
-databricks_local_args=()
-if [[ "${ANVIL_DOCTOR_LOCAL:-0}" == 1 ]]; then
-  databricks_local_args+=(--local)
-fi
 databricks_probe_status=0
-databricks_status="$(python3 "$ROOT/scripts/databricks.py" status "${databricks_local_args[@]}" --format text 2>&1)" || databricks_probe_status=$?
+if [[ "${ANVIL_DOCTOR_LOCAL:-0}" == 1 ]]; then
+  databricks_status="$(python3 -c 'import json,sys; sys.path.insert(0,sys.argv[1]); import databricks; state=json.load(sys.stdin)["current"]["databricks"]; print("Databricks\n  Overall              INVALID\n  Recovery             Review the Anvil-owned Databricks state before setup." if state.get("overall")=="INVALID" else databricks.status_text(state))' "$ROOT/scripts" <<<"$observation")" || databricks_probe_status=$?
+else
+  databricks_status="$(python3 "$ROOT/scripts/databricks.py" status --format text 2>&1)" || databricks_probe_status=$?
+fi
 printf '%s\n' "$databricks_status"
 printf 'Anvil version          %s' "$expected_anvil"
 if [[ "$recorded_anvil" == "$expected_anvil" ]]; then
@@ -88,7 +90,7 @@ if [[ -z "$binary" || ! -x "$binary" ]]; then
   esac
 fi
 
-capability_json="$(python3 "$ROOT/scripts/runtime.py" capabilities --binary "$binary")"
+capability_json="$(python3 -c 'import json,sys; sys.path.insert(0,sys.argv[1]); import runtime; selected=json.load(sys.stdin)["current"]["active_runtime"].get("runtime") or {}; print(json.dumps(runtime.capabilities(observed_runtime=selected)))' "$ROOT/scripts" <<<"$observation")"
 read -r normalized major supported minimum < <(python3 - "$capability_json" <<'PY'
 import json,sys
 d=json.loads(sys.argv[1]); r=d['runtime']
@@ -188,7 +190,8 @@ fi
 if (( broken == 0 )); then
   data_status=0
   python3 "$ROOT/scripts/doctor_data.py" --config-dir "$ANVIL_CONFIG_DIR" \
-    --data-dir "$ANVIL_DATA_HOME" --cwd "$PWD" --runtime-major "$major" || data_status=$?
+    --data-dir "$ANVIL_DATA_HOME" --cwd "$PWD" --runtime-major "$major" \
+    --observation-stdin <<<"$observation" || data_status=$?
   case "$data_status" in
     1) broken=1 ;;
     2) warning=1 ;;

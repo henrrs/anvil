@@ -21,7 +21,7 @@ import runtime  # noqa: E402
 from public_errors import run_public  # noqa: E402
 from communication import inputs as communication_inputs  # noqa: E402
 from analysis.profiling import MAX_PROFILE_CELLS, MAX_ROWS, MAX_SOURCE_BYTES  # noqa: E402
-from analytics.diagnostics import collect as collect_analytics_readiness  # noqa: E402
+from lifecycle_resolver import resolve as resolve_lifecycle  # noqa: E402
 
 
 def analysis_state() -> dict:
@@ -84,7 +84,7 @@ def engineering_state() -> dict:
                             "Deterministic fixtures do not measure real-model task success."]}
 
 
-def analytics_state() -> dict:
+def analytics_state(readiness: dict) -> dict:
     home = Path.home()
     config_home = Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config"))).expanduser()
     config_dir = config_home / "opencode"
@@ -97,7 +97,6 @@ def analytics_state() -> dict:
             parsed_port = 8765
     except ValueError:
         parsed_port = 8765
-    readiness = collect_analytics_readiness(config_dir, home, parsed_port)
     installed = package.is_dir() and not package.is_symlink()
     frontend = all((web_root / name).is_file() and not (web_root / name).is_symlink()
                    for name in ("index.html", "app.js", "styles.css"))
@@ -155,13 +154,15 @@ def main() -> int:
     parser.add_argument("--major", type=int)
     args = parser.parse_args()
     adapter = databricks_module()
-    runtime_state = runtime.capabilities(args.binary, args.major)
-    databricks_state = adapter.local_status()
+    observed = resolve_lifecycle()
+    selected = observed.active_runtime.get("runtime") or {}
+    runtime_state = runtime.capabilities(args.binary, args.major, observed_runtime=selected)
+    databricks_state = observed.databricks
     databricks_capabilities = adapter.capabilities(databricks_state)
     communication = communication_state()
     analysis = analysis_state()
     engineering = engineering_state()
-    analytics = analytics_state()
+    analytics = analytics_state(observed.analytics)
     if args.format == "json":
         print(json.dumps({
             "schema_version": 1,

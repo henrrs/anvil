@@ -40,7 +40,7 @@ def safe_names(values: list[str]) -> str:
     return ", ".join(values) if values else "none"
 
 
-def analytics_workspace(config_dir: Path, home: Path) -> dict:
+def analytics_workspace(config_dir: Path, home: Path, readiness: dict | None = None) -> dict:
     package = config_dir / "scripts" / "analytics"
     web_root = config_dir / "web" / "analytics"
     root = home / ".anvil"
@@ -52,7 +52,7 @@ def analytics_workspace(config_dir: Path, home: Path) -> dict:
             port = 8765
     except ValueError:
         port = 8765
-    readiness = collect_analytics_readiness(config_dir, home, port)
+    readiness = readiness if readiness is not None else collect_analytics_readiness(config_dir, home, port)
     service = readiness.get("service", {})
     assets_ready = all((web_root / name).is_file() and not (web_root / name).is_symlink()
                        for name in ("index.html", "app.js", "styles.css"))
@@ -91,7 +91,14 @@ def main() -> int:
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--cwd", type=Path, required=True)
+    parser.add_argument("--observation-stdin", action="store_true", help="reuse the local lifecycle snapshot")
     args = parser.parse_args()
+    observed_analytics = None
+    if args.observation_stdin:
+        incoming = json.load(__import__("sys").stdin)
+        observed_analytics = incoming.get("current", {}).get("analytics")
+        if not isinstance(observed_analytics, dict):
+            observed_analytics = {}
 
     config_dir: Path = args.config
     main_configs = [config_dir / name for name in ("config.json", "opencode.json", "opencode.jsonc")]
@@ -130,7 +137,7 @@ def main() -> int:
     print(f"  legacy root plugins  {safe_names(legacy_plugins)}")
     print(f"  Claude-compatible skills {safe_names(claude_skills)}")
     print()
-    analytics_workspace(config_dir, args.home)
+    analytics_workspace(config_dir, args.home, observed_analytics)
 
     project_root = args.cwd.resolve()
     git_root = next((parent for parent in (project_root, *project_root.parents) if (parent / ".git").exists()), None)

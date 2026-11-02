@@ -116,6 +116,7 @@ try:
   value=json.load(open(sys.argv[1],encoding="utf-8"))
 except (OSError,ValueError):
   value={}
+if not isinstance(value,dict): value={}
 print(value.get("anvil_version") or "")
 PY
 )"
@@ -168,5 +169,5 @@ fi
 "${rehearsal_env[@]}" bash "$ROOT/scripts/validate-candidate.sh" \
   "$test_binary" "$test_config_home/opencode" "$expected_version" "$target_major"
 "${rehearsal_env[@]}" env PATH="$test_home/.opencode/bin:${PATH:-/usr/bin:/bin}" \
-  ANVIL_SKIP_RUNTIME_PROBE=1 ANVIL_DOCTOR_LOCAL=1 bash "$ROOT/scripts/doctor.sh"
+  ANVIL_SKIP_RUNTIME_PROBE=1 ANVIL_DOCTOR_LOCAL=1 ANVIL_REHEARSAL=1 bash "$ROOT/scripts/doctor.sh"
 anvil_ok 'Migration rehearsal passed; the staged runtime/config and copied OpenCode data/state remained isolated.'

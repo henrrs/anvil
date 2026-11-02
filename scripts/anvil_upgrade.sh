@@ -5,6 +5,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source "$ROOT/scripts/lib/common.sh"
 source "$ROOT/scripts/lib/install.sh"
 source "$ROOT/scripts/lib/backup.sh"
+source "$ROOT/scripts/lib/lifecycle-operation.sh"
 anvil_need python3 tar cp mv install chmod date
 
 [[ $# == 0 ]] || { anvil_error 'make upgrade accepts DRY_RUN=1 only; use make update-runtime or make migrate-runtime for OpenCode changes.'; exit 2; }
@@ -27,6 +28,10 @@ if drift.get("classification") in {"UNSAFE_MANAGED_DRIFT","UNKNOWN_DRIFT"}:
                           "target_release":drift.get("target_release")},sort_keys=True))
 '
   exit 1
+fi
+if ! plan_json="$(python3 "$ROOT/scripts/lifecycle_plan.py" upgrade --format json)"; then
+  python3 "$ROOT/scripts/lifecycle_plan.py" upgrade --format text || true
+  exit 2
 fi
 if [[ -L "$ANVIL_CONFIG_DIR" || -L "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_BIN" ]] || \
    ! anvil_safe_managed_path "$ANVIL_CONFIG_DIR" "$ANVIL_CONFIG_DIR" || \
@@ -65,6 +70,7 @@ old_anvil_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
 import json,sys
 try: value=json.load(open(sys.argv[1],encoding="utf-8"))
 except (OSError,ValueError): value={}
+if not isinstance(value,dict): value={}
 print(value.get("anvil_version") or "not recorded")
 PY
 )"
@@ -72,6 +78,10 @@ ready_config="$(mktemp -d "${TMPDIR:-/tmp}/anvil-config.XXXXXX")"
 chmod 700 -- "$ready_config"
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/anvil-anvil-upgrade.XXXXXX")"
 chmod 700 -- "$tmp_root"
+plan_file="$tmp_root/change-plan.json"
+printf '%s\n' "$plan_json" > "$plan_file"
+chmod 600 -- "$plan_file"
+anvil_lifecycle_validate_plan anvil-upgrade "$plan_file" >/dev/null
 backup_dir=""
 transaction_active=0
 runtime_stopped=0
@@ -126,6 +136,7 @@ manifest_sha256="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
 import json,sys
 try: value=json.load(open(sys.argv[1],encoding="utf-8"))
 except (OSError,ValueError): value={}
+if not isinstance(value,dict): value={}
 print(value.get("managed_config_manifest_sha256") or "")
 PY
 )"
@@ -211,6 +222,7 @@ anvil_print_config_plan "$ANVIL_CONFIG_DIR" "$ready_config/generated" "$old_anvi
 anvil_print_analytics_plan "$ready_config/generated"
 
 if [[ "${DRY_RUN:-0}" == 1 ]]; then
+  python3 "$ROOT/scripts/lifecycle_plan.py" --render-file "$plan_file"
   printf '\nNo changes performed.\nNo processes stopped.\nNo files changed.\n'
   exit 0
 fi
@@ -255,12 +267,28 @@ if [[ "${ANVIL_TEST_FAIL_AFTER_BACKUP:-0}" == 1 ]]; then
   exit 1
 fi
 
-python3 "$ROOT/scripts/lifecycle_transaction.py" begin --operation anvil-upgrade \
-  --backup "$backup_dir" --source-version "$old_anvil_version" --target-version "$ANVIL_VERSION" --owner-pid "$$"
-transaction_active=1
-if (( drift_count > 0 )); then
-  printf 'Repairing %s Anvil-managed drifted artifact(s)...\n' "$drift_count"
-  python3 - "$drift_file" <<'PY' >&2
+anvil_lifecycle_failure_detail() {
+  local status="$1"
+  if (( drift_count > 0 )); then
+    python3 - "$drift_file" "$status" <<'PY' >&2
+import json,sys
+for item in json.load(open(sys.argv[1],encoding="utf-8")).get("findings",[]):
+    print(json.dumps({"event":"managed_drift_repair_failed","path":item.get("path"),
+                      "ownership":item.get("ownership"),"classification":item.get("classification"),
+                      "installed_release":item.get("installed_release"),
+                      "target_release":item.get("target_release"),"exit_status":int(sys.argv[2])},sort_keys=True))
+PY
+  fi
+}
+
+apply_upgrade() {
+  anvil_lifecycle_require_plan_operation ReplaceManagedArtifacts || return $?
+  if [[ -f "$ready_config/generated/runtime/analytics-requirements.lock" ]]; then
+    anvil_lifecycle_require_plan_operation InstallAnalyticsDependencies || return $?
+  fi
+  if (( drift_count > 0 )); then
+    printf 'Repairing %s Anvil-managed drifted artifact(s)...\n' "$drift_count"
+    python3 - "$drift_file" <<'PY' >&2
 import json,sys
 for item in json.load(open(sys.argv[1],encoding="utf-8")).get("findings",[]):
     print(json.dumps({"event":"managed_drift_repair_started","path":item.get("path"),
@@ -268,44 +296,48 @@ for item in json.load(open(sys.argv[1],encoding="utf-8")).get("findings",[]):
                       "installed_release":item.get("installed_release"),
                       "target_release":item.get("target_release")},sort_keys=True))
 PY
-fi
-python3 "$ROOT/scripts/lifecycle_transaction.py" phase applying-config
-anvil_apply_config "$ready_config/generated"
-python3 "$ROOT/scripts/lifecycle_transaction.py" phase config-applied
-if [[ "${ANVIL_TEST_FAIL_AFTER_CONFIG:-0}" == 1 ]]; then
-  anvil_error 'Injected failure after Anvil config replacement.'
-  false
-fi
-XDG_DATA_HOME="$ANVIL_DATA_HOME" python3 "$ANVIL_CONFIG_DIR/scripts/memory.py" init >/dev/null
-python3 "$ROOT/scripts/lifecycle_transaction.py" phase before-installation-metadata
-if [[ "${ANVIL_TEST_FAIL_BEFORE_METADATA:-0}" == 1 ]]; then
-  anvil_error 'Injected failure before installation metadata was written.'
-  false
-fi
-python3 "$ROOT/scripts/installation.py" \
-  --destination "$ANVIL_DATA_DIR/installation.json" \
-  --config-dir "$ANVIL_CONFIG_DIR" \
-  --opencode-version "$runtime_version" --anvil-version "$ANVIL_VERSION" \
-  --opencode-major "$major" --binary "$binary" --anvil-only \
-  --migration-status anvil-upgrade --previous-anvil-version "$old_anvil_version" --backup "$backup_dir"
-python3 "$ROOT/scripts/runtime_state.py" record >/dev/null
+  fi
+  anvil_apply_config "$ready_config/generated" || return $?
+  if [[ "${ANVIL_TEST_FAIL_AFTER_CONFIG:-0}" == 1 ]]; then
+    anvil_error 'Injected failure after Anvil config replacement.'
+    return 1
+  fi
+  XDG_DATA_HOME="$ANVIL_DATA_HOME" python3 "$ANVIL_CONFIG_DIR/scripts/memory.py" init >/dev/null || return $?
+}
 
-doctor_status=0
-if [[ "${ANVIL_TEST_FAIL_DOCTOR:-0}" == 1 ]]; then
-  doctor_status=1
-else
-  ANVIL_TRANSACTION_POSTFLIGHT=1 ANVIL_DOCTOR_LOCAL=1 bash "$ROOT/scripts/doctor.sh" || doctor_status=$?
-fi
-if (( doctor_status == 1 || doctor_status > 2 )); then
-  anvil_error 'Post-upgrade doctor reported a broken installation.'
-  false
-elif (( doctor_status == 2 )); then
-  anvil_warn 'Upgrade completed with local project or source-drift warnings from doctor.'
-fi
+verify_upgrade() {
+  if [[ "${ANVIL_TEST_FAIL_BEFORE_METADATA:-0}" == 1 ]]; then
+    anvil_error 'Injected failure before installation metadata was written.'
+    return 1
+  fi
+  if [[ "${ANVIL_TEST_FAIL_DOCTOR:-0}" == 1 ]]; then
+    anvil_error 'Injected post-apply verification failure.'
+    return 1
+  fi
+  python3 "$ROOT/scripts/lifecycle_verify.py" \
+    --config "$ANVIL_CONFIG_DIR" --memory "$ANVIL_DATA_DIR/memory" --binary "$binary" \
+    --product-version "$ANVIL_VERSION" --runtime-version "$runtime_version" --runtime-major "$major"
+}
 
-python3 "$ROOT/scripts/lifecycle_transaction.py" phase postflight-validated
-python3 "$ROOT/scripts/lifecycle_transaction.py" clear
-transaction_active=0
+commit_upgrade() {
+  python3 "$ROOT/scripts/installation.py" \
+    --destination "$ANVIL_DATA_DIR/installation.json" \
+    --config-dir "$ANVIL_CONFIG_DIR" \
+    --opencode-version "$runtime_version" --anvil-version "$ANVIL_VERSION" \
+    --opencode-major "$major" --binary "$binary" --anvil-only \
+    --migration-status anvil-upgrade --previous-anvil-version "$old_anvil_version" --backup "$backup_dir" || return $?
+  python3 "$ROOT/scripts/runtime_state.py" record >/dev/null || return $?
+}
+
+rollback_upgrade() {
+  ANVIL_INTERNAL_MODE=1 bash "$ROOT/scripts/rollback.sh" --backup "$backup_dir" --internal
+}
+
+# The shared runner owns journal order, verify-before-commit and rollback.
+anvil_lifecycle_execute anvil-upgrade "$backup_dir" "$old_anvil_version" "$ANVIL_VERSION" \
+  apply_upgrade verify_upgrade commit_upgrade rollback_upgrade \
+  'Automatic Anvil rollback completed; the OpenCode runtime and data were preserved.' \
+  'Anvil upgrade failed after config replacement' "$plan_file"
 anvil_ok "Anvil $ANVIL_VERSION installed; OpenCode $runtime_version was preserved exactly."
 anvil_ok "Anvil-only rollback snapshot: $backup_dir"
 if (( drift_count > 0 )); then

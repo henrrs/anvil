@@ -15,7 +15,7 @@ import memory
 import managed_config
 import runtime
 import source_registry
-from inspect_data import analytics_workspace
+from analytics.diagnostics import collect as collect_analytics_readiness
 
 
 EXPECTED_SKILLS = {
@@ -67,7 +67,9 @@ def main() -> int:
     parser.add_argument("--data-dir", type=Path, required=True, help="XDG data home")
     parser.add_argument("--cwd", type=Path, required=True)
     parser.add_argument("--runtime-major", type=int, choices=(1, 2), required=True)
+    parser.add_argument("--observation-stdin", action="store_true", help="reuse the local lifecycle snapshot")
     args = parser.parse_args()
+    observation = json.load(sys.stdin)["current"] if args.observation_stdin else None
 
     config_path = args.config_dir / "opencode.jsonc"
     config = read_config(config_path)
@@ -122,7 +124,8 @@ def main() -> int:
     if not isinstance(migration, dict):
         migration = {}
     overrides = project_overrides(args.cwd)
-    capabilities = runtime.capabilities(requested_major=runtime_major)
+    selected_runtime = (observation.get("active_runtime", {}).get("runtime") or {}) if observation else None
+    capabilities = runtime.capabilities(requested_major=runtime_major, observed_runtime=selected_runtime)
     release_check = subprocess.run(
         [sys.executable, str(Path(__file__).resolve().with_name("version_docs.py"))],
         capture_output=True, text=True, check=False,
@@ -206,8 +209,22 @@ def main() -> int:
     print(f"  previous Anvil version {installation.get('previous_anvil_version') or migration.get('from_anvil') or 'unknown'}")
     print(f"  migration state        {migration.get('status', 'not recorded')}")
     print()
-    analytics = analytics_workspace(args.config_dir, Path.home())
-    if analytics.get("installed"):
+    try:
+        analytics_port = int(os.environ.get("ANVIL_ANALYTICS_PORT", "8765"))
+        if not 1 <= analytics_port <= 65535:
+            analytics_port = 8765
+    except ValueError:
+        analytics_port = 8765
+    analytics = (observation.get("analytics") if observation else None)
+    if not isinstance(analytics, dict):
+        analytics = collect_analytics_readiness(args.config_dir, Path.home(), analytics_port)
+    analytics_installed = (args.config_dir / "scripts/analytics/server.py").is_file()
+    print("Analytics Workspace")
+    print(f"  installed             {'YES' if analytics_installed else 'NO'}")
+    print(f"  service health        {analytics.get('service', {}).get('status', 'NOT_CHECKED')}")
+    print(f"  OpenCode runtime      {analytics.get('opencode', {}).get('status', 'NOT_CHECKED')}")
+    print(f"  canonical session     {analytics.get('canonical_session', {}).get('status', 'NOT_CHECKED')}")
+    if analytics_installed and os.environ.get("ANVIL_REHEARSAL") != "1" and os.environ.get("ANVIL_TEST_MODE") != "1":
         unmet = []
         for dependency in ("duckdb", "pyarrow"):
             if analytics.get(dependency, {}).get("status") != "READY":

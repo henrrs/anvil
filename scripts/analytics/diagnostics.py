@@ -9,6 +9,29 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+try:
+    from ..lifecycle_model import DocumentStatus, normalize_analytics_session
+except ImportError:  # repository-side scripts import analytics as a top-level package
+    from lifecycle_model import DocumentStatus, normalize_analytics_session
+
+
+def _section(value: Any, *, fallback: str = "INVALID") -> dict[str, Any]:
+    """Do not let an untrusted service response become a lifecycle object."""
+    if not isinstance(value, dict):
+        return {"status": fallback, "reason_code": "INVALID_STATE_SHAPE"}
+    result = dict(value)
+    if not isinstance(result.get("status"), str):
+        result["status"] = fallback
+    return result
+
+
+def _normalized_api(value: dict[str, Any], service: dict[str, Any]) -> dict[str, Any]:
+    result = dict(value)
+    for name in ("opencode", "runtime", "canonical_session", "duckdb", "pyarrow", "catalog", "databricks"):
+        result[name] = _section(value.get(name), fallback="NOT_CHECKED" if name == "databricks" else "INVALID")
+    result["service"] = {**service, "api": "READY"}
+    return result
+
 
 def _api_status(port: int) -> dict[str, Any] | None:
     try:
@@ -32,19 +55,17 @@ def collect(config_dir: Path, home: Path, port: int | None = None) -> dict[str, 
     service = service_state(config_dir, home, systemd_dir, selected_port)
     api = _api_status(selected_port)
     if api:
-        return {**api, "service": {**service, "api": "READY"}}
+        return _normalized_api(api, service)
     runtime_file = home / ".anvil" / "analytics" / "runtime.json"
-    runtime: dict[str, Any] = {}
-    try:
-        value = json.loads(runtime_file.read_text(encoding="utf-8"))
-        runtime = value if isinstance(value, dict) else {}
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        pass
+    runtime = normalize_analytics_session(runtime_file)
+    local_status = ("NOT_CHECKED" if runtime.document.status == DocumentStatus.NOT_PRESENT
+                    else "DEGRADED" if runtime.document.status in {DocumentStatus.CURRENT, DocumentStatus.LEGACY}
+                    else "INVALID")
     return {
         "service": {**service, "api": "NOT_READY"},
-        "opencode": {"status": "NOT_CHECKED" if not runtime else "DEGRADED"},
-        "runtime": {"status": "NOT_CHECKED" if not runtime else "DEGRADED"},
-        "canonical_session": {"status": "NOT_CHECKED" if not runtime else "DEGRADED"},
+        "opencode": {"status": local_status},
+        "runtime": {"status": local_status},
+        "canonical_session": {"status": local_status, "state_schema": runtime.document.status.value},
         "duckdb": {"status": "NOT_CHECKED", "reason_code": "SERVICE_UNAVAILABLE"},
         "pyarrow": {"status": "NOT_CHECKED", "reason_code": "SERVICE_UNAVAILABLE"},
         "catalog": {"status": "NOT_CHECKED", "catalogs": 0, "schemas": 0,

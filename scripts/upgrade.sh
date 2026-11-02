@@ -5,6 +5,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source "$ROOT/scripts/lib/common.sh"
 source "$ROOT/scripts/lib/install.sh"
 source "$ROOT/scripts/lib/backup.sh"
+source "$ROOT/scripts/lib/lifecycle-operation.sh"
 anvil_need python3 tar cp mv install chmod date
 
 ANVIL_VERSION="$(cat "$ROOT/VERSION")"
@@ -61,6 +62,15 @@ if [[ "$operation" == migrate-runtime ]]; then
 else
   anvil_require_installed
 fi
+plan_args=()
+if [[ "$operation" == migrate-runtime && -n "${OPENCODE_MAJOR:-}" ]]; then plan_args+=(--runtime-major "$OPENCODE_MAJOR"); fi
+plan_file="$tmp_root/change-plan.json"
+if ! python3 "$ROOT/scripts/lifecycle_plan.py" "$operation" "${plan_args[@]}" \
+  --format json --json-output "$plan_file" >/dev/null; then
+  python3 "$ROOT/scripts/lifecycle_plan.py" "$operation" "${plan_args[@]}" --format text || true
+  exit 2
+fi
+anvil_lifecycle_validate_plan "$operation" "$plan_file" >/dev/null
 if [[ -L "$ANVIL_CONFIG_DIR" || -L "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_BIN" ]]; then
   anvil_error 'Managed config/install paths must not be symlinks.'
   exit 1
@@ -135,6 +145,7 @@ try:
     value=json.load(open(sys.argv[1],encoding="utf-8"))
 except (OSError,ValueError):
     value={}
+if not isinstance(value,dict): value={}
 recorded=value.get("anvil_version")
 print(recorded or ("version not recorded" if sys.argv[2] == "1" else "unknown"))
 PY
@@ -152,6 +163,7 @@ printf 'Target OpenCode major     %s (%s)\n' "$target_major" "$([[ "$old_major" 
 printf 'Managed configuration     %s\n' "$ANVIL_CONFIG_DIR"
 
 if [[ "${DRY_RUN:-0}" == 1 ]]; then
+  python3 "$ROOT/scripts/lifecycle_plan.py" --render-file "$plan_file"
   printf '\nOpenCode Runtime Plan\n────────────────────────────────\n'
   printf 'Anvil                    %s (preserved on same-major update)\n' "${old_anvil_version:-unknown}"
   printf 'OpenCode                 %s → OpenCode %s.x\n' "$old_version" "$target_major"
@@ -266,6 +278,7 @@ if [[ "${ANVIL_YES:-0}" != 1 ]]; then
   }
 fi
 
+anvil_lifecycle_validate_plan "$operation" "$plan_file" "$target_major" >/dev/null
 backup_dir="$(ANVIL_PREVIOUS_ANVIL_VERSION="$old_anvil_version" PATH="$ANVIL_INSTALL_BIN:$PATH" \
   anvil_backup_create "$candidate_version" "$path_plan" | tail -n 1)"
 python3 "$ROOT/scripts/state.py" verify "$backup_dir"
@@ -274,77 +287,81 @@ if [[ "${ANVIL_TEST_FAIL_AFTER_BACKUP:-0}" == 1 ]]; then
   exit 1
 fi
 
-python3 "$ROOT/scripts/lifecycle_transaction.py" begin --operation "$operation" \
-  --backup "$backup_dir" --source-version "$old_anvil_version" --target-version "$ANVIL_VERSION" --owner-pid "$$"
-transaction_active=1
-if [[ "$operation" == migrate-runtime ]]; then
-  anvil_log "Applying the staged OpenCode $target_major Anvil profile and exact tested binary."
-  python3 "$ROOT/scripts/lifecycle_transaction.py" phase applying-config
-  anvil_apply_config "$ready_config" no yes
-  python3 "$ROOT/scripts/lifecycle_transaction.py" phase config-applied
-  if [[ "${ANVIL_TEST_FAIL_AFTER_CONFIG:-0}" == 1 ]]; then
-    anvil_error 'Injected failure after config replacement.'
-    false
+apply_runtime_change() {
+  anvil_lifecycle_require_plan_operation InstallRuntimeArtifact || return $?
+  if [[ "$operation" == migrate-runtime ]]; then
+    anvil_lifecycle_require_plan_operation MigrateRuntimeAdapter || return $?
+    anvil_log "Applying the staged OpenCode $target_major Anvil profile and exact tested binary."
+    anvil_apply_config "$ready_config" no yes || return $?
+    if [[ "${ANVIL_TEST_FAIL_AFTER_CONFIG:-0}" == 1 ]]; then
+      anvil_error 'Injected failure after config replacement.'
+      return 1
+    fi
   fi
-fi
-bash "$ROOT/scripts/install-opencode.sh" install "$candidate" "$candidate_version" "$target_major"
-path_result="$(python3 "$ROOT/scripts/path_edit.py" apply \
-  --home "$ANVIL_HOME_DIR" --xdg-config-home "$ANVIL_CONFIG_HOME" \
-  --install-dir "$ANVIL_INSTALL_BIN" --shell "${SHELL:-bash}" --path "$PATH")"
-if [[ "${ANVIL_TEST_FAIL_AFTER_INSTALL:-0}" == 1 ]]; then
-  anvil_error 'Injected failure after exact candidate installation.'
-  false
-fi
+  bash "$ROOT/scripts/install-opencode.sh" install "$candidate" "$candidate_version" "$target_major" || return $?
+  path_result="$(python3 "$ROOT/scripts/path_edit.py" apply \
+    --home "$ANVIL_HOME_DIR" --xdg-config-home "$ANVIL_CONFIG_HOME" \
+    --install-dir "$ANVIL_INSTALL_BIN" --shell "${SHELL:-bash}" --path "$PATH")" || return $?
+  if [[ "${ANVIL_TEST_FAIL_AFTER_INSTALL:-0}" == 1 ]]; then
+    anvil_error 'Injected failure after exact candidate installation.'
+    return 1
+  fi
+  export PATH="$ANVIL_INSTALL_BIN:$PATH"
+  if [[ "$operation" == migrate-runtime ]]; then
+    XDG_DATA_HOME="$ANVIL_DATA_HOME" python3 "$ANVIL_CONFIG_DIR/scripts/memory.py" init >/dev/null || return $?
+  fi
+  if [[ -f "$ANVIL_CONFIG_DIR/runtime/analytics-requirements.lock" ]]; then
+    anvil_lifecycle_require_plan_operation InstallAnalyticsDependencies || return $?
+    anvil_log 'Revalidating the existing Analytics environment and service against the updated OpenCode runtime.'
+    anvil_converge_analytics_runtime "$ANVIL_CONFIG_DIR" || return $?
+  fi
+  if [[ "${ANVIL_TEST_FAIL_POSTFLIGHT:-0}" == 1 ]]; then
+    anvil_error 'Injected postflight failure after the runtime upgrade.'
+    return 1
+  fi
+}
 
-export PATH="$ANVIL_INSTALL_BIN:$PATH"
-if [[ "$operation" == migrate-runtime ]]; then
-  XDG_DATA_HOME="$ANVIL_DATA_HOME" python3 "$ANVIL_CONFIG_DIR/scripts/memory.py" init >/dev/null
-fi
-if [[ -f "$ANVIL_CONFIG_DIR/runtime/analytics-requirements.lock" ]]; then
-  anvil_log 'Revalidating the existing Analytics environment and service against the updated OpenCode runtime.'
-  anvil_converge_analytics_runtime "$ANVIL_CONFIG_DIR"
-fi
-if [[ "${ANVIL_TEST_FAIL_POSTFLIGHT:-0}" == 1 ]]; then
-  anvil_error 'Injected postflight failure after the runtime upgrade.'
-  false
-fi
-python3 "$ROOT/scripts/lifecycle_transaction.py" phase before-installation-metadata
-if [[ "${ANVIL_TEST_FAIL_BEFORE_METADATA:-0}" == 1 ]]; then
-  anvil_error 'Injected failure before installation metadata was written.'
-  false
-fi
-installation_args=(
-  --destination "$ANVIL_DATA_DIR/installation.json" \
-  --config-dir "$ANVIL_CONFIG_DIR" \
-  --opencode-version "$candidate_version" --anvil-version "$ANVIL_VERSION" \
-  --opencode-major "$target_major" \
-  --binary "$ANVIL_INSTALLED_BINARY" --release-json "$release_json" \
-  --migration-status "$([[ "$operation" == update-runtime ]] && printf runtime-update || printf completed)" \
-  --previous-anvil-version "$old_anvil_version" \
-  --previous-opencode-version "$old_version" --from-generation "$from_generation" \
-  --backup "$backup_dir"
-)
-if [[ "$operation" == update-runtime ]]; then installation_args+=(--runtime-only); fi
-python3 "$ROOT/scripts/installation.py" "${installation_args[@]}"
-python3 "$ROOT/scripts/runtime_state.py" record --binary "$ANVIL_INSTALLED_BINARY" >/dev/null
+verify_runtime_change() {
+  if [[ "${ANVIL_TEST_FAIL_BEFORE_METADATA:-0}" == 1 ]]; then
+    anvil_error 'Injected failure before installation metadata was written.'
+    return 1
+  fi
+  if [[ "${ANVIL_TEST_FAIL_DOCTOR:-0}" == 1 ]]; then
+    anvil_error 'Injected post-apply verification failure.'
+    return 1
+  fi
+  verify_product_version="$ANVIL_VERSION"
+  if [[ "$operation" == update-runtime ]]; then verify_product_version="$old_anvil_version"; fi
+  python3 "$ROOT/scripts/lifecycle_verify.py" \
+    --config "$ANVIL_CONFIG_DIR" --memory "$ANVIL_DATA_DIR/memory" --binary "$ANVIL_INSTALLED_BINARY" \
+    --product-version "$verify_product_version" --runtime-version "$candidate_version" --runtime-major "$target_major"
+}
 
-doctor_status=0
-if [[ "${ANVIL_TEST_FAIL_DOCTOR:-0}" == 1 ]]; then
-  anvil_error 'Injected post-upgrade doctor failure.'
-  doctor_status=1
-else
-ANVIL_TRANSACTION_POSTFLIGHT=1 ANVIL_DOCTOR_LOCAL=1 bash "$ROOT/scripts/doctor.sh" || doctor_status=$?
-fi
-if (( doctor_status == 1 || doctor_status > 2 )); then
-  anvil_error 'Post-upgrade doctor reported a broken installation.'
-  false
-elif (( doctor_status == 2 )); then
-  anvil_warn 'Upgrade completed with project or source-drift warnings from doctor.'
-fi
+commit_runtime_change() {
+  installation_args=(
+    --destination "$ANVIL_DATA_DIR/installation.json" \
+    --config-dir "$ANVIL_CONFIG_DIR" \
+    --opencode-version "$candidate_version" --anvil-version "$ANVIL_VERSION" \
+    --opencode-major "$target_major" \
+    --binary "$ANVIL_INSTALLED_BINARY" --release-json "$release_json" \
+    --migration-status "$([[ "$operation" == update-runtime ]] && printf runtime-update || printf completed)" \
+    --previous-anvil-version "$old_anvil_version" \
+    --previous-opencode-version "$old_version" --from-generation "$from_generation" \
+    --backup "$backup_dir"
+  )
+  if [[ "$operation" == update-runtime ]]; then installation_args+=(--runtime-only); fi
+  python3 "$ROOT/scripts/installation.py" "${installation_args[@]}" || return $?
+  python3 "$ROOT/scripts/runtime_state.py" record --binary "$ANVIL_INSTALLED_BINARY" >/dev/null || return $?
+}
 
-python3 "$ROOT/scripts/lifecycle_transaction.py" phase postflight-validated
-python3 "$ROOT/scripts/lifecycle_transaction.py" clear
-transaction_active=0
+rollback_runtime_change() {
+  ANVIL_INTERNAL_MODE=1 bash "$ROOT/scripts/rollback.sh" --backup "$backup_dir" --internal
+}
+
+anvil_lifecycle_execute "$operation" "$backup_dir" "$old_anvil_version" "$ANVIL_VERSION" \
+  apply_runtime_change verify_runtime_change commit_runtime_change rollback_runtime_change \
+  'Automatic rollback completed; Anvil memory remains in place.' \
+  'OpenCode runtime operation failed after live mutation' "$plan_file" "$target_major"
 if [[ "$operation" == update-runtime ]]; then
   anvil_ok "OpenCode $candidate_version is installed; Anvil ${old_anvil_version:-unknown} was preserved."
 else

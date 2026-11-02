@@ -171,6 +171,8 @@ def downgrade_to_legacy_profile(paths: dict[str, pathlib.Path], version: str) ->
     write_json(config_path, config)
     for name in later_skills:
         shutil.rmtree(config_dir / "skills" / name, ignore_errors=True)
+    if compare_versions(version, "2.17.0") == -1:
+        (config_dir / "scripts/lifecycle_model.py").unlink(missing_ok=True)
     if compare_versions(version, "2.9.0") == -1:
         shutil.rmtree(config_dir / "scripts/engineering", ignore_errors=True)
         for name in ("engineering.py", "public_errors.py"):
@@ -271,6 +273,60 @@ def assert_human_public_result(proc: subprocess.CompletedProcess[str], command: 
     return output
 
 
+def observation_characterization_test(temp: pathlib.Path) -> None:
+    """Preserve public observation semantics across the lifecycle architecture change."""
+    paths = fixture(temp / "previous")
+    env = offline_env(paths, temp / "previous", ANVIL_DOCTOR_LOCAL="1")
+    roots = (paths["home"], paths["config_home"], paths["data_home"], paths["state_home"])
+    before = {str(root): filesystem_snapshot(root) for root in roots}
+    inspect = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
+    doctor = subprocess.run(["/usr/bin/make", "--no-print-directory", "doctor"],
+                            cwd=ROOT, env=env, text=True, capture_output=True, timeout=60)
+    capabilities = run(["/usr/bin/make", "--no-print-directory", "capabilities", "FORMAT=json"], env)
+    check("Status                MIGRATION_REQUIRED" in inspect.stdout,
+          "previous supported release lost its inspect migration status")
+    check(doctor.returncode in {0, 2} and "UPGRADE AVAILABLE" in doctor.stdout,
+          "doctor lost the previous-release upgrade guidance")
+    capability_data = json.loads(capabilities.stdout)
+    check(capability_data["runtime"].get("runtime", {}).get("generation") in {None, 1}
+          and capability_data["databricks"].get("auth_checked") is False,
+          "capabilities lost the local runtime or Databricks inventory contract")
+    check(before == {str(root): filesystem_snapshot(root) for root in roots},
+          "an observation target changed the installed fixture")
+    print("PASS previous-release inspect, doctor and capabilities keep their public, read-only contracts")
+
+
+def malformed_observation_characterization_test(temp: pathlib.Path) -> None:
+    """Legacy scalar and malformed persisted state must remain diagnostic data."""
+    paths = fixture(temp / "malformed")
+    (paths["anvil_data"] / "installation.json").write_text('"legacy"\n', encoding="utf-8")
+    (paths["anvil_data"] / "runtime.json").write_text('"legacy"\n', encoding="utf-8")
+    analytics_state = paths["home"] / ".anvil/analytics/runtime.json"
+    analytics_state.parent.mkdir(parents=True, exist_ok=True)
+    analytics_state.write_text('"legacy"\n', encoding="utf-8")
+    databricks_state = paths["config_home"] / "anvil/databricks.json"
+    databricks_state.parent.mkdir(parents=True, exist_ok=True)
+    env = offline_env(paths, temp / "malformed", ANVIL_DOCTOR_LOCAL="1")
+    roots = (paths["home"], paths["config_home"], paths["data_home"], paths["state_home"])
+    for representation in ('"legacy"\n', '{broken json\n', '{"schema_version": 999}\n'):
+        for path in (paths["anvil_data"] / "installation.json", paths["anvil_data"] / "runtime.json",
+                     analytics_state, databricks_state):
+            path.write_text(representation, encoding="utf-8")
+        before = {str(root): filesystem_snapshot(root) for root in roots}
+        for target in ("inspect", "doctor", "capabilities"):
+            command = ["/usr/bin/make", "--no-print-directory", target]
+            if target == "capabilities":
+                command.append("FORMAT=json")
+            result = subprocess.run(command, cwd=ROOT, env=env, text=True, capture_output=True, timeout=60)
+            check("Traceback" not in result.stdout + result.stderr
+                  and "AttributeError" not in result.stdout + result.stderr,
+                  f"make {target} exposed a raw exception for malformed persisted state")
+            check(result.returncode in {0, 1, 2}, f"make {target} returned an unexpected exit code")
+        check(before == {str(root): filesystem_snapshot(root) for root in roots},
+              "malformed-state observation changed the installed fixture")
+    print("PASS legacy scalar persisted state remains diagnostic and read-only across observe commands")
+
+
 def fresh_machine_command_contract_test(temp: pathlib.Path, wrapper_v1: pathlib.Path) -> None:
     env = fresh_environment(temp)
     offline = offline_env({
@@ -286,8 +342,10 @@ def fresh_machine_command_contract_test(temp: pathlib.Path, wrapper_v1: pathlib.
     preinstall = [
         (("help",), 0), (("inspect",), 0), (("doctor",), 0),
         (("capabilities",), 0), (("stats",), 0),
+        (("reforge", "DRY_RUN=1"), 0),
         (("upgrade", "DRY_RUN=1"), 2), (("upgrade",), 2), (("rollback",), 2),
-        (("update-runtime",), 2), (("migrate-runtime", "OPENCODE_MAJOR=2"), 2),
+        (("update-runtime",), 2), (("upgrade-runtime",), 2),
+        (("migrate-runtime", "OPENCODE_MAJOR=2"), 2),
         (("databricks-setup", "DRY_RUN=1"), 0), (("databricks-setup",), 2),
     ]
     outputs: dict[str, str] = {}
@@ -303,6 +361,9 @@ def fresh_machine_command_contract_test(temp: pathlib.Path, wrapper_v1: pathlib.
     check("workspace URL" in outputs["databricks-setup"].casefold()
           or "interactive terminal" in outputs["databricks-setup"],
           "first-use Databricks setup did not explain its workspace prerequisite")
+    check("release lookup and download" in outputs["reforge DRY_RUN=1"]
+          and "No snapshot was created" in outputs["reforge DRY_RUN=1"],
+          "first-use reforge dry run did not remain offline and side-effect free")
     paths = {
         "home": pathlib.Path(offline["HOME"]),
         "config": pathlib.Path(offline["XDG_CONFIG_HOME"]) / "opencode",
@@ -326,7 +387,8 @@ def fresh_machine_command_contract_test(temp: pathlib.Path, wrapper_v1: pathlib.
     postinstall = [
         (("inspect",), 0), (("doctor",), 2), (("capabilities",), 0),
         (("stats",), 0), (("upgrade", "DRY_RUN=1"), 0),
-        (("update-runtime",), 2), (("migrate-runtime", "OPENCODE_MAJOR=2"), 2),
+        (("update-runtime",), 2), (("upgrade-runtime",), 2),
+        (("migrate-runtime", "OPENCODE_MAJOR=2"), 2),
         (("databricks-setup", "DRY_RUN=1"), 0), (("databricks-setup",), 2),
     ]
     after_failures = tree_hash(pathlib.Path(bootstrap_env["XDG_DATA_HOME"]) / "anvil")
@@ -337,7 +399,7 @@ def fresh_machine_command_contract_test(temp: pathlib.Path, wrapper_v1: pathlib.
             check("not in this session's PATH" in output and "Status: WARNING" in output,
                   "doctor did not report a usable runtime missing from this shell's PATH: "
                   f"exit={proc.returncode}, output={output[-2500:]}")
-        if args[0] == "update-runtime" or args[0] == "migrate-runtime":
+        if args[0] in {"update-runtime", "upgrade-runtime", "migrate-runtime"}:
             check("release" in output.casefold() or "network" in output.casefold()
                   or "could not" in output.casefold(),
                   f"offline runtime operation lacked a useful blocker: {output[-1000:]}")
@@ -564,6 +626,7 @@ def engineering_manifest_upgrade_test(temp: pathlib.Path) -> None:
     shutil.rmtree(paths["config"] / "scripts/engineering")
     for name in ("engineering.py", "public_errors.py"):
         (paths["config"] / "scripts" / name).unlink()
+    (paths["config"] / "scripts/lifecycle_model.py").unlink()
     shutil.rmtree(paths["config"] / "skills/anvil-spark-performance/references")
     manifest = managed_config._target_manifest(paths["config"], "2.8.0", excluded={"commands/user-command.md", "scripts/user-helper.py"})
     managed_config._write_manifest(paths["config"], manifest)
@@ -1524,6 +1587,10 @@ def local_environment_preservation_test(temp: pathlib.Path, wrapper: pathlib.Pat
           all(file_hash(path) == before_external[str(path)] for path in list(external)[1:]),
           "rollback changed user-local package, proxy, certificate, or shell configuration")
 
+    blocked_reforge = run(["/usr/bin/make", "--no-print-directory", "reforge"], env, expected=2)
+    check("run make upgrade" in blocked_reforge.stdout,
+          "reforge did not direct a rolled-back older release to product upgrade")
+    run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
     run(["/usr/bin/make", "--no-print-directory", "reforge"], env)
     reforged = json.loads(config_path.read_text(encoding="utf-8"))
     check("@company/opencode-audit" in reforged["plugins"] and "./plugins/anvil-core" in reforged["plugins"],
@@ -1571,6 +1638,9 @@ def rehearsal_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
 
 def reforge_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
     paths = fixture(temp)
+    shutil.rmtree(paths["config"])
+    (paths["anvil_data"] / "installation.json").unlink()
+    (paths["anvil_data"] / "runtime.json").unlink(missing_ok=True)
     paths["binary"].unlink()
     env = offline_env(paths, temp,
         ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper), ANVIL_YES="1",
@@ -1595,6 +1665,7 @@ def reforge_preserves_v2_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
     use_v2_profile(paths, temp, wrapper)
     original_binary = file_hash(paths["binary"])
     env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_TEST_CANDIDATE_BINARY=str(wrapper), ANVIL_YES="1")
+    run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
     proc = run(["/usr/bin/make", "--no-print-directory", "reforge"], env)
     installation = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
     config = json.loads((paths["config"] / "opencode.jsonc").read_text(encoding="utf-8"))
@@ -1916,7 +1987,8 @@ def upgrade_test(
     check(tree_hash(paths["state_opencode"]) == original_state, "live OpenCode state changed during upgrade")
     backup = pathlib.Path(installed["migration"]["backup"])
     run([sys.executable, str(ROOT / "scripts" / "state.py"), "verify", str(backup)], env_for(paths))
-    check("Status: HEALTHY" in proc.stdout, "post-upgrade doctor did not report healthy")
+    check("Anvil post-apply verification" in proc.stdout and "Status: HEALTHY" in proc.stdout,
+          "post-upgrade structured verification did not pass")
     if external_binary:
         check(file_hash(paths["binary"]) == original_binary, "upgrade changed the external V1 executable")
         startup = (paths["home"] / ".bashrc").read_text(encoding="utf-8")
@@ -1979,10 +2051,12 @@ def upgrade_preserves_v1_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
     backup = pathlib.Path(installed["migration"]["backup"])
     manifest = json.loads((backup / "manifest.json").read_text(encoding="utf-8"))
     check(manifest["scope"] == "anvil", "normal Anvil upgrade did not create an Anvil-scoped backup")
-    check("Status: HEALTHY" in proc.stdout, "OpenCode 1 Anvil 2.3 doctor was not healthy")
+    check("Anvil post-apply verification" in proc.stdout and "Status: HEALTHY" in proc.stdout,
+          "OpenCode 1 Anvil upgrade verification did not pass")
+    doctor = run(["/usr/bin/make", "--no-print-directory", "doctor"], env)
     for section in ("Capabilities", "Stats", "Memory", "Knowledge", "Project overrides", "Version documentation"):
-        check(section in proc.stdout, f"OpenCode 1 doctor omitted the {section} category")
-    check("/distill               YES" in proc.stdout and "file-fallback" in proc.stdout, "OpenCode 1 doctor omitted core command or fallback capability status")
+        check(section in doctor.stdout, f"OpenCode 1 doctor omitted the {section} category")
+    check("/distill               YES" in doctor.stdout and "file-fallback" in doctor.stdout, "OpenCode 1 doctor omitted core command or fallback capability status")
     assert_no_external_network(temp)
     print("PASS make upgrade advances Anvil on OpenCode 1 without changing the runtime major")
 
@@ -2016,7 +2090,8 @@ def upgrade_preserves_v2_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
     check(tree_hash(paths["data_opencode"]) == before_data and tree_hash(paths["state_opencode"]) == before_state, "OpenCode 2 upgrade changed opaque user data/state")
     check("Network required      NO" in proc.stdout and "PRESERVE EXACT VERSION" in proc.stdout, "upgrade plan did not state the offline exact-runtime invariant")
     check(file_hash(paths["binary"]) == original_binary, "Anvil-only upgrade changed the OpenCode 2 executable bytes")
-    check("Status: HEALTHY" in proc.stdout, "OpenCode 2 Anvil 2.3 doctor was not healthy")
+    check("Anvil post-apply verification" in proc.stdout and "Status: HEALTHY" in proc.stdout,
+          "OpenCode 2 Anvil upgrade verification did not pass")
     for section in ("Capabilities", "Stats", "Memory", "Knowledge", "Project overrides", "Version documentation"):
         check(section in proc.stdout, f"OpenCode 2 doctor omitted the {section} category")
     check("/distill               YES" in proc.stdout and "native-tool+file-fallback" in proc.stdout, "OpenCode 2 doctor omitted core command or native search capability status")
@@ -2210,6 +2285,10 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="anvil-public-commands-", dir=TEST_ROOT) as name:
         fresh_machine_command_contract_test(pathlib.Path(name), wrapper_v1)
+    with tempfile.TemporaryDirectory(prefix="anvil-observe-characterization-", dir=TEST_ROOT) as name:
+        observation_characterization_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-malformed-observe-", dir=TEST_ROOT) as name:
+        malformed_observation_characterization_test(pathlib.Path(name))
     with tempfile.TemporaryDirectory(prefix="anvil-partial-lifecycle-", dir=TEST_ROOT) as name:
         partial_lifecycle_matrix_test(pathlib.Path(name), wrapper_v1)
     lifecycle_version_order_test()

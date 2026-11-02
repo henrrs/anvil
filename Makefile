@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
-.PHONY: help inspect test reforge upgrade update-runtime migrate-runtime doctor capabilities stats databricks-setup rollback analytics analytics-dev analytics-status analytics-stop analytics-ui-mock eval-analytics eval-analytical eval-analytical-semantic eval-analytical-model eval-analytical-full eval-analytical-baseline eval-analytical-review
+.PHONY: help inspect test reforge upgrade update-runtime upgrade-runtime migrate-runtime doctor capabilities stats databricks-setup rollback analytics analytics-dev analytics-status analytics-stop analytics-ui-mock eval-analytics eval-analytical eval-analytical-semantic eval-analytical-model eval-analytical-full eval-analytical-baseline eval-analytical-review
 
 VERSION := $(shell cat VERSION 2>/dev/null || printf 'unknown')
 
@@ -14,6 +14,7 @@ help:
 	  'make reforge    Rebuild Anvil using the current runtime policy/major.' \
 	  'make upgrade    Upgrade Anvil only; preserve the exact validated OpenCode runtime.' \
 	  'make update-runtime  Update OpenCode within its current major (network required).' \
+	  'make upgrade-runtime  Alias for update-runtime.' \
 	  'make migrate-runtime OPENCODE_MAJOR=2  Explicitly migrate OpenCode major.' \
 	  'make doctor     Check Anvil, runtime, memory, knowledge and project state.' \
 	  'make capabilities  Show features available on the detected runtime.' \
@@ -58,6 +59,8 @@ upgrade:
 update-runtime:
 	@bash scripts/upgrade.sh --update-runtime
 
+upgrade-runtime: update-runtime
+
 migrate-runtime:
 	@bash scripts/upgrade.sh --migrate-runtime
 
@@ -68,6 +71,7 @@ capabilities:
 	@python3 scripts/capabilities.py --format "$(if $(FORMAT),$(FORMAT),text)" $(if $(filter 1 true yes,$(VERBOSE)),--verbose,)
 
 analytics:
+	@python3 scripts/lifecycle_plan.py analytics --format json >/dev/null
 	@python3 scripts/analytics_service.py start --port "$(if $(ANALYTICS_PORT),$(ANALYTICS_PORT),$${ANVIL_ANALYTICS_PORT:-8765})"
 
 analytics-dev:
@@ -89,6 +93,7 @@ stats:
 	@bash scripts/stats.sh
 
 databricks-setup:
+	@python3 scripts/lifecycle_plan.py databricks-setup --format json >/dev/null
 	@python3 scripts/databricks.py setup --format "$(if $(OUTPUT),$(OUTPUT),text)" $(if $(filter 1 true yes,$(VERBOSE)),--verbose,) $(if $(filter 1 true yes,$(DRY_RUN)),--dry-run,) $(if $(filter 1 true yes,$(RESET)),--reset,)
 
 eval-analytical:

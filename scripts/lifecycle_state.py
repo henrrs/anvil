@@ -19,7 +19,9 @@ import runtime_state  # noqa: E402
 import state as backup_state  # noqa: E402
 import managed_config  # noqa: E402
 import lifecycle_transaction  # noqa: E402
+from lifecycle_model import DocumentStatus, PersistedState, resolve_persisted  # noqa: E402
 from semver import compare as compare_versions, parse as parse_version, supported_migration  # noqa: E402
+from public_errors import run_public  # noqa: E402
 
 
 def paths() -> dict[str, Path]:
@@ -96,8 +98,11 @@ def _backup_inventory(root: Path) -> dict[str, Any]:
     return {"present": True, "valid_count": len(valid), "latest": str(valid[0]) if valid else None}
 
 
-def evaluate() -> dict[str, Any]:
+def evaluate(runtime_result: dict[str, Any] | None = None,
+             persisted: PersistedState | None = None) -> dict[str, Any]:
     locations = paths()
+    persisted = persisted if persisted is not None else resolve_persisted(
+        locations["home"], locations["config"].parent, locations["data"].parent)
     version_path = ROOT / "VERSION"
     try:
         repository_version = version_path.read_text(encoding="utf-8").strip()
@@ -121,7 +126,7 @@ def evaluate() -> dict[str, Any]:
         config_major = _profile_major(config_path)
     else:
         config_major = _audit_config(config_path, allow_older_skill_set=(version_relation != 0))
-    runtime_result = runtime_state.discover()
+    runtime_result = runtime_result if runtime_result is not None else runtime_state.discover()
     runtime = runtime_result.get("runtime") or {}
     runtime_usable = bool(runtime.get("usable") and runtime.get("supported"))
     runtime_major = runtime.get("generation")
@@ -155,12 +160,17 @@ def evaluate() -> dict[str, Any]:
                     managed_drift = {"classification": "UNKNOWN_DRIFT", "reason": str(drift_exc),
                                      "findings": [], "user_changes": []}
 
-    record_shape_valid = not record_exists or (record_valid and isinstance(record, dict))
+    record_shape_valid = not record_exists or (record_valid and isinstance(record, dict)
+                                              and persisted.installation.document.status != DocumentStatus.INVALID)
     runtime_record = (runtime_saved.get("runtime") if isinstance(runtime_saved, dict)
                       and isinstance(runtime_saved.get("runtime"), dict) else runtime_saved)
-    runtime_record_valid = (not runtime_state_exists or (runtime_state_valid and isinstance(runtime_record, dict)
-                            and isinstance(runtime_record.get("executable"), str)
-                            and isinstance(runtime_record.get("version"), str)))
+    runtime_record_valid = (not runtime_state_exists
+                            or persisted.runtime.document.status == DocumentStatus.UNSUPPORTED
+                            or (runtime_state_valid and isinstance(runtime_record, dict)
+                                and isinstance(runtime_record.get("executable"), str)
+                                and isinstance(runtime_record.get("version"), str)))
+    unsupported_persisted = (persisted.installation.document.status == DocumentStatus.UNSUPPORTED
+                             or persisted.runtime.document.status == DocumentStatus.UNSUPPORTED)
 
     managed_artifacts = bool(config_present or record_exists or runtime_state_exists
                              or locations["install_root"].exists() or locations["install_root"].is_symlink()
@@ -174,6 +184,8 @@ def evaluate() -> dict[str, Any]:
         blockers.append("Anvil installation metadata is malformed.")
     if not runtime_record_valid:
         blockers.append("Anvil runtime metadata is malformed.")
+    if unsupported_persisted:
+        blockers.append("A persisted Anvil state schema is newer than this checkout supports.")
     partial_legacy_config = (not runtime.get("installed") and managed_config_error
                              and managed_config_error.startswith("source profile is missing files required by its own release:"))
     repairable_drift = (managed_drift is not None
@@ -223,6 +235,8 @@ def evaluate() -> dict[str, Any]:
             blockers.append("A lifecycle transaction was interrupted; its verified snapshot must be restored before other changes.")
             if transaction.get("valid") is not True or transaction.get("backup_valid") is not True:
                 blockers.append("The recovery journal or its snapshot failed validation; automatic restore is unavailable.")
+    elif unsupported_persisted:
+        lifecycle = "UNSUPPORTED"
     elif corrupted:
         lifecycle = "CORRUPTED"
     elif not managed_artifacts:
@@ -289,6 +303,7 @@ def evaluate() -> dict[str, Any]:
 
     return {
         "schema_version": 1,
+        "persisted": persisted.as_dict(),
         "lifecycle": lifecycle,
         "repository": {"version": repository_version or None, "valid": repository_valid},
         "installation": {"managed_artifacts": managed_artifacts,
@@ -465,10 +480,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        print(f"Anvil lifecycle inspection failed: {type(exc).__name__}. Run with DEBUG=1 for details.", file=sys.stderr)
-        if os.environ.get("DEBUG") == "1":
-            raise
-        raise SystemExit(1)
+    raise SystemExit(run_public(main, command="Anvil lifecycle inspection"))

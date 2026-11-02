@@ -98,10 +98,16 @@ def inspect_binary(binary: str | None = None) -> tuple[str | None, str | None, i
     return selected, normalized, parsed[0] if parsed else None
 
 
-def capabilities(binary: str | None = None, requested_major: int | None = None) -> dict[str, Any]:
+def capabilities(binary: str | None = None, requested_major: int | None = None,
+                 observed_runtime: dict[str, Any] | None = None) -> dict[str, Any]:
     release = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     configured = policy()["opencode"]
-    path, version, detected = inspect_binary(binary)
+    if observed_runtime is not None and binary is None:
+        path = observed_runtime.get("executable")
+        version = observed_runtime.get("version")
+        detected = observed_runtime.get("generation")
+    else:
+        path, version, detected = inspect_binary(binary)
     major = requested_major if requested_major is not None else detected
     installed = bool(path and version and detected is not None)
     supported = configured["supported_majors"]

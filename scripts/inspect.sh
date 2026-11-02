@@ -4,7 +4,8 @@ set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source "$ROOT/scripts/lib/common.sh"
 
-runtime="$(anvil_runtime_json)"
+observation="$(python3 "$ROOT/scripts/lifecycle_resolver.py")"
+runtime="$(python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["current"]["active_runtime"]))' <<<"$observation")"
 runtime_value() { python3 -c 'import json,sys; d=json.loads(sys.argv[1]); r=d.get("runtime") or {}; v=r.get(sys.argv[2]); print("" if v is None else v)' "$runtime" "$1"; }
 binary="$(runtime_value executable)"
 version="$(runtime_value version)"
@@ -15,15 +16,10 @@ usable="$(runtime_value usable)"
 supported="$(runtime_value supported)"
 path_ready="$(runtime_value path_ready)"
 anvil_version="$(cat "$ROOT/VERSION")"
-installed_anvil="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
-import json,sys
-try: print(json.load(open(sys.argv[1],encoding="utf-8")).get("anvil_version") or "not recorded")
-except (OSError,ValueError): print("not recorded")
-PY
-)"
+installed_anvil="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["current"]["persisted"]["installation"]["product_version"] or "not recorded")' <<<"$observation")"
 
 printf '%s\n' 'Anvil Inspect (read-only)' '────────────────────────'
-python3 "$ROOT/scripts/lifecycle_state.py" inspect
+python3 -c 'import json,sys; sys.path.insert(0,sys.argv[1]); import lifecycle_state; print(lifecycle_state._human(json.load(sys.stdin)["current"]["lifecycle"]))' "$ROOT/scripts" <<<"$observation"
 printf '\n'
 printf 'Anvil repository       %s\n' "$anvil_version"
 printf 'Anvil installed        %s\n' "$installed_anvil"
@@ -43,5 +39,6 @@ printf 'State directory        %s\n' "$ANVIL_STATE_DIR"
 printf '\n'
 python3 "$ROOT/scripts/inspect_data.py" \
   --home "$ANVIL_HOME_DIR" --config "$ANVIL_CONFIG_DIR" \
-  --data "$ANVIL_DATA_HOME" --state "$ANVIL_STATE_HOME" --cwd "$PWD"
-python3 "$ROOT/scripts/databricks.py" status --local --format text
+  --data "$ANVIL_DATA_HOME" --state "$ANVIL_STATE_HOME" --cwd "$PWD" \
+  --observation-stdin <<<"$observation"
+python3 -c 'import json,sys; sys.path.insert(0,sys.argv[1]); import databricks; state=json.load(sys.stdin)["current"]["databricks"]; print("Databricks\n  Overall              INVALID\n  Recovery             Review the Anvil-owned Databricks state before setup." if state.get("overall")=="INVALID" else databricks.status_text(state))' "$ROOT/scripts" <<<"$observation"

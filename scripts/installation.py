@@ -11,6 +11,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from semver import parse as parse_version
+from lifecycle_migrations import migrate_installation
 
 
 def main() -> int:
@@ -40,10 +41,12 @@ def main() -> int:
     if args.anvil_only:
         try:
             record = json.loads(destination.read_text(encoding="utf-8"))
-            if not isinstance(record, dict):
-                record = {}
         except (OSError, ValueError, json.JSONDecodeError):
             record = {}
+        try:
+            record = migrate_installation(record)
+        except ValueError as exc:
+            parser.error(str(exc))
         record.update({
             "schema_version": max(3, int(record.get("schema_version", 1) or 1)),
             "anvil_version": args.anvil_version,
@@ -76,10 +79,12 @@ def main() -> int:
         if args.runtime_only:
             try:
                 record = json.loads(destination.read_text(encoding="utf-8"))
-                if not isinstance(record, dict):
-                    record = {}
             except (OSError, ValueError, json.JSONDecodeError):
                 record = {}
+            try:
+                record = migrate_installation(record)
+            except ValueError as exc:
+                parser.error(str(exc))
             prior_major = record.get("runtime_major", record.get("generation", args.from_generation))
             prior_version = record.get("version") or args.previous_opencode_version or None
             record.update({

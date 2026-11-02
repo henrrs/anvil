@@ -8,8 +8,10 @@ source "$ROOT/scripts/lib/install.sh"
 backup=""
 internal=0
 rollback_stage=""
+rollback_plan_dir=""
 cleanup_rollback_stage() {
   [[ -z "$rollback_stage" || ! -d "$rollback_stage" ]] || rm -rf -- "$rollback_stage"
+  [[ -z "$rollback_plan_dir" || ! -d "$rollback_plan_dir" ]] || rm -rf -- "$rollback_plan_dir"
 }
 trap cleanup_rollback_stage EXIT
 while [[ $# -gt 0 ]]; do
@@ -33,6 +35,13 @@ fi
 
 if [[ -z "$backup" ]]; then
   backup="$(anvil_lifecycle_state latest-backup)"
+fi
+if (( ! internal )); then
+  rollback_plan_dir="$(mktemp -d "${TMPDIR:-/tmp}/anvil-rollback-plan.XXXXXX")"
+  chmod 700 -- "$rollback_plan_dir"
+  rollback_plan="$rollback_plan_dir/change-plan.json"
+  python3 "$ROOT/scripts/lifecycle_plan.py" rollback --format text --json-output "$rollback_plan"
+  python3 "$ROOT/scripts/lifecycle_executor.py" --operation rollback --plan-file "$rollback_plan" >/dev/null
 fi
 backup_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$backup")"
 backup_root_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$ANVIL_BACKUP_ROOT")"
@@ -61,6 +70,7 @@ PY
 
 saved_config_dir="$(read_manifest previous.config_dir)"
 saved_install_dir="$(read_manifest previous.installer_dir)"
+saved_executable_path="$(read_manifest previous.executable_path)"
 backup_scope="$(read_manifest scope)"
 [[ -n "$backup_scope" ]] || backup_scope=runtime
 [[ "$backup_scope" == anvil || "$backup_scope" == runtime ]] || { anvil_error "Unknown rollback snapshot scope: $backup_scope"; exit 1; }
@@ -88,6 +98,7 @@ current_anvil_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
 import json,sys
 try: value=json.load(open(sys.argv[1],encoding="utf-8"))
 except (OSError,ValueError): value={}
+if not isinstance(value,dict): value={}
 print(value.get("anvil_version") or "")
 PY
 )"
@@ -224,6 +235,53 @@ print("yes" if any(Path(sys.argv[1]).iterdir()) else "no")
 PY
 )"
   if [[ "$remaining_entries" == no ]]; then rmdir -- "$ANVIL_CONFIG_DIR"; fi
+fi
+if (( ! internal )); then python3 "$ROOT/scripts/lifecycle_transaction.py" phase verifying-restored-state; fi
+if [[ "$config_present" == yes && -f "$ANVIL_DATA_DIR/installation.json" ]]; then
+  restored_product_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
+import json,sys
+try: value=json.load(open(sys.argv[1],encoding="utf-8"))
+except (OSError,ValueError,json.JSONDecodeError): value={}
+print(value.get("anvil_version", "") if isinstance(value,dict) else "")
+PY
+)"
+  [[ -n "$restored_product_version" && "$restored_product_version" == "$prior_anvil_version" ]] || {
+    anvil_error 'Rollback verification failed: restored installation metadata does not match the selected snapshot.'
+    exit 1
+  }
+  runtime_args=(discover --format json)
+  if [[ -n "$saved_executable_path" && -x "$saved_executable_path" ]]; then
+    runtime_args+=(--binary "$saved_executable_path")
+  fi
+  restored_runtime="$(python3 "$ROOT/scripts/runtime_state.py" "${runtime_args[@]}")"
+  IFS=$'\t' read -r restored_binary restored_version restored_major restored_supported < <(python3 - "$restored_runtime" <<'PY'
+import json,sys
+runtime=(json.loads(sys.argv[1]).get("runtime") or {})
+print("\t".join(str(runtime.get(key) or "") for key in ("executable","version","generation","supported")))
+PY
+)
+  [[ "$restored_supported" == True && -n "$restored_binary" && -n "$restored_version" && "$restored_major" =~ ^[12]$ ]] || {
+    anvil_error 'Rollback verification failed: the restored OpenCode runtime is not usable under the current policy.'
+    exit 1
+  }
+  if ! verification_output="$(python3 "$ROOT/scripts/lifecycle_verify.py" \
+      --config "$ANVIL_CONFIG_DIR" --memory "$ANVIL_DATA_DIR/memory" --binary "$restored_binary" \
+      --product-version "$restored_product_version" --runtime-version "$restored_version" \
+      --runtime-major "$restored_major" --allow-repairable-drift 2>&1)"; then
+    printf '%s\n' "$verification_output" >&2
+    if (( ! internal )); then
+      operation_id="$(python3 "$ROOT/scripts/lifecycle_transaction.py" inspect | python3 -c 'import json,sys; print(json.load(sys.stdin).get("operation_id") or "unknown")')"
+      anvil_error "Rollback verification failed during postflight. Operation $operation_id and the verified snapshot are preserved at $backup_real. Review make inspect before retrying."
+    else
+      anvil_error "Automatic rollback verification failed; the parent operation journal and verified snapshot remain at $backup_real."
+    fi
+    exit 1
+  fi
+  printf '%s\n' "$verification_output"
+elif [[ "$config_present" == no && ! -e "$ANVIL_DATA_DIR/installation.json" ]]; then
+  anvil_ok 'Rollback verification passed: the selected pre-install state has no Anvil installation record.'
+else
+  anvil_warn 'Snapshot restored, but it has no Anvil release record for the current structured verifier; the verified archive remains available for manual review.'
 fi
 if (( ! internal )); then
   python3 "$ROOT/scripts/lifecycle_transaction.py" phase postflight-validated

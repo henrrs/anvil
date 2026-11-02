@@ -32,6 +32,7 @@ anvil_build_config() {
   install -m 0600 -- "$ANVIL_ROOT/scripts/source_registry.py" "$destination/scripts/source_registry.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/runtime.py" "$destination/scripts/runtime.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/runtime_state.py" "$destination/scripts/runtime_state.py"
+  install -m 0600 -- "$ANVIL_ROOT/scripts/lifecycle_model.py" "$destination/scripts/lifecycle_model.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/databricks.py" "$destination/scripts/databricks.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/databricks_finops.py" "$destination/scripts/databricks_finops.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/artifacts.py" "$destination/scripts/artifacts.py"
@@ -71,6 +72,7 @@ anvil_build_config() {
 import json,sys
 try: value=json.load(open(sys.argv[1],encoding="utf-8"))
 except (OSError,ValueError): value={}
+if not isinstance(value,dict): value={}
 print(value.get("anvil_version") or "")
 PY
 )"
@@ -80,6 +82,7 @@ PY
 import json,sys
 try: value=json.load(open(sys.argv[1],encoding="utf-8"))
 except (OSError,ValueError): value={}
+if not isinstance(value,dict): value={}
 print(value.get("managed_config_manifest_sha256") or "")
 PY
 )"
@@ -109,6 +112,7 @@ anvil_print_config_plan() {
 import json,sys
 try: value=json.load(open(sys.argv[1],encoding="utf-8"))
 except (OSError,ValueError): value={}
+if not isinstance(value,dict): value={}
 print(value.get("managed_config_manifest_sha256") or "")
 PY
 )"

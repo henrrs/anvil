@@ -117,6 +117,11 @@ def _read_config(path: Path) -> dict[str, Any]:
     try:
         value = parse_jsonc(path.read_text(encoding="utf-8"), str(path))
         return value if isinstance(value, dict) else {}
+    except FileNotFoundError:
+        if not path.is_symlink():
+            return {}
+        print(f"WARN  Could not read prior provider configuration from {path}: broken symbolic link", file=sys.stderr)
+        return {}
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"WARN  Could not read prior provider configuration from {path}: {exc}", file=sys.stderr)
         return {}
