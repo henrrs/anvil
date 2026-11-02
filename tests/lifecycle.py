@@ -1148,6 +1148,84 @@ def managed_file_repair_test(temp: pathlib.Path) -> None:
     print("PASS 2.16→2.17 managed drift classification, dry-run, failure recovery, upgrade, user preservation, exact rollback and idempotency")
 
 
+def legacy_216_with_unowned_runtime_policy(temp: pathlib.Path) -> dict[str, pathlib.Path]:
+    paths = fixture(temp / "machine")
+    promote_fixture_to_current_anvil(paths, temp)
+    manifest_path = paths["config"] / ".anvil-managed.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for relative in ("VERSION", "config/runtime-policy.json", "runtime/analytics-requirements.lock"):
+        manifest["files"].pop(relative, None)
+        if relative != "config/runtime-policy.json":
+            (paths["config"] / relative).unlink(missing_ok=True)
+    manifest["anvil_version"] = "2.16.0"
+    write_json(manifest_path, manifest)
+    installation_path = paths["anvil_data"] / "installation.json"
+    installation = json.loads(installation_path.read_text(encoding="utf-8"))
+    installation["anvil_version"] = "2.16.0"
+    installation["managed_config_manifest_sha256"] = file_hash(manifest_path)
+    write_json(installation_path, installation)
+    return paths
+
+
+def verified_target_path_match_test(temp: pathlib.Path) -> None:
+    paths = legacy_216_with_unowned_runtime_policy(temp / "match")
+    policy = paths["config"] / "config/runtime-policy.json"
+    target_hash = lifecycle_state.managed_config.RELEASE_ARTIFACTS["config/runtime-policy.json"]
+    check(file_hash(policy) == target_hash,
+          "fixture runtime policy is not byte-identical to the verified 2.17 release artifact")
+    policy.chmod(0o640)
+    original_mtime = 1_700_000_000_123_456_789
+    os.utime(policy, ns=(original_mtime, original_mtime))
+    original_state = (file_hash(policy), policy.stat().st_mode & 0o777, policy.stat().st_mtime_ns)
+    env = offline_env(paths, temp, ANVIL_TEST_MODE="1", ANVIL_YES="1",
+                      ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    before_config = filesystem_snapshot(paths["config"])
+    before_installation = file_hash(paths["anvil_data"] / "installation.json")
+
+    dry = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"], env)
+    check("verified target match preserved as user-owned: config/runtime-policy.json" in dry.stdout
+          and "No changes performed." in dry.stdout,
+          "dry-run did not explain that a byte-identical target path would remain user-owned")
+    check(filesystem_snapshot(paths["config"]) == before_config
+          and file_hash(paths["anvil_data"] / "installation.json") == before_installation
+          and not (paths["anvil_data"] / "backups").exists(),
+          "dry-run changed the matching user-owned artifact or created a snapshot")
+
+    failed = run(["/usr/bin/make", "--no-print-directory", "upgrade"],
+                 dict(env, ANVIL_TEST_FAIL_AFTER_CONFIG="1"), expected=2)
+    check("Automatic Anvil rollback completed" in failed.stderr
+          and (file_hash(policy), policy.stat().st_mode & 0o777, policy.stat().st_mtime_ns) == original_state,
+          "failed activation did not preserve the exact user-owned target-matching file")
+    check(json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))["anvil_version"] == "2.16.0",
+          "failed activation changed installed release metadata")
+
+    run(["/usr/bin/make", "--no-print-directory", "upgrade"], env)
+    upgraded_manifest = json.loads((paths["config"] / ".anvil-managed.json").read_text(encoding="utf-8"))
+    check((file_hash(policy), policy.stat().st_mode & 0o777, policy.stat().st_mtime_ns) == original_state,
+          "successful upgrade changed byte-identical user-owned file content or metadata")
+    check("config/runtime-policy.json" not in upgraded_manifest["files"],
+          "upgrade claimed ownership of a path that was preserved as user-owned")
+
+    run(["/usr/bin/make", "--no-print-directory", "rollback"], env)
+    rolled_back_manifest = json.loads((paths["config"] / ".anvil-managed.json").read_text(encoding="utf-8"))
+    check((file_hash(policy), policy.stat().st_mode & 0o777, policy.stat().st_mtime_ns) == original_state
+          and "config/runtime-policy.json" not in rolled_back_manifest["files"],
+          "rollback lost or claimed the user-owned path that matched the target artifact")
+
+    blocked_paths = legacy_216_with_unowned_runtime_policy(temp / "different")
+    blocked_policy = blocked_paths["config"] / "config/runtime-policy.json"
+    blocked_policy.write_text("# user customized runtime policy\n", encoding="utf-8")
+    blocked_env = offline_env(blocked_paths, temp / "different", ANVIL_TEST_MODE="1")
+    blocked_before = filesystem_snapshot(blocked_paths["config"])
+    blocked = run(["/usr/bin/make", "--no-print-directory", "upgrade", "DRY_RUN=1"],
+                  blocked_env, expected=2)
+    check("user-owned files conflict" in blocked.stderr
+          and "config/runtime-policy.json" in blocked.stderr
+          and filesystem_snapshot(blocked_paths["config"]) == blocked_before,
+          "a differing user-owned file at the target path was not safely blocked")
+    print("PASS byte-identical target-path files remain user-owned through dry-run, upgrade and rollback; differing files remain blocked")
+
+
 def future_install_downgrade_test(temp: pathlib.Path) -> None:
     paths = fixture(temp / "future")
     promote_fixture_to_current_anvil(paths, temp / "future")
@@ -2159,6 +2237,8 @@ def main() -> int:
         interrupted_transaction_recovery_test(pathlib.Path(name))
     with tempfile.TemporaryDirectory(prefix="anvil-managed-file-repair-", dir=TEST_ROOT) as name:
         managed_file_repair_test(pathlib.Path(name))
+    with tempfile.TemporaryDirectory(prefix="anvil-verified-target-path-match-", dir=TEST_ROOT) as name:
+        verified_target_path_match_test(pathlib.Path(name))
     with tempfile.TemporaryDirectory(prefix="anvil-future-version-downgrade-", dir=TEST_ROOT) as name:
         future_install_downgrade_test(pathlib.Path(name))
 

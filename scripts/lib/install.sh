@@ -135,6 +135,8 @@ for key, label in (("added", "add"), ("updated", "update"), ("removed", "remove"
         print(f"    {item}")
     if len(items) > 10:
         print(f"    ... {len(items) - 10} more paths omitted from display")
+for item in changes.get("verified_target_matches", []):
+    print("  verified target match preserved as user-owned: " + item)
 print("  runtime action    " + plan["runtime_action"])
 print("  shared config     merge Anvil-owned profile keys; preserve external providers, plugins, MCP, references and user preferences")
 print("  local environment package, proxy, certificate, shell and credential-reference files outside OpenCode config remain untouched")

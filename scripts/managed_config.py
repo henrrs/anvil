@@ -176,6 +176,27 @@ def _verify_release_artifact(relative: str, target_version: str, major: int) -> 
     return expected
 
 
+def _verified_target_match_paths(source: Path, target: Path, candidates: set[str],
+                                 target_version: str, major: int) -> set[str]:
+    """Find unowned source files identical to a committed, checksum-pinned target artifact."""
+    if not candidates:
+        return set()
+    source_files, _, _ = _scan(source)
+    target_files, _, _ = _scan(target)
+    matches: set[str] = set()
+    for relative in candidates:
+        try:
+            expected = _verify_release_artifact(relative, target_version, major)
+            _verify_release_manifest_authority(target_version)
+            if (relative in source_files and relative in target_files
+                    and _digest_regular(source, relative) == expected
+                    and _digest_regular(target, relative) == expected):
+                matches.add(relative)
+        except (OSError, ManagedConfigError):
+            continue
+    return matches
+
+
 def _verify_release_manifest_authority(target_version: str) -> None:
     """Require a committed source release manifest before automatic repair."""
     if os.environ.get("ANVIL_TEST_MODE") == "1":
@@ -197,7 +218,7 @@ def _verify_release_manifest_authority(target_version: str) -> None:
 
 
 def _validate_release_target(target_manifest: dict[str, Any], target_version: str,
-                             major: int) -> None:
+                             major: int, *, preserved_verified_artifacts: set[str] | None = None) -> None:
     if RELEASE_ARTIFACT_ERROR:
         raise ManagedConfigError(RELEASE_ARTIFACT_ERROR)
     if RELEASE_ARTIFACT_VERSION != target_version:
@@ -207,12 +228,21 @@ def _validate_release_target(target_manifest: dict[str, Any], target_version: st
     actual = target_manifest.get("files")
     if not isinstance(actual, dict):
         raise ManagedConfigError("staged target manifest has an invalid files map")
-    if set(actual) != set(expected):
-        missing = sorted(set(expected) - set(actual))
-        extra = sorted(set(actual) - set(expected))
+    preserved = set(preserved_verified_artifacts or ())
+    if not preserved.issubset(expected):
+        raise ManagedConfigError("staged target attempted to preserve a path outside the release artifact manifest")
+    if any(expected[path] is None for path in preserved):
+        raise ManagedConfigError("staged target cannot preserve an unhashed release artifact as user-owned")
+    expected_managed = set(expected) - preserved
+    if set(actual) != expected_managed:
+        missing = sorted(expected_managed - set(actual))
+        extra = sorted(set(actual) - expected_managed)
         path = (missing or extra)[0]
         raise ManagedConfigError(f"staged target membership does not match the release artifact manifest: {path}")
-    for relative, digest in expected.items():
+    for relative, digest in actual.items():
+        if relative not in expected:
+            raise ManagedConfigError(f"staged target contains an unlisted managed artifact: {relative}")
+        digest = expected[relative]
         if actual[relative] != digest:
             raise ManagedConfigError(f"staged target artifact does not match its release manifest: {relative}")
         if digest is not None:
@@ -799,10 +829,12 @@ def prepare(source: Path | None, target: Path, source_version: str | None,
             target_version: str, *, recover_managed: bool = False,
             source_manifest_sha256: str | None = None,
             allow_repairable_drift: bool = False) -> dict[str, Any]:
-    target_files, target_symlinks, target_other = _scan(target)
-    target_nodes = set(target_files) | target_symlinks | target_other
-    target_owned = target_nodes - {MANIFEST_NAME} - {path for path in target_nodes if _is_user_preference(path)}
+    target_major, _ = _profile_skills(target)
+    authoritative_target = _target_manifest(target, target_version)
+    _validate_release_target(authoritative_target, target_version, target_major)
+    target_owned = set(authoritative_target["files"])
     source_state: dict[str, Any] = {"owned_files": [], "user_files": [], "manifest_present": False}
+    verified_target_matches: set[str] = set()
     if source is not None and source.is_dir():
         if allow_repairable_drift:
             drift = classify_installed_drift(source, source_version, target_version, source_manifest_sha256)
@@ -817,36 +849,30 @@ def prepare(source: Path | None, target: Path, source_version: str | None,
         for target_path in target_owned:
             parts = PurePosixPath(target_path).parts
             target_prefixes.update(PurePosixPath(*parts[:end]).as_posix() for end in range(1, len(parts)))
-        conflicts = []
+        collision_paths: set[str] = set()
         for source_path in source_state["user_files"]:
             parts = PurePosixPath(source_path).parts
             source_parents = {PurePosixPath(*parts[:end]).as_posix() for end in range(1, len(parts))}
-            if source_path in target_owned or source_path in target_prefixes or source_parents & target_owned:
-                conflicts.append(source_path)
-        conflicts.sort()
+            direct_collision = source_path in target_owned
+            collides = direct_collision or source_path in target_prefixes or bool(source_parents & target_owned)
+            if not collides:
+                continue
+            collision_paths.add(source_path)
+        verified_target_matches = _verified_target_match_paths(
+            source, target, collision_paths & target_owned, target_version, target_major)
+        conflicts = sorted(collision_paths - verified_target_matches)
         if conflicts:
             raise ManagedConfigError("user-owned files conflict with new Anvil paths; move them before retrying: "
                                      + ", ".join(conflicts))
+        source_state["verified_target_matches"] = sorted(verified_target_matches)
         for relative in source_state["user_files"]:
-            source_path = source / relative
-            target_path = target / relative
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            if os.path.lexists(target_path):
-                raise ManagedConfigError(f"refusing to overwrite user-owned path: {relative}")
-            if source_path.is_symlink():
-                os.symlink(os.readlink(source_path), target_path)
-            elif source_path.is_file():
-                descriptor = _open_regular(source, relative)
-                metadata = os.fstat(descriptor)
-                with os.fdopen(descriptor, "rb") as source_stream, target_path.open("xb") as target_stream:
-                    shutil.copyfileobj(source_stream, target_stream)
-                target_path.chmod(stat.S_IMODE(metadata.st_mode))
-                os.utime(target_path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns), follow_symlinks=False)
-            else:
-                raise ManagedConfigError(f"cannot safely preserve external filesystem node: {relative}")
+            _copy_entry(source, target, relative, replace=relative in verified_target_matches)
+        for relative in verified_target_matches:
+            if _digest_regular(target, relative) != authoritative_target["files"][relative]:
+                raise ManagedConfigError(f"preserved user file changed while staging the verified target: {relative}")
     manifest = _target_manifest(target, target_version, excluded=set(source_state["user_files"]))
-    target_major, _ = _profile_skills(target)
-    _validate_release_target(manifest, target_version, target_major)
+    _validate_release_target(manifest, target_version, target_major,
+                             preserved_verified_artifacts=verified_target_matches)
     _write_manifest(target, manifest)
     return plan(source_state, manifest, source_version, target_version)
 
@@ -867,7 +893,8 @@ def plan(source_state: dict[str, Any], target_manifest: dict[str, Any],
     return {"schema_version": 1, "source_version": source_version or "legacy/unrecorded",
             "target_version": target_version,
             "changes": {"added": added, "updated": updated, "removed": removed,
-                        "unchanged": unchanged, "preserved_user_files": user_files},
+                        "unchanged": unchanged, "preserved_user_files": user_files,
+                        "verified_target_matches": sorted(source_state.get("verified_target_matches", []))},
             "runtime_action": "preserve-compatible-runtime"}
 
 
@@ -1026,6 +1053,11 @@ def main() -> int:
                     source_state = inspect_source(args.source, args.source_version or None,
                                                   args.source_manifest_sha256 or None,
                                                   recover_managed=args.recover_managed, allow_external=True)
+            if args.source:
+                target_major, _ = _profile_skills(args.target)
+                source_state["verified_target_matches"] = sorted(_verified_target_match_paths(
+                    args.source, args.target, set(source_state["user_files"]),
+                    args.target_version, target_major))
             else:
                 source_state = {"owned_files": [], "user_files": []}
             manifest = json.loads((args.target / MANIFEST_NAME).read_text(encoding="utf-8"))
