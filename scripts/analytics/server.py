@@ -66,10 +66,10 @@ class AnalyticsRequestHandler(BaseHTTPRequestHandler):
                 raise ValidationError("Request URL exceeds the supported size")
             self._validate_origin()
             parsed = urlsplit(self.path)
-            if self.command not in {"GET", "POST", "HEAD"} or (self.command == "HEAD" and parsed.path.startswith("/api/")):
+            if self.command not in {"GET", "POST", "HEAD", "DELETE"} or (self.command == "HEAD" and parsed.path.startswith("/api/")):
                 self.send_response(405)
                 self._security_headers()
-                self.send_header("Allow", "GET, HEAD, POST")
+                self.send_header("Allow", "GET, HEAD, POST, DELETE")
                 payload = json.dumps({"error": {"code": "METHOD_NOT_ALLOWED",
                                                   "message": "This Analytics route does not accept that method."}},
                                      separators=(",", ":")).encode("utf-8")
@@ -90,7 +90,8 @@ class AnalyticsRequestHandler(BaseHTTPRequestHandler):
                 self._chat_stream()
                 return
             if parsed.path.startswith("/api/"):
-                body = self._json_body() if self.command == "POST" else None
+                allow_empty = self.command == "POST" and parsed.path.endswith(("/cancel", "/retry", "/refresh"))
+                body = self._json_body(allow_empty=allow_empty) if self.command == "POST" else None
                 status, value = self.server.analytics_api.handle(
                     self.command, parsed.path, parse_qs(parsed.query, keep_blank_values=True,
                                                         max_num_fields=100), body)
@@ -136,9 +137,11 @@ class AnalyticsRequestHandler(BaseHTTPRequestHandler):
                 or port not in {None, self.server.server_port} or parsed.username or parsed.password):
             raise ValidationError("Analytics rejects cross-origin browser requests")
 
-    def _json_body(self) -> dict[str, Any]:
+    def _json_body(self, *, allow_empty: bool = False) -> dict[str, Any]:
         raw_length = self.headers.get("Content-Length")
         if raw_length is None:
+            if allow_empty:
+                return {}
             raise ValidationError("Request body size is required")
         try:
             length = int(raw_length)
@@ -146,6 +149,8 @@ class AnalyticsRequestHandler(BaseHTTPRequestHandler):
             raise ValidationError("Request body size is invalid") from exc
         if length < 0 or length > MAX_BODY_BYTES:
             raise ValidationError("Request body exceeds Analytics' 1 MiB limit")
+        if length == 0 and allow_empty:
+            return {}
         if self.headers.get("Content-Type", "").split(";", 1)[0].strip().casefold() != "application/json":
             raise ValidationError("Analytics API requests must use application/json")
         try:

@@ -322,6 +322,15 @@ class LocalCoverageService:
             "size_bytes": int(manifest.get("parquet_bytes") or manifest.get("bytes") or 0),
         })
 
+    def mark_invalid(self, current: dict[str, Any], reason: str) -> None:
+        """Persist that metadata disagrees with the queryable current schema."""
+        self.publish_dataset_record(current, state="INVALID")
+        _LOG.error(json.dumps({"event": "local_coverage_inconsistency_detected",
+                               "source_name": current.get("manifest", {}).get("source_name", ""),
+                               "reason_code": "LOCAL_SCHEMA_MISMATCH",
+                               "reason": str(reason)[:300]},
+                              sort_keys=True, separators=(",", ":")))
+
     def list_local_datasets(self, workspace_identity: str, *, limit: int = 100) -> list[dict[str, Any]]:
         """Return one healthy current row per source and self-heal interrupted metadata writes."""
         datasets_by_id: dict[str, tuple[tuple[int, int, int, int, int, int],
@@ -365,17 +374,24 @@ class LocalCoverageService:
                             int(root.name == source_key(source_name, workspace_identity)))
                     previous = datasets_by_id.get(dataset_id)
                     if previous is None or rank > previous[0]:
-                        self.publish_dataset_record(current)
+                        stored = self.store.local_dataset_get(dataset_id)
+                        # Do not turn a schema mismatch back into READY merely
+                        # because a metadata listing saw the unchanged manifest.
+                        if not stored or str(stored.get("state") or "").upper() != "INVALID":
+                            self.publish_dataset_record(current)
                         datasets_by_id[dataset_id] = (rank, current)
             except (IntegrityError, OSError, ValueError):
                 continue
         rows = []
         for dataset_id, (_rank, current) in datasets_by_id.items():
             manifest = current["manifest"]
+            stored = self.store.local_dataset_get(dataset_id)
+            data_state = ("INVALID" if stored and str(stored.get("state") or "").upper() == "INVALID"
+                          else "READY")
             rows.append({"dataset_id": dataset_id,
                          "workspace_identity": workspace_identity,
                          "source_name": str(manifest["source_name"]),
-                         "state": "READY", "snapshot_id": current["snapshot_id"],
+                         "state": data_state, "snapshot_id": current["snapshot_id"],
                          "columns": (manifest.get("columns", []) if str(
                              manifest.get("columns_mode") or "").upper() == "ALL" else
                              manifest.get("selected_columns", manifest.get("columns", []))),
@@ -545,15 +561,22 @@ class LocalCoverageService:
             available = []
         all_columns = bool(manifest.get("all_columns"))
         all_columns = all_columns or intent_mode == "ALL"
-        if plan.projection == ("*",):
+        requirements = getattr(plan, "requirements", None)
+        requires_all_columns = (requirements.requires_all_columns if requirements else
+                                plan.projection == ("*",))
+        if requires_all_columns:
             missing: tuple[str, ...] = () if all_columns else ("*",)
         else:
             available_names = {str(name).casefold() for name in available}
-            required_columns = (*plan.projection, *predicate_columns(plan.predicate))
+            requested = (requirements.required_columns if requirements else plan.projection)
+            required_columns = (*requested, *predicate_columns(plan.predicate))
             missing = tuple(dict.fromkeys(name for name in required_columns
                                           if name.casefold() not in available_names))
         if missing:
-            return CoverageDecision(False, "The local snapshot does not include all requested columns.",
+            reason = ("The local snapshot contains only selected columns." if missing == ("*",) else
+                      "The local snapshot is missing requested column(s): " +
+                      ", ".join(missing[:10]) + ("…" if len(missing) > 10 else "."))
+            return CoverageDecision(False, reason,
                                     missing, current["snapshot_id"], "PARTIALLY_COVERED",
                                     ("missing_columns",))
         local_predicate = str(manifest.get("predicate") or "")

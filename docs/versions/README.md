@@ -16,7 +16,17 @@ Anvil 2.16.0 adds the Analytics Workspace with a generation-specific OpenCode to
 
 Anvil 2.17.0 adds release-pinned Analytics dependencies, lifecycle/service/OpenCode convergence, warehouse start-on-remote-query, resumable metadata-first catalog hydration, unified readiness, and an accessible resizable SQL/results workspace. Both `Anvil 2.17 + OpenCode 1` and `Anvil 2.17 + OpenCode 2` retain the same Analytics provider and session contracts.
 
+Anvil 2.18.0 makes Analytics routing coverage-first, hardens materialization recovery and service TLS trust, and resolves Ask Anvil against the active provider catalog. Both OpenCode 1 and OpenCode 2 use the same validated logical model policy; no runtime-major migration is required.
+
 Anvil 2.17.1 hardens real installed-state convergence: candidate systemd validation, staged-interpreter identity, stale runtime recovery, dependency rollback ordering, verified journal recovery and SQLite schema rollback. It preserves the same OpenCode 1/2 and Analytics contracts.
+
+| Anvil 2.18 Analytics capability | OpenCode 1 | OpenCode 2 |
+|---|---|---|
+| Coverage-first LOCAL/AUTO and physical Parquet schema parity | Shared contract | Shared contract |
+| Restart-safe materialization lease and fresh retry | Shared contract | Shared contract |
+| Databricks CA trust inheritance and granular health | Shared contract | Shared contract |
+| Ask Anvil validated Luna 6 / GitHub Copilot policy | Runtime catalog | Runtime catalog |
+| Live workspace/provider certification in offline suite | No | No |
 
 | Anvil 2.17 Analytics capability | OpenCode 1 | OpenCode 2 |
 |---|---|---|

@@ -23,6 +23,11 @@ trap cleanup_temp EXIT
 chmod 700 -- "$tmp_root"
 
 fixture_bin="$ROOT/tests/fixtures/bin"
+export ANVIL_TEST_PHASE="${ANVIL_TEST_PHASE:-all}"
+case "$ANVIL_TEST_PHASE" in
+  all|core|lifecycle) ;;
+  *) printf 'ERROR ANVIL_TEST_PHASE must be all, core, or lifecycle.\n' >&2; exit 2 ;;
+esac
 export ANVIL_DATABRICKS_CLI="$fixture_bin/databricks"
 export ANVIL_DATABRICKS_SCENARIO=valid
 printf 'Testing offline OpenCode 1 %s, OpenCode 1 compatibility floor %s, and OpenCode 2 %s\n' \

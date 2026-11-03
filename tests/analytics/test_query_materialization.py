@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
+from datetime import datetime, timezone
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from scripts.analytics.coverage import (CoverageRegistry, dataset_lock, predicates_cover,
                                         schema_identity, source_key)
-from scripts.analytics.errors import (CoverageError, IntegrityError, ReadOnlyError,
+from scripts.analytics.errors import (ConflictError, CoverageError, IntegrityError, ReadOnlyError,
                                       UnavailableError, ValidationError)
 from scripts.analytics.materialization import MaterializationService
-from scripts.analytics.models import QueryRoute
+from scripts.analytics.models import MaterializationState, OperationRecord, QueryRoute
 from scripts.analytics.paths import AnalyticsPaths
 from scripts.analytics.planner import (ensure_read_only, parse_local_query,
                                        plan_materialization)
-from scripts.analytics.query import QueryRouter
+from scripts.analytics.query import DuckDBLocalEngine, QueryRouter
 from scripts.analytics.store import ContextStore
 from scripts.analytics.transfer import ChunkStats, MaterializationTransfer
 
@@ -44,6 +47,52 @@ class FakeRemote:
     def execute_sql(self, statement, warehouse_id, **kwargs):
         self.calls.append((statement, warehouse_id, kwargs))
         return self.result
+
+
+class _FakeArrowColumn:
+    def to_pylist(self):
+        return [3]
+
+
+class _FakeArrowResult:
+    column_names = ["count_star()"]
+    columns = [_FakeArrowColumn()]
+
+
+class _FakeDuckDBCursor:
+    def to_arrow_table(self):
+        return _FakeArrowResult()
+
+    def fetchall(self):
+        return [("order_id", "BIGINT")]
+
+
+class _FakeDuckDBRelation:
+    def create_view(self, *_args, **_kwargs):
+        return self
+
+
+class _FakeDuckDBConnection:
+    def __init__(self):
+        self.statement = ""
+
+    def read_parquet(self, _files):
+        return _FakeDuckDBRelation()
+
+    def execute(self, statement):
+        self.statement = statement
+        return _FakeDuckDBCursor()
+
+    def close(self):
+        pass
+
+
+class _FakeDuckDBModule:
+    def __init__(self):
+        self.connection = _FakeDuckDBConnection()
+
+    def connect(self, **_kwargs):
+        return self.connection
 
 
 class FakeTransferProvider:
@@ -314,6 +363,86 @@ class QueryCoverageTests(unittest.TestCase):
             router.execute("SELECT amount FROM main.silver.orders", route="LOCAL")
         self.assertEqual(remote.calls, [])
 
+    def test_count_star_is_covered_by_full_rows_without_required_columns(self):
+        self.publish(columns=("order_id", "status"), all_columns=False)
+        plan = parse_local_query("SELECT count(*) FROM main.silver.orders")
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.requirements.required_columns, ())
+        self.assertFalse(plan.requirements.requires_all_columns)
+        self.assertTrue(plan.requirements.requires_full_row_population)
+        decision = self.coverage.covers(plan, source_version="version-1")
+        self.assertTrue(decision.covered, decision.reason)
+
+        local, remote = FakeLocalEngine(), FakeRemote()
+        result = QueryRouter(self.store, self.coverage, remote, local=local).execute(
+            "SELECT count(*) FROM main.silver.orders", route="LOCAL",
+            source_version="version-1")
+        self.assertEqual(result["route"], "LOCAL")
+        self.assertEqual(len(local.calls), 1)
+        self.assertEqual(remote.calls, [])
+
+    def test_local_engine_runs_original_aggregate_against_local_snapshot(self):
+        fake_duckdb = _FakeDuckDBModule()
+        with patch.dict(sys.modules, {"duckdb": fake_duckdb}):
+            engine = DuckDBLocalEngine()
+        plan = parse_local_query("SELECT count(*) FROM `main`.`silver`.`orders`")
+        result = engine.query(plan, {"files": [Path("/tmp/orders.parquet")]})
+        self.assertEqual(result["rows"], [[3]])
+        self.assertIn("count(*)", fake_duckdb.connection.statement)
+        self.assertIn('FROM "_anvil_coverage_snapshot"', fake_duckdb.connection.statement)
+        self.assertNotIn("main", fake_duckdb.connection.statement)
+
+    def test_local_engine_rejects_coverage_that_disagrees_with_duckdb_schema(self):
+        with self.assertRaisesRegex(CoverageError, "disagree") as raised:
+            DuckDBLocalEngine.validate_snapshot_schema(
+                _FakeDuckDBConnection(), {"manifest": {"columns": ["order_id", "status"]}},
+                physical_columns=["order_id", "status"])
+        self.assertEqual(raised.exception.code, "LOCAL_SCHEMA_MISMATCH")
+
+    def test_local_schema_is_not_claimed_ready_without_independent_parquet_reader(self):
+        with self.assertRaises(CoverageError) as raised:
+            DuckDBLocalEngine.validate_snapshot_schema(
+                _FakeDuckDBConnection(),
+                {"manifest": {"columns": ["order_id"]},
+                 "files": [Path("/path/that/does/not/exist.parquet")]})
+        self.assertEqual(raised.exception.code, "LOCAL_SCHEMA_UNVERIFIED")
+
+    def test_auto_uses_local_for_covered_aggregate_without_remote_or_warehouse(self):
+        self.publish(columns=("order_id", "status"), all_columns=False)
+        local, remote = FakeLocalEngine(), FakeRemote()
+        router = QueryRouter(self.store, self.coverage, remote, local=local)
+        for sql in (
+            "SELECT count(*) FROM main.silver.orders",
+            "SELECT count(status) FROM main.silver.orders",
+            "SELECT status, count(*) FROM main.silver.orders GROUP BY status ORDER BY status LIMIT 20",
+            "SELECT DISTINCT status FROM main.silver.orders ORDER BY status",
+        ):
+            with self.subTest(sql=sql):
+                result = router.execute(sql, route="AUTO", source_version="version-1")
+                self.assertEqual(result["route"], "LOCAL")
+        self.assertEqual(len(local.calls), 4)
+        self.assertEqual(remote.calls, [])
+
+    def test_local_aggregate_reports_missing_column_and_never_falls_back(self):
+        self.publish(columns=("order_id", "status"), all_columns=False)
+        local, remote = FakeLocalEngine(), FakeRemote()
+        router = QueryRouter(self.store, self.coverage, remote, local=local)
+        with self.assertRaisesRegex(CoverageError, "amount"):
+            router.execute("SELECT sum(amount) FROM main.silver.orders", route="LOCAL",
+                           source_version="version-1")
+        self.assertEqual(local.calls, [])
+        self.assertEqual(remote.calls, [])
+
+    def test_auto_reports_remote_unavailable_when_local_coverage_is_insufficient(self):
+        self.publish(columns=("order_id", "status"), all_columns=False)
+        local = FakeLocalEngine()
+        router = QueryRouter(self.store, self.coverage, None, local=local)
+        with self.assertRaisesRegex(UnavailableError, "Remote execution is required") as raised:
+            router.execute("SELECT amount FROM main.silver.orders", route="AUTO",
+                           source_version="version-1")
+        self.assertEqual(raised.exception.code, "PROVIDER_NOT_CONFIGURED")
+        self.assertEqual(local.calls, [])
+
     def test_auto_route_uses_only_the_selected_workspace_local_copy(self):
         self.publish(workspace_identity="workspace-a")
         remote = FakeRemote()
@@ -364,13 +493,20 @@ class QueryCoverageTests(unittest.TestCase):
         result = router.execute("SELECT count(*) FROM main.silver.orders", route="DATABRICKS",
                                 warehouse_id="wh-test")
         self.assertEqual(result["route"], "DATABRICKS")
-        self.assertEqual(self.store.query_recent(limit=1)[0]["source_objects"], [])
+        self.assertEqual(self.store.query_recent(limit=1)[0]["source_objects"], [self.source])
 
-    def test_local_parser_accepts_simple_select_but_defers_joins_and_ctes(self):
+    def test_local_parser_extracts_query_requirements_but_defers_joins_and_ctes(self):
         plan = parse_local_query("SELECT `order_id`, status FROM main.silver.orders WHERE status = 'failed' LIMIT 20")
         self.assertEqual(plan.source_name, self.source)
         self.assertEqual(plan.projection, ("order_id", "status"))
         self.assertEqual(plan.limit, 20)
+        self.assertEqual(plan.requirements.required_columns, ("order_id", "status"))
+        aggregate = parse_local_query(
+            "SELECT status, count(*) FROM main.silver.orders GROUP BY status ORDER BY status LIMIT 10")
+        self.assertEqual(aggregate.requirements.aggregates, ("COUNT",))
+        self.assertEqual(aggregate.requirements.grouping, ("status",))
+        self.assertEqual(aggregate.requirements.ordering, ("status",))
+        self.assertEqual(aggregate.requirements.required_columns, ("status",))
         self.assertIsNone(parse_local_query("SELECT o.order_id FROM main.silver.orders o JOIN main.silver.users u ON o.id=u.id"))
         self.assertIsNone(parse_local_query("WITH recent AS (SELECT 1) SELECT * FROM recent"))
 
@@ -389,18 +525,16 @@ class QueryCoverageTests(unittest.TestCase):
             projection=["order_id"], predicate="status = 'failed'", source_version="v-10")
         self.assertEqual(filtered.projection, ("order_id", "status"))
 
-    def test_full_table_and_unsafe_materialization_plans_require_confirmation_or_fail(self):
-        with self.assertRaises(ValidationError):
-            plan_materialization(workspace_identity="w", source_name=self.source, projection=["*"])
+    def test_full_table_projection_needs_no_generic_confirmation_but_unsafe_plans_fail(self):
         with self.assertRaises(ValidationError):
             plan_materialization(workspace_identity="w", source_name=self.source,
                                  projection=["order_id; DROP TABLE x"])
         with self.assertRaises(ValidationError):
             plan_materialization(workspace_identity="w", source_name=self.source,
                                  projection=["order_id"], predicate="status = 'x'; DROP TABLE t")
-        confirmed = plan_materialization(workspace_identity="w", source_name=self.source,
-            projection=["*"], full_table_confirmed=True)
-        self.assertEqual(confirmed.projection, ("*",))
+        full_table = plan_materialization(workspace_identity="w", source_name=self.source,
+            projection=["*"])
+        self.assertEqual(full_table.projection, ("*",))
 
     def make_transfer_plan(self):
         return plan_materialization(workspace_identity="workspace-hash", source_name=self.source,
@@ -432,21 +566,30 @@ class QueryCoverageTests(unittest.TestCase):
         self.assertTrue(again["reused"])
         self.assertEqual(provider.submit_count, 1)
 
-    def test_interrupted_materialization_resumes_checkpoint_without_duplicate_query(self):
+    def test_failed_materialization_requires_a_new_operation_for_retry(self):
         provider = FakeTransferProvider()
         downloader = FakeDownloader(fail_url_once="https://storage.example/chunk-1?sig=secret")
-        service = MaterializationTransfer(self.paths, self.store, provider,
-                                          downloader=downloader, codec=FakeCodec(), sleep=lambda _: None)
+        transfer = MaterializationTransfer(self.paths, self.store, provider,
+                                           downloader=downloader, codec=FakeCodec(), sleep=lambda _: None)
         plan = self.make_transfer_plan()
         with self.assertRaises(UnavailableError):
-            service.run(plan, "warehouse-1")
-        paused = self.store.operation_get(plan.operation_id)
-        self.assertEqual(paused.state.value, "PAUSED")
-        self.assertEqual([item["index"] for item in paused.checkpoint["chunks"]], [0])
-        result = service.run(plan, "warehouse-1")
+            transfer.run(plan, "warehouse-1")
+        failed = self.store.operation_get(plan.operation_id)
+        self.assertEqual(failed.state.value, "FAILED")
+        self.assertEqual(failed.checkpoint["failure_reason"], "TRANSFER_ERROR")
+        self.assertEqual([item["index"] for item in failed.checkpoint["chunks"]], [0])
+        staging = self.coverage.dataset_root(self.source, "workspace-hash") / "snapshots" / (
+            "." + plan.operation_id + ".partial")
+        self.assertFalse(staging.exists())
+        with self.assertRaisesRegex(ConflictError, "new materialization"):
+            transfer.run(plan, "warehouse-1")
+
+        service = MaterializationService(self.paths, self.store, provider, transfer=transfer)
+        result = service.retry(plan.operation_id)
         self.assertEqual(result["state"], "READY")
-        self.assertEqual(provider.submit_count, 1)
-        self.assertEqual(downloader.calls.count("https://storage.example/chunk-0?sig=secret"), 1)
+        self.assertNotEqual(result["operation_id"], plan.operation_id)
+        self.assertEqual(provider.submit_count, 2)
+        self.assertEqual(downloader.calls.count("https://storage.example/chunk-0?sig=secret"), 2)
         self.assertEqual(downloader.calls.count("https://storage.example/chunk-1?sig=secret"), 2)
 
     def test_failed_refresh_keeps_the_previous_current_snapshot(self):
@@ -484,6 +627,61 @@ class QueryCoverageTests(unittest.TestCase):
         self.assertNotIn("statement_id", visible)
         self.assertNotIn("sig=secret", json.dumps(visible))
         self.assertEqual(service.recent(limit=5)[0]["operation_id"], plan.operation_id)
+
+    def test_startup_reconciles_every_nonterminal_phase_and_preserves_current(self):
+        self.publish(workspace_identity="workspace-hash")
+        current_id = self.coverage.current(self.source, "workspace-hash")["snapshot_id"]
+        phases = ("QUEUED", "PREPARING", "FETCHING", "WRITING_PARQUET",
+                  "VALIDATING", "ACTIVATING")
+        root = self.coverage.dataset_root(self.source, "workspace-hash")
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        operation_ids = []
+        staging_ids = []
+        for index, phase in enumerate(phases, start=1):
+            operation_id = f"{index:x}" * 64
+            plan = self.make_transfer_plan().as_dict()
+            plan["operation_id"] = operation_id
+            self.store.operation_put(OperationRecord(
+                operation_id, "MATERIALIZATION", MaterializationState.RUNNING,
+                {"plan": plan, "warehouse_id": "warehouse-1"},
+                {"phase": phase, "chunks": [], "worker_instance_id": "old-worker",
+                 "worker_pid": 123, "heartbeat_at": now}, ""))
+            stage_id = root / "snapshots" / ("." + operation_id + ".partial")
+            stage_id.mkdir(parents=True)
+            (stage_id / "partial.chunk").write_text("incomplete")
+            operation_ids.append(operation_id)
+            staging_ids.append(operation_id)
+        (root / "dataset-state.json").write_text(json.dumps({
+            "version": 1, "current": {"snapshot_id": current_id},
+            "previous": None, "staging": staging_ids}))
+
+        MaterializationService(self.paths, self.store, FakeTransferProvider(),
+                               transfer=MaterializationTransfer(
+                                   self.paths, self.store, FakeTransferProvider(),
+                                   downloader=FakeDownloader(), codec=FakeCodec()))
+
+        for operation_id in operation_ids:
+            operation = self.store.operation_get(operation_id)
+            self.assertEqual(operation.state, MaterializationState.FAILED)
+            self.assertEqual(operation.error_code, "SERVICE_RESTARTED")
+            self.assertEqual(operation.checkpoint["failure_reason"], "SERVICE_RESTARTED")
+            self.assertFalse((root / "snapshots" / ("." + operation_id + ".partial")).exists())
+        self.assertEqual(self.coverage.current(self.source, "workspace-hash")["snapshot_id"], current_id)
+        self.assertEqual(json.loads((root / "dataset-state.json").read_text())["staging"], [])
+
+    def test_persisted_table_lock_prevents_duplicate_mutations(self):
+        provider = FakeTransferProvider()
+        service = MaterializationService(self.paths, self.store, provider)
+        plan = self.make_transfer_plan()
+        first = service.claim_table(plan)
+        self.assertIsNotNone(first)
+        try:
+            self.assertIsNone(service.claim_table(plan))
+        finally:
+            service.release_table(first)
+        second = service.claim_table(plan)
+        self.assertIsNotNone(second)
+        service.release_table(second)
 
 
 if __name__ == "__main__":

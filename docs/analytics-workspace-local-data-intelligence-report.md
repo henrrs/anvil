@@ -50,9 +50,9 @@ The Analytics Workspace now treats a remote table as one logical local copy and 
 
 22. **Canonical session.** Analytics continues to reuse its dedicated canonical OpenCode session. Durable Analytics context remains in the existing context store, separate from transient session history. Deterministic catalog, local data and query operations bypass the model.
 
-23. **AnalyticsModelPolicy.** A logical `anvil-analytics` policy selects provider `opencode`, disables silent fallback, and separates the user-facing name from the provider/model selector. The resolved policy is available in service status and UI.
+23. **AnalyticsModelPolicy.** A logical `anvil-analytics` policy prefers Luna 6 through connected GitHub Copilot, disables silent fallback, and separates the user-facing name from exact provider/model identifiers. The runtime `/provider` catalog is validated before every prompt; the last resolved policy is available in service status and the UI.
 
-24. **Luna 6 resolution.** The initial policy displays **GPT 6 Luna** and selects `opencode/gpt-6-luna`. Provider/model failures are shown to the user; Anvil does not silently switch models.
+24. **Luna 6 resolution.** The initial policy displays **Luna 6 · GitHub Copilot** and obtains provider/model IDs from the connected runtime catalog. Provider discovery, disconnected-provider and missing-model failures are distinct; Anvil does not silently switch models.
 
 25. **Future model routing.** Callers depend on the logical policy boundary and selector object, so task-based routing or multiple profiles can be added without changing the Analytics conversation contract.
 

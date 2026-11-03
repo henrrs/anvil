@@ -34,6 +34,7 @@ class OpenCodeRuntimePort(Protocol):
     def add_context(self, session_id: str, text: str) -> None: ...
     def prompt(self, session_id: str, text: str, *, model: dict[str, str] | None = None) -> dict[str, Any]: ...
     def wait_for_response(self, session_id: str, *, timeout: float = 300.0) -> dict[str, Any]: ...
+    def providers(self) -> Any: ...
 
 
 class _HttpAdapter:
@@ -52,7 +53,8 @@ class _HttpAdapter:
         self.timeout = timeout
 
     def _request(self, method: str, path: str,
-                 body: dict[str, Any] | None = None, *, timeout: float | None = None) -> Any:
+                 body: dict[str, Any] | None = None, *, timeout: float | None = None,
+                 max_bytes: int = 2 * 1024 * 1024) -> Any:
         payload = None if body is None else json.dumps(body, separators=(",", ":")).encode("utf-8")
         prefix = "" if path.startswith("/global/") else self.api_prefix
         request = urllib.request.Request(
@@ -63,8 +65,8 @@ class _HttpAdapter:
         )
         try:
             with _LOCAL_OPENER.open(request, timeout=timeout or self.timeout) as response:
-                raw = response.read(2 * 1024 * 1024 + 1)
-                if len(raw) > 2 * 1024 * 1024:
+                raw = response.read(max_bytes + 1)
+                if len(raw) > max_bytes:
                     raise ProviderError("OpenCode response exceeded the configured limit")
                 if not raw:
                     return None
@@ -80,6 +82,10 @@ class _HttpAdapter:
                                 code="OPENCODE_HTTP_ERROR", retryable=exc.code >= 500) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise UnavailableError("The local OpenCode runtime is not responding") from exc
+
+    def providers(self) -> Any:
+        """Return the bounded runtime catalog used to validate explicit model policy."""
+        return self._request("GET", "/provider", max_bytes=16 * 1024 * 1024)
 
     @staticmethod
     def _object(value: Any) -> dict[str, Any]:

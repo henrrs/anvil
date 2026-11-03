@@ -170,6 +170,12 @@ def _cli_operation(arguments: list[str]) -> str:
 
 
 def _structured_cli_error(stderr: str) -> str | None:
+    normalized = str(stderr or "").casefold()
+    if any(term in normalized for term in (
+            "certificate signed by unknown authority", "certificate verify failed",
+            "unable to get local issuer certificate", "ssl certificate problem",
+            "tls handshake", "x509:")):
+        return "TLS_TRUST_FAILED"
     try:
         value = json.loads(stderr)
     except (TypeError, json.JSONDecodeError):
@@ -230,6 +236,7 @@ def run_cli(arguments: list[str], *, profile: str | None = None, timeout: float 
             "AUTH_INVALID": "Databricks authentication is invalid; run make databricks-setup",
             "WORKSPACE_NETWORK_TIMEOUT": "Databricks workspace request timed out",
             "WORKSPACE_UNREACHABLE": "Databricks workspace could not be reached",
+            "TLS_TRUST_FAILED": "Databricks TLS certificate trust failed; check the configured CA certificate bundle",
             "PERMISSION_DENIED": "Databricks denied this operation for the selected identity",
             "CLI_ARGUMENT_ERROR": "Databricks CLI rejected the command arguments",
         }.get(category, f"Databricks CLI failed while running {operation} (exit {result.returncode})")

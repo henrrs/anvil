@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.analytics_service import (MARKER, SERVICE_NAME, _migrate_legacy_listener,
-                                       _unit_text, service_state, sync)
+                                       _start_fallback, _unit_text, service_state, sync)
 
 
 class AnalyticsServiceManagementTests(unittest.TestCase):
@@ -32,6 +32,38 @@ class AnalyticsServiceManagementTests(unittest.TestCase):
         self.assertIn(f"WorkingDirectory={escaped_config}", text)
         self.assertIn(f'ExecStart="{interpreter}" -m scripts.analytics.server', text)
         self.assertIn('Environment="XDG_DATA_HOME=', text)
+
+    def test_unit_includes_only_readable_trust_files_from_allowlist(self) -> None:
+        ca = self.root / "corp-ca.pem"
+        ca.write_text("fixture", encoding="utf-8")
+        ignored = self.root / "secret-token"
+        ignored.write_text("not an environment variable value", encoding="utf-8")
+        text = _unit_text(self.config, self.home, 8765, service_environment={
+            "SSL_CERT_FILE": str(ca), "HTTPS_PROXY": str(ignored), "AWS_SECRET_ACCESS_KEY": "secret",
+            "REQUESTS_CA_BUNDLE": str(self.root / "missing.pem"),
+        })
+        self.assertIn(f'Environment="SSL_CERT_FILE={ca}"', text)
+        self.assertNotIn("HTTPS_PROXY", text)
+        self.assertNotIn("AWS_SECRET_ACCESS_KEY", text)
+        self.assertNotIn("REQUESTS_CA_BUNDLE", text)
+
+    def test_fallback_child_environment_does_not_inherit_unrelated_secrets(self) -> None:
+        captured = {}
+        class Process:
+            pid = 43210
+        ca = self.root / "root-ca.pem"
+        ca.write_text("fixture", encoding="utf-8")
+        with patch.dict("os.environ", {"AWS_SECRET_ACCESS_KEY": "secret", "SSL_CERT_FILE": str(ca)}), \
+             patch("scripts.analytics_service._managed_pid", return_value=None), \
+             patch("scripts.analytics_service._port_open", return_value=False), \
+             patch("scripts.analytics_service._fallback_paths", return_value=(
+                 self.root / "pid", self.root / "lock", self.root / "log")), \
+             patch("scripts.analytics_service.subprocess.Popen", side_effect=lambda *a, **kw: captured.update(kw) or Process()):
+            (self.root / "lock").touch()
+            _start_fallback(self.config, self.home, 8765, Path("/usr/bin/python3"))
+        child_env = captured["env"]
+        self.assertEqual(child_env["SSL_CERT_FILE"], str(ca))
+        self.assertNotIn("AWS_SECRET_ACCESS_KEY", child_env)
 
     def test_systemd_mainpid_zero_is_not_ready_even_when_health_answers(self) -> None:
         self.systemd.mkdir(parents=True)

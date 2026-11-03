@@ -43,21 +43,80 @@ WAREHOUSE_STATES = {"RUNNING", "STOPPED", "STARTING", "STOPPING", "DELETED", "UN
 @dataclass(frozen=True)
 class AnalyticsModelPolicy:
     logical_model: str = "anvil-analytics"
-    display_name: str = "GPT 6 Luna"
-    provider_id: str = "opencode"
-    model_id: str = "gpt-6-luna"
+    display_name: str = "Luna 6"
+    preferred_provider_name: str = "GitHub Copilot"
     fallback: str = "NONE"
-
-    def selector(self) -> dict[str, str]:
-        return {"providerID": self.provider_id, "modelID": self.model_id}
 
     def as_dict(self) -> dict[str, str]:
         return {"logical_model": self.logical_model, "display_name": self.display_name,
-                **self.selector(), "fallback": self.fallback}
+                "provider_preference": self.preferred_provider_name,
+                "resolution": "NOT_CHECKED", "fallback": self.fallback}
 
 
 ANALYTICS_MODEL_POLICY = AnalyticsModelPolicy()
 _LOG = logging.getLogger(__name__)
+
+
+def _resolve_analytics_model(adapter: Any) -> tuple[dict[str, str], dict[str, str]]:
+    """Resolve Luna 6 only from the active runtime's connected /provider catalog."""
+    try:
+        payload = adapter.providers()
+    except Exception as exc:
+        raise ProviderError("OpenCode provider discovery failed; no unvalidated model was selected",
+                            code="PROVIDER_DISCOVERY_FAILED", retryable=True) from exc
+    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        payload = payload["data"]
+    if not isinstance(payload, dict):
+        raise ProviderError("OpenCode provider discovery returned an invalid catalog",
+                            code="PROVIDER_DISCOVERY_FAILED", retryable=True)
+    raw_providers = payload.get("all", payload.get("providers", payload.get("items", [])))
+    if isinstance(raw_providers, dict):
+        providers = [{"id": key, **(value if isinstance(value, dict) else {})}
+                     for key, value in raw_providers.items()]
+    elif isinstance(raw_providers, list):
+        providers = [item for item in raw_providers if isinstance(item, dict)]
+    else:
+        raise ProviderError("OpenCode provider discovery returned an invalid catalog",
+                            code="PROVIDER_DISCOVERY_FAILED", retryable=True)
+    preferred_name = re.sub(r"[^a-z0-9]", "", ANALYTICS_MODEL_POLICY.preferred_provider_name.casefold())
+    provider = next((item for item in providers if item.get("id") and
+                     re.sub(r"[^a-z0-9]", "", str(item.get("name") or "").casefold()) == preferred_name), None)
+    provider_id = str(provider.get("id")) if provider else ""
+    connected = payload.get("connected", [])
+    if not isinstance(connected, list):
+        raise ProviderError("OpenCode provider discovery returned an invalid connection list",
+                            code="PROVIDER_DISCOVERY_FAILED", retryable=True)
+    is_connected = (provider_id in connected or
+                    (provider is not None and provider.get("connected") is True))
+    if provider is None or not is_connected:
+        raise ProviderError("The configured GitHub Copilot provider is not connected in OpenCode",
+                            code="PROVIDER_UNAVAILABLE", retryable=False)
+    raw_models = provider.get("models", {})
+    if isinstance(raw_models, dict):
+        models = [{"id": key, **(value if isinstance(value, dict) else {})}
+                  for key, value in raw_models.items()]
+    elif isinstance(raw_models, list):
+        models = [item for item in raw_models if isinstance(item, dict)]
+    else:
+        raise ProviderError("OpenCode provider catalog omitted its model inventory",
+                            code="PROVIDER_DISCOVERY_FAILED", retryable=True)
+    def is_luna6(model: dict[str, Any]) -> bool:
+        name = re.sub(r"[^a-z0-9]", "", str(model.get("name") or "").casefold())
+        model_id = re.sub(r"[^a-z0-9]", "", str(model.get("id") or "").casefold())
+        return name in {"luna6", "gpt6luna"} or model_id in {"luna6", "gpt6luna"}
+    selected = next((model for model in models if model.get("id") and is_luna6(model)), None)
+    if selected is None:
+        raise ProviderError("The connected GitHub Copilot provider does not expose Luna 6",
+                            code="MODEL_UNAVAILABLE", retryable=False)
+    model_id = str(selected["id"])
+    provider_name = str(provider.get("name") or "GitHub Copilot")
+    model = {"providerID": provider_id, "modelID": model_id}
+    resolved = {"logical_model": ANALYTICS_MODEL_POLICY.logical_model,
+                "display_name": ANALYTICS_MODEL_POLICY.display_name,
+                "provider_id": provider_id,
+                "provider_name": provider_name, "model_id": model_id,
+                "resolution": "READY", "fallback": "NONE"}
+    return model, resolved
 
 
 def _analytics_event(level: int, event: str, **details: Any) -> None:
@@ -105,13 +164,18 @@ class AnalyticsService:
         self._runtime_start_lock = threading.Lock()
         self._runtime_start_state = "NOT_STARTED"
         self._runtime_start_error: dict[str, str] | None = None
+        self._resolved_analytics_model: dict[str, str] | None = None
         self._warehouse_guard = threading.Lock()
         self._warehouse_cache: list[dict[str, Any]] = []
         self._warehouse_cache_at = 0.0
         self._warehouse_cache_refreshed_at: str | None = None
+        self._databricks_health = {"authentication": "NOT_CHECKED", "tls": "NOT_CHECKED",
+                                   "workspace": "NOT_CHECKED", "warehouse_discovery": "NOT_CHECKED",
+                                   "last_error": None}
         self._catalog_hydration_future: Future[Any] | None = None
         self._catalog_hydration_guard = threading.Lock()
         self._closed = threading.Event()
+        self._reconcile_local_datasets()
 
     @staticmethod
     def _default_web_root() -> Path:
@@ -183,6 +247,9 @@ class AnalyticsService:
                 self._warehouse_cache_at = time.monotonic()
                 self._warehouse_cache_refreshed_at = datetime.now(timezone.utc).isoformat()
                 result_status = "READY" if items else "EMPTY"
+                self._databricks_health = {"authentication": "READY", "tls": "READY",
+                                           "workspace": "READY", "warehouse_discovery": result_status,
+                                           "last_error": None}
                 return self._warehouse_result(items, result_status, None,
                                               refreshed_at=self._warehouse_cache_refreshed_at)
             except AnalyticsError as exc:
@@ -190,15 +257,30 @@ class AnalyticsService:
                 if category not in {"PROVIDER_NOT_INSTALLED", "AUTH_REQUIRED", "AUTH_INVALID",
                                     "PERMISSION_DENIED", "WORKSPACE_NETWORK_TIMEOUT",
                                     "WORKSPACE_UNREACHABLE", "CLI_PROCESS_TIMEOUT", "SDK_PROCESS_TIMEOUT",
+                                    "TLS_TRUST_FAILED",
                                     "WORKSPACE_NOT_CONFIGURED", "PROFILE_NOT_CONFIGURED",
                                     "WAREHOUSE_RESPONSE_INVALID", "PROVIDER_UNHEALTHY"}:
                     category = "PROVIDER_UNHEALTHY"
                 message = "Unable to refresh SQL Warehouses. Your local datasets and catalog remain available."
+                auth_state = "FAILED" if category in {"AUTH_REQUIRED", "AUTH_INVALID", "PERMISSION_DENIED"} else "NOT_CHECKED"
+                tls_state = "FAILED" if category == "TLS_TRUST_FAILED" else "NOT_CHECKED" if category in {
+                    "WORKSPACE_NETWORK_TIMEOUT", "WORKSPACE_UNREACHABLE", "CLI_PROCESS_TIMEOUT", "SDK_PROCESS_TIMEOUT"
+                } else "READY"
+                workspace_state = "FAILED" if category in {
+                    "WORKSPACE_NETWORK_TIMEOUT", "WORKSPACE_UNREACHABLE", "CLI_PROCESS_TIMEOUT", "SDK_PROCESS_TIMEOUT"
+                } else "NOT_CHECKED" if category == "TLS_TRUST_FAILED" else "READY"
+                self._databricks_health = {"authentication": auth_state, "tls": tls_state,
+                                           "workspace": workspace_state,
+                                           "warehouse_discovery": "FAILED",
+                                           "last_error": category}
                 return self._warehouse_result(self._warehouse_cache,
                     "STALE" if self._warehouse_cache else "DEGRADED",
                     {"code": category, "message": message},
                     refreshed_at=self._warehouse_cache_refreshed_at)
             except Exception:
+                self._databricks_health = {"authentication": "NOT_CHECKED", "tls": "NOT_CHECKED",
+                                           "workspace": "NOT_CHECKED", "warehouse_discovery": "FAILED",
+                                           "last_error": "PROVIDER_UNHEALTHY"}
                 return self._warehouse_result(self._warehouse_cache,
                     "STALE" if self._warehouse_cache else "DEGRADED",
                     {"code": "PROVIDER_UNHEALTHY",
@@ -424,16 +506,27 @@ class AnalyticsService:
                 canonical_status = "READY" if session and session.get("title") == "anvil-global-analytics" else "RECOVERING"
             except (AnalyticsError, ValueError, TypeError):
                 canonical_status = "RECOVERING"
-        databricks_workspace = ("READY" if self._warehouse_cache_refreshed_at and
-                                self._warehouse_cache_at and time.monotonic() - self._warehouse_cache_at < WAREHOUSE_CACHE_TTL_SECONDS
-                                else "NOT_CHECKED" if profile.get("name") else "NOT_CONFIGURED")
+        dbx_health = dict(self._databricks_health)
+        if not profile.get("name"):
+            dbx_health = {"authentication": "NOT_CONFIGURED", "tls": "NOT_CONFIGURED",
+                          "workspace": "NOT_CONFIGURED", "warehouse_discovery": "NOT_CONFIGURED",
+                          "last_error": None}
+            databricks_workspace = "NOT_CONFIGURED"
+        elif "FAILED" in (dbx_health.get("authentication"), dbx_health.get("tls"),
+                          dbx_health.get("workspace"), dbx_health.get("warehouse_discovery")):
+            databricks_workspace = "DEGRADED"
+        elif (self._warehouse_cache_refreshed_at and self._warehouse_cache_at and
+              time.monotonic() - self._warehouse_cache_at < WAREHOUSE_CACHE_TTL_SECONDS):
+            databricks_workspace = "READY" if dbx_health.get("warehouse_discovery") == "READY" else "EMPTY"
+        else:
+            databricks_workspace = "NOT_CHECKED"
         return {
             "service": service_state,
             "url": self.url,
-            "model_policy": ANALYTICS_MODEL_POLICY.as_dict(),
+            "model_policy": dict(self._resolved_analytics_model or ANALYTICS_MODEL_POLICY.as_dict()),
             "databricks": {"status": databricks_workspace,
                            "configuration": "READY" if profile.get("name") else "NOT_CONFIGURED",
-                           "authentication": "NOT_CHECKED", "workspace": databricks_workspace,
+                           **dbx_health,
                            "profile": profile.get("name", ""), "host": profile.get("host", "")},
             "opencode": {"status": runtime_status, "generation": runtime_state.get("runtime_generation") or
                         runtime_state.get("generation"), "canonical_session": canonical_status,
@@ -453,7 +546,7 @@ class AnalyticsService:
                       "storage_bytes": local_bytes},
             "capabilities": {"catalog": "AVAILABLE" if catalog_cache else
                              ("READY" if profile.get("name") else "DEGRADED"),
-                             "sql_remote": "READY" if profile.get("name") else "DEGRADED",
+                             "sql_remote": "READY" if databricks_workspace in {"READY", "EMPTY"} else "DEGRADED",
                              "sql_local": "READY" if local_engine.available else "DEGRADED",
                              "ask_anvil": "READY" if runtime_status == "READY" else "DEGRADED",
                              "materialization": "READY" if arrow_available else "DEGRADED"},
@@ -544,6 +637,10 @@ class AnalyticsService:
                           "kind": str(item.get("kind") or "")[:40],
                           "state": str(item.get("state") or "")[:40],
                           "source_name": str(plan.get("source_name") or "")[:768],
+                          "phase": str((item.get("checkpoint") or {}).get("phase") or "")[:64],
+                          "started_at": str((item.get("checkpoint") or {}).get("started_at") or "")[:40],
+                          "last_activity_at": str((item.get("checkpoint") or {}).get("heartbeat_at") or "")[:40],
+                          "failure_reason": str((item.get("checkpoint") or {}).get("failure_reason") or "")[:80],
                           "updated_at": str(item.get("updated_at") or "")[:40]})
         return items
 
@@ -632,6 +729,15 @@ class AnalyticsService:
             plan = parse_local_query(ensure_read_only(sql))
             if plan is None or plan.source_name.casefold() != full_name.casefold():
                 return {"covered": False, "reason": "SQL cannot be proven against one local source."}
+            snapshot = self.coverage.current(full_name, workspace_identity)
+            invalid = self._validate_local_snapshot(snapshot)
+            if invalid:
+                return {"covered": False, "reason": str(invalid),
+                        "snapshot_id": snapshot["snapshot_id"],
+                        "state": ("INVALID" if invalid.code == "LOCAL_SCHEMA_MISMATCH" else
+                                  "NEEDS_RECONCILIATION"),
+                        "reasons": ["physical_schema_mismatch" if invalid.code == "LOCAL_SCHEMA_MISMATCH"
+                                    else "physical_schema_unverified"]}
             remote_schema, source_version = self._table_coverage_metadata(full_name)
             decision = self.coverage.covers(plan, workspace_identity=workspace_identity,
                                             remote_schema=remote_schema, source_version=source_version)
@@ -643,6 +749,24 @@ class AnalyticsService:
         if not snapshot:
             return {"covered": False, "reason": "No local copy exists for this table.",
                     "state": "NOT_COVERED", "freshness": "UNKNOWN"}
+        invalid = self._validate_local_snapshot(snapshot)
+        if invalid:
+            manifest = snapshot["manifest"]
+            return {"covered": False,
+                    "state": ("INVALID" if invalid.code == "LOCAL_SCHEMA_MISMATCH" else
+                              "NEEDS_RECONCILIATION"), "freshness": "UNKNOWN",
+                    "reason": str(invalid),
+                    "reasons": ["physical_schema_mismatch" if invalid.code == "LOCAL_SCHEMA_MISMATCH"
+                                else "physical_schema_unverified"],
+                    "snapshot_id": snapshot["snapshot_id"],
+                    "dataset_id": dataset_identity(workspace_identity, full_name),
+                    "columns": manifest.get("columns", []),
+                    "rows": manifest.get("row_count", 0),
+                    "bytes": manifest.get("parquet_bytes", manifest.get("bytes", 0)),
+                    "columns_mode": manifest.get("columns_mode") or
+                        ("ALL" if manifest.get("all_columns") else "SELECTED"),
+                    "rows_mode": manifest.get("rows_mode") or
+                        ("FILTERED" if manifest.get("predicate") else "FULL")}
         manifest = snapshot["manifest"]
         columns_mode = str(manifest.get("columns_mode") or
                            ("ALL" if manifest.get("all_columns") else "SELECTED")).upper()
@@ -674,6 +798,21 @@ class AnalyticsService:
                     ("FILTERED" if manifest.get("predicate") else "FULL"),
                 "workspace_identity": manifest.get("workspace_identity", "")}
 
+    def _validate_local_snapshot(self, snapshot: dict[str, Any] | None) -> CoverageError | None:
+        if not snapshot:
+            return None
+        engine = DuckDBLocalEngine()
+        if not engine.available:
+            return None
+        try:
+            engine.inspect_snapshot_schema(snapshot)
+        except CoverageError as exc:
+            if exc.code == "LOCAL_SCHEMA_MISMATCH" and hasattr(self.coverage, "mark_invalid"):
+                self.coverage.mark_invalid(snapshot, str(exc))
+            return exc
+        self.coverage.publish_dataset_record(snapshot)
+        return None
+
     def local_datasets(self, *, limit: int = 100) -> list[dict[str, Any]]:
         workspace_identity = self._workspace_identity()
         if not workspace_identity:
@@ -687,6 +826,26 @@ class AnalyticsService:
             return self._delete_local_dataset_locked(dataset_id)
 
     def _delete_local_dataset_locked(self, dataset_id: str) -> dict[str, Any]:
+        if not isinstance(dataset_id, str) or len(dataset_id) != 64 or any(
+                char not in "0123456789abcdef" for char in dataset_id):
+            raise ValidationError("Local dataset identity is invalid")
+        workspace_identity = self._workspace_identity()
+        if not workspace_identity:
+            raise UnavailableError("Select the Databricks workspace that owns this local copy",
+                                   code="PROFILE_NOT_SELECTED", retryable=False)
+        record = self.store.local_dataset_get(dataset_id)
+        if not record or record["workspace_identity"] != workspace_identity:
+            raise ValidationError("Local dataset was not found in the selected workspace")
+        lease = self.materializations.claim_table_for(str(record["source_name"]), workspace_identity)
+        if lease is None:
+            raise ConflictError("A local copy cannot be removed while its update is running",
+                                code="DATASET_UPDATE_RUNNING")
+        try:
+            return self._delete_local_dataset_body(dataset_id)
+        finally:
+            self.materializations.release_table(lease)
+
+    def _delete_local_dataset_body(self, dataset_id: str) -> dict[str, Any]:
         workspace_identity = self._workspace_identity()
         if not workspace_identity:
             raise UnavailableError("Select the Databricks workspace that owns this local copy",
@@ -830,7 +989,6 @@ class AnalyticsService:
         max_rows = self._integer(body.get("max_rows", 100_000), "row bound", 1, 1_000_000)
         max_bytes = self._integer(body.get("max_bytes", 512 * 1024 * 1024), "byte bound",
                                   1024 * 1024, 1024 * 1024 * 1024)
-        full_table_confirmed = body.get("full_table_confirmed") is True
         force_refresh = body.get("force_refresh") is True
         remote_schema = metadata.get("columns") if isinstance(metadata.get("columns"), list) else None
         typed_schema = (remote_schema if remote_schema and all(
@@ -844,7 +1002,7 @@ class AnalyticsService:
             source_version=source_version,
             max_rows=max_rows, max_bytes=max_bytes,
             estimated_bytes=None,
-            full_table_confirmed=full_table_confirmed, force_refresh=force_refresh,
+            full_table_confirmed=True, force_refresh=force_refresh,
             source_schema_identity=remote_schema_identity)
         selected_schema_identity = ""
         if typed_schema and plan.projection != ("*",):
@@ -867,41 +1025,64 @@ class AnalyticsService:
         if not self.materializations.transfer.codec.available:
             raise UnavailableError("PyArrow is not installed; Parquet materialization is unavailable",
                                    code="PYARROW_MISSING", retryable=False)
-        if warehouse_id is not None and (not isinstance(warehouse_id, str) or len(warehouse_id) > 256):
-            raise ValidationError("SQL warehouse selection is invalid")
-        if not warehouse_id:
-            inventory = self.warehouses(refresh=True)
-            candidates = inventory.get("warehouses", []) if isinstance(inventory, dict) else []
-            selected_warehouse = next((item for item in candidates
-                                       if item.get("state") == "RUNNING"), None)
-            if selected_warehouse is None:
-                selected_warehouse = next((item for item in candidates
-                                           if item.get("state") == "STOPPED"), None)
-            if selected_warehouse is None:
-                raise UnavailableError("No available SQL Warehouse can run this explicit local copy request",
-                                       code="WAREHOUSE_UNAVAILABLE", retryable=False)
-            warehouse_id = str(selected_warehouse["warehouse_id"])
         with self._job_guard:
             existing = self.store.operation_get(plan.operation_id)
             if existing and existing.state in {MaterializationState.READY, MaterializationState.RUNNING,
-                                               MaterializationState.PLANNED}:
+                                               MaterializationState.PLANNED, MaterializationState.VALIDATING}:
                 return self.materializations.status(plan.operation_id)
-            principal = self.me()["name"]
-            operation_payload = {"plan": plan.as_dict(), "warehouse_id": warehouse_id,
-                                 "profile": profile or "", "principal": principal}
-            self.store.operation_put(OperationRecord(plan.operation_id, "MATERIALIZATION",
-                                                      MaterializationState.PLANNED,
-                                                      operation_payload, {"chunks": [], "phase": "PLANNED"}))
-            future = self._jobs.get(plan.operation_id)
-            if future and not future.done():
-                return self.materializations.status(plan.operation_id)
-            self._jobs[plan.operation_id] = self._executor.submit(
-                self.materializations.run, plan, warehouse_id, profile=profile,
-                principal=principal)
+        lease = self.materializations.claim_table(plan)
+        if lease is None:
+            for item in self.store.operation_recent(limit=500):
+                payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+                saved_plan = payload.get("plan") if isinstance(payload.get("plan"), dict) else {}
+                if (item.get("kind") == "MATERIALIZATION" and item.get("state") in
+                        {"PLANNED", "RUNNING", "PAUSED", "VALIDATING"} and
+                        str(saved_plan.get("source_name") or "").casefold() == table_name.casefold() and
+                        str(saved_plan.get("workspace_identity") or "") == workspace_identity):
+                    return self.materializations.status(str(item["operation_id"]))
+            raise ConflictError("A local materialization is already active for this table",
+                                code="ALREADY_IN_PROGRESS", retryable=True)
+        if warehouse_id is not None and (not isinstance(warehouse_id, str) or len(warehouse_id) > 256):
+            self.materializations.release_table(lease)
+            raise ValidationError("SQL warehouse selection is invalid")
+        try:
+            if not warehouse_id:
+                inventory = self.warehouses(refresh=True)
+                candidates = inventory.get("warehouses", []) if isinstance(inventory, dict) else []
+                selected_warehouse = next((item for item in candidates
+                                           if item.get("state") == "RUNNING"), None)
+                if selected_warehouse is None:
+                    selected_warehouse = next((item for item in candidates
+                                               if item.get("state") == "STOPPED"), None)
+                if selected_warehouse is None:
+                    raise UnavailableError("No available SQL Warehouse can run this explicit local copy request",
+                                           code="WAREHOUSE_UNAVAILABLE", retryable=False)
+                warehouse_id = str(selected_warehouse["warehouse_id"])
+            with self._job_guard:
+                principal = self.me()["name"]
+                operation_payload = {"plan": plan.as_dict(), "warehouse_id": warehouse_id,
+                                     "profile": profile or "", "principal": principal}
+                self.store.operation_put(OperationRecord(plan.operation_id, "MATERIALIZATION",
+                                                          MaterializationState.PLANNED,
+                                                          operation_payload,
+                                                          {"chunks": [], "phase": "QUEUED"}))
+                future = self._jobs.get(plan.operation_id)
+                if future and not future.done():
+                    return self.materializations.status(plan.operation_id)
+                self._jobs[plan.operation_id] = self._executor.submit(
+                    self._run_materialization_job, plan, warehouse_id, profile, principal, lease)
+                lease = None
+        finally:
+            self.materializations.release_table(lease)
         _analytics_event(logging.INFO, "local_dataset_rematerialization_started",
                          source_name=table_name, action=coverage_plan.action,
                          workspace_identity=workspace_identity)
         return self.materializations.status(plan.operation_id)
+
+    def _run_materialization_job(self, plan: Any, warehouse_id: str, profile: str,
+                                 principal: str, lease: Any) -> dict[str, Any]:
+        return self.materializations.run(plan, warehouse_id, profile=profile,
+                                         principal=principal, lease=lease)
 
     def materialization(self, operation_id: str) -> dict[str, Any]:
         return self.materializations.status(operation_id)
@@ -913,12 +1094,30 @@ class AnalyticsService:
         return self.materializations.cancel(operation_id)
 
     def resume_materialization(self, operation_id: str) -> dict[str, Any]:
+        """Compatibility alias for retry; each request creates a fresh operation ID."""
+        return self.retry_materialization(operation_id)
+
+    def retry_materialization(self, operation_id: str) -> dict[str, Any]:
+        """Schedule a fresh transfer from a failed operation, never resuming old worker state."""
         with self._job_guard:
             current = self._jobs.get(operation_id)
             if current and not current.done():
-                return self.materializations.status(operation_id)
-            self._jobs[operation_id] = self._executor.submit(self.materializations.resume, operation_id)
-        return self.materializations.status(operation_id)
+                raise ConflictError("The materialization is still active and cannot be retried yet",
+                                    code="OPERATION_ALREADY_RUNNING")
+            plan, payload = self.materializations.prepare_retry(operation_id)
+            lease = self.materializations.claim_table(plan)
+            if lease is None:
+                raise ConflictError("A local materialization is already active for this table",
+                                    code="ALREADY_IN_PROGRESS", retryable=True)
+            self.store.operation_put(OperationRecord(plan.operation_id, "MATERIALIZATION",
+                                                     MaterializationState.PLANNED, payload,
+                                                     {"phase": "QUEUED", "chunks": []}, ""))
+            future = self._executor.submit(self._run_materialization_job, plan,
+                                           str(payload.get("warehouse_id") or ""),
+                                           str(payload.get("profile") or ""),
+                                           str(payload.get("principal") or ""), lease)
+            self._jobs[plan.operation_id] = future
+        return self.materializations.status(plan.operation_id)
 
     def ask_anvil(self, prompt: str, *, context: dict[str, Any] | None = None,
                   deep_investigation: bool = False,
@@ -935,6 +1134,9 @@ class AnalyticsService:
             if event:
                 event("status", {"state": "starting", "message": "Preparing the Analytics session"})
             _analytics_event(logging.INFO, "ask_anvil_activity_changed", state="starting")
+            adapter = self.runtime.adapter
+            model_selector, resolved_model = _resolve_analytics_model(adapter)
+            self._resolved_analytics_model = resolved_model
             canonical = self.sessions.ensure_canonical()
             canonical_id = canonical["session_id"]
             adapter = self.runtime.adapter
@@ -951,14 +1153,12 @@ class AnalyticsService:
                            "Current UI context (only use as helpful context; do not assume it is complete):\n"
                            + query_context + "\n\nUser question:\n" + question)
             if event:
-                event("status", {"state": "thinking", "message": "Asking Anvil in the canonical Analytics session"})
+                event("status", {"state": "thinking", "message": "Asking Anvil in the canonical Analytics session",
+                                  "model": resolved_model})
             _analytics_event(logging.INFO, "ask_anvil_activity_changed", state="thinking")
             _analytics_event(logging.INFO, "analytics_model_resolved",
-                             logical_model=ANALYTICS_MODEL_POLICY.logical_model,
-                             provider_id=ANALYTICS_MODEL_POLICY.provider_id,
-                             model_id=ANALYTICS_MODEL_POLICY.model_id,
-                             fallback=ANALYTICS_MODEL_POLICY.fallback)
-            result = adapter.prompt(session_id, full_prompt, model=ANALYTICS_MODEL_POLICY.selector())
+                             **resolved_model)
+            result = adapter.prompt(session_id, full_prompt, model=model_selector)
             if getattr(adapter, "generation", 1) == 2:
                 result = adapter.wait_for_response(session_id, timeout=timeout)
             answer = self._assistant_text(result)
@@ -995,6 +1195,47 @@ class AnalyticsService:
             return ""
         import hashlib
         return hashlib.sha256(host.encode("utf-8")).hexdigest()
+
+    def _reconcile_local_datasets(self) -> None:
+        """Validate persisted CURRENT schemas at service startup when DuckDB is usable."""
+        workspace_identity = self._workspace_identity()
+        if not workspace_identity:
+            return
+        engine = DuckDBLocalEngine()
+        if not engine.available:
+            return
+        try:
+            datasets = self.coverage.list_local_datasets(workspace_identity, limit=500)
+        except (AnalyticsError, OSError, ValueError) as exc:
+            _analytics_event(logging.WARNING, "local_dataset_reconciliation_failed",
+                             reason_code=str(getattr(exc, "code", type(exc).__name__)))
+            return
+        for item in datasets:
+            source_name = str(item.get("source_name") or "")
+            if not source_name:
+                continue
+            current = None
+            try:
+                current = self.coverage.current(source_name, workspace_identity)
+                if current is None:
+                    continue
+                engine.inspect_snapshot_schema(current)
+                self.coverage.publish_dataset_record(current)
+                _analytics_event(logging.INFO, "local_dataset_reconciled",
+                                 source_name=source_name,
+                                 snapshot_id=current["snapshot_id"], state="READY")
+            except CoverageError as exc:
+                if exc.code == "LOCAL_SCHEMA_MISMATCH":
+                    self.coverage.mark_invalid(current, str(exc))
+                _analytics_event(logging.WARNING, "local_dataset_reconciled",
+                                 source_name=source_name,
+                                 snapshot_id=(current.get("snapshot_id") if current else ""),
+                                 state=("INVALID" if exc.code == "LOCAL_SCHEMA_MISMATCH" else
+                                        "NEEDS_RECONCILIATION"), reason_code=exc.code)
+            except (OSError, ValueError, AnalyticsError) as exc:
+                _analytics_event(logging.WARNING, "local_dataset_reconciliation_failed",
+                                 source_name=source_name,
+                                 reason_code=str(getattr(exc, "code", type(exc).__name__)))
 
     def _table_coverage_metadata(self, full_name: str) -> tuple[list[dict[str, Any]] | None, str | None]:
         parts = full_name.split(".")

@@ -1,4 +1,4 @@
-"""Bounded, resumable transfer of Databricks Arrow chunks into Parquet snapshots."""
+"""Bounded transfer of Databricks Arrow chunks into validated Parquet snapshots."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import stat
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -31,6 +32,11 @@ from .store import ContextStore
 MAX_CHUNKS = 100_000
 DOWNLOAD_TIMEOUT_SECONDS = 120
 _LOG = logging.getLogger(__name__)
+
+
+def _now_utc() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _transfer_event(event: str, **details: Any) -> None:
@@ -219,7 +225,8 @@ class MaterializationTransfer:
     def run(self, plan: AcquisitionPlan, warehouse_id: str, *, profile: str | None = None,
             principal: str = "", timeout: int = 1800,
             cancel_requested: Callable[[], bool] | None = None,
-            progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+            progress: Callable[[dict[str, Any]], None] | None = None,
+            worker_instance_id: str = "") -> dict[str, Any]:
         if not self.codec.available:
             raise UnavailableError("PyArrow is not installed; Parquet materialization is unavailable",
                                    code="PYARROW_MISSING", retryable=False)
@@ -261,6 +268,20 @@ class MaterializationTransfer:
             if operation and operation.state.value == "READY":
                 return {"operation_id": plan.operation_id, "state": "READY",
                         "snapshot_id": operation.checkpoint.get("snapshot_id", ""), "reused": True}
+            if operation and operation.state.value in {"FAILED", "CANCELLED", "PAUSED"}:
+                self._cleanup_staging(plan, root, staging)
+                raise ConflictError("This operation is terminal; retry it as a new materialization",
+                                    code="OPERATION_NOT_RESUMABLE")
+            owner = str(checkpoint.get("worker_instance_id") or "")
+            if owner and worker_instance_id and owner != worker_instance_id:
+                raise ConflictError("This operation belongs to another worker instance",
+                                    code="OPERATION_NOT_RESUMABLE")
+            checkpoint = {**checkpoint,
+                          "worker_instance_id": worker_instance_id or owner or uuid.uuid4().hex,
+                          "worker_pid": os.getpid(),
+                          "created_at": checkpoint.get("created_at") or _now_utc(),
+                          "started_at": checkpoint.get("started_at") or _now_utc(),
+                          "heartbeat_at": _now_utc()}
             if checkpoint.get("phase") in {"SUBMITTING", "SUBMISSION_UNKNOWN"} and not checkpoint.get("statement_id"):
                 raise ConflictError("Databricks submission status is unknown; retry with a new materialization operation",
                                     code="SUBMISSION_STATUS_UNKNOWN")
@@ -361,7 +382,11 @@ class MaterializationTransfer:
                         parquet_path = staging / (f"chunk-{index:06d}.parquet.tmp")
                         checkpoint["phase"] = "WRITING_PARQUET"
                         self._put_operation(plan, payload, "RUNNING", checkpoint)
-                        stats = self.codec.write_parquet(arrow_path, parquet_path)
+                        try:
+                            stats = self.codec.write_parquet(arrow_path, parquet_path)
+                        except Exception as exc:
+                            raise UnavailableError("Anvil could not write a local Parquet chunk",
+                                                   code="PARQUET_WRITE_ERROR", retryable=False) from exc
                         parquet_bytes = parquet_path.stat().st_size
                         if parquet_bytes <= 0:
                             raise IntegrityError("Arrow conversion produced an empty Parquet file")
@@ -412,6 +437,8 @@ class MaterializationTransfer:
                     checkpoint["columns"] = list(empty_stats.columns)
                 checkpoint["phase"] = "VALIDATING"
                 self._put_operation(plan, payload, "RUNNING", checkpoint)
+                if cancel_requested and cancel_requested():
+                    raise ConflictError("Materialization was canceled", code="CANCELLED_BY_USER")
                 committed = self._publish(plan, staging, root, checkpoint, manifest,
                                           principal=principal)
                 self._put_operation(plan, payload, "READY", {**checkpoint, "phase": "READY",
@@ -430,13 +457,25 @@ class MaterializationTransfer:
             except Exception as exc:
                 if cancel_requested and cancel_requested():
                     state = "CANCELLED"
-                elif checkpoint.get("phase") == "SUBMITTING" and not checkpoint.get("statement_id"):
-                    checkpoint = {**checkpoint, "phase": "SUBMISSION_UNKNOWN"}
-                    state = "PAUSED"
                 else:
-                    state = "PAUSED" if getattr(exc, "retryable", False) else "FAILED"
+                    state = "FAILED"
                 safe_code = str(getattr(exc, "code", "MATERIALIZATION_FAILED"))[:100]
-                self._put_operation(plan, payload, state, {**checkpoint, "phase": state}, safe_code)
+                reason = ("CANCELLED_BY_USER" if state == "CANCELLED" else
+                          "REMOTE_ERROR" if safe_code in {"REMOTE_QUERY_FAILED", "SUBMISSION_STATUS_UNKNOWN",
+                                                          "MATERIALIZATION_TIMEOUT"}
+                          else "WAREHOUSE_ERROR" if "WAREHOUSE" in safe_code
+                          else "TRANSFER_ERROR" if safe_code.startswith("TRANSFER_")
+                          else "PARQUET_WRITE_ERROR" if "PARQUET" in safe_code or "ARROW" in safe_code
+                          else "VALIDATION_FAILED" if isinstance(exc, IntegrityError)
+                          else safe_code)
+                self._put_operation(plan, payload, state,
+                                    {**checkpoint, "phase": state, "failure_reason": reason,
+                                     "failed_at": _now_utc()}, safe_code)
+                if state in {"FAILED", "CANCELLED"}:
+                    self._cleanup_staging(plan, root, staging)
+                _transfer_event("materialization_cancelled" if state == "CANCELLED" else
+                                "materialization_failed", operation_id=plan.operation_id,
+                                source_name=plan.source_name, reason_code=reason)
                 raise
 
     def _wait_ready(self, statement_id: str, warehouse_id: str, profile: str | None,
@@ -460,7 +499,7 @@ class MaterializationTransfer:
                 self._put_operation(plan, payload, "CANCELLED", {**checkpoint, "phase": "CANCELLED"})
                 raise ConflictError("Materialization was canceled")
             if self.monotonic() >= deadline:
-                raise UnavailableError("Databricks query is still running; materialization progress was preserved",
+                raise UnavailableError("The Databricks query exceeded its time limit; retry to start a fresh transfer",
                                        code="MATERIALIZATION_TIMEOUT", retryable=True)
             if progress and polls % 5 == 0:
                 progress({"operation_id": plan.operation_id, "state": state or "RUNNING",
@@ -670,8 +709,33 @@ class MaterializationTransfer:
     def _put_operation(self, plan: AcquisitionPlan, payload: dict[str, Any], state: str,
                        checkpoint: dict[str, Any], error_code: str = "") -> None:
         from .models import MaterializationState, OperationRecord
+        existing = self.store.operation_get(plan.operation_id)
+        if existing:
+            for key in ("worker_instance_id", "worker_pid", "created_at", "started_at"):
+                if key not in checkpoint and key in existing.checkpoint:
+                    checkpoint[key] = existing.checkpoint[key]
+        checkpoint["heartbeat_at"] = _now_utc()
         self.store.operation_put(OperationRecord(plan.operation_id, "MATERIALIZATION",
                                                  MaterializationState(state), payload, checkpoint, error_code))
+
+    def _cleanup_staging(self, plan: AcquisitionPlan, root: Path, staging: Path) -> None:
+        """Discard incomplete work under the dataset lock and preserve CURRENT."""
+        try:
+            with dataset_lock(root, exclusive=True):
+                if staging.is_symlink():
+                    raise IntegrityError("Materialization staging directory must not be a symlink")
+                if staging.exists():
+                    if not staging.is_dir() or staging.resolve().parent != (root / "snapshots").resolve():
+                        raise IntegrityError("Materialization staging directory is unsafe")
+                    shutil.rmtree(staging)
+                state = dataset_state(root)
+                staging_ids = state.get("staging") if isinstance(state.get("staging"), list) else []
+                atomic_dataset_state(root, {**state, "staging": [value for value in staging_ids
+                                                                     if value != plan.operation_id]})
+        except (OSError, IntegrityError) as exc:
+            _transfer_event("materialization_staging_cleanup_failed",
+                            operation_id=plan.operation_id,
+                            reason_code=str(getattr(exc, "code", type(exc).__name__)))
 
 
 class _operation_lock:

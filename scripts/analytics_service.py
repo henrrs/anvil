@@ -27,6 +27,45 @@ except ImportError:
 MARKER = "# Managed by Anvil Analytics Workspace"
 SERVICE_NAME = "anvil-analytics.service"
 DEFAULT_PORT = 8765
+_TRUST_ENV_KEYS = ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "CURL_CA_BUNDLE", "SSL_CERT_DIR")
+
+
+def _trusted_environment(source: dict[str, str] | None = None) -> dict[str, str]:
+    """Copy only explicitly supported CA trust paths into the managed service."""
+    values = os.environ if source is None else source
+    result: dict[str, str] = {}
+    for key in _TRUST_ENV_KEYS:
+        value = values.get(key, "")
+        if not value or len(value) > 4096 or any(ord(char) < 32 for char in value):
+            continue
+        path = Path(value).expanduser()
+        valid = path.is_file() and os.access(path, os.R_OK)
+        if key == "SSL_CERT_DIR":
+            valid = path.is_dir() and os.access(path, os.R_OK)
+        if valid:
+            result[key] = str(path.absolute())
+    return result
+
+
+def _systemd_trusted_environment() -> dict[str, str]:
+    """Read only CA trust paths from the user manager."""
+    binary = shutil.which("systemctl")
+    if not binary:
+        return _trusted_environment()
+    try:
+        result = subprocess.run([binary, "--user", "show-environment"],
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                text=True, timeout=3, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return _trusted_environment()
+    if result.returncode != 0:
+        return _trusted_environment()
+    manager: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key in _TRUST_ENV_KEYS:
+            manager[key] = value
+    return _trusted_environment({**os.environ, **manager})
 
 
 def _systemd_quote(value: str) -> str:
@@ -105,12 +144,15 @@ def _service_runtime(config: Path, home: Path, *, require_ready: bool) -> Path:
     return target
 
 
-def _unit_text(config: Path, home: Path, port: int, interpreter: Path | None = None) -> str:
+def _unit_text(config: Path, home: Path, port: int, interpreter: Path | None = None,
+               service_environment: dict[str, str] | None = None) -> str:
     python = interpreter or Path(sys.executable)
     data_home = _data_home(home)
     config_home = Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config"))).expanduser().absolute()
     state_home = Path(os.environ.get("XDG_STATE_HOME", str(home / ".local" / "state"))).expanduser().absolute()
     anvil_home = Path(os.environ.get("ANVIL_HOME", str(home / ".anvil"))).expanduser().absolute()
+    trust_lines = [f"Environment={_systemd_quote(key + '=' + value)}"
+                   for key, value in _trusted_environment(service_environment).items()]
     return "\n".join([
         MARKER,
         "[Unit]",
@@ -127,6 +169,7 @@ def _unit_text(config: Path, home: Path, port: int, interpreter: Path | None = N
         f"Environment={_systemd_quote('XDG_STATE_HOME=' + str(state_home))}",
         f"Environment={_systemd_quote('PYTHONPATH=' + str(config))}",
         f"Environment={_systemd_quote('ANVIL_ANALYTICS_PORT=' + str(port))}",
+        *trust_lines,
         f"ExecStart={_systemd_quote(str(python))} -m scripts.analytics.server --host 127.0.0.1 --port {port}",
         "Restart=on-failure",
         "RestartSec=3",
@@ -338,7 +381,8 @@ def _start_fallback(config: Path, home: Path, port: int, python: Path, *, no_boo
             if health(port):
                 raise ValueError("Analytics responds on the configured port but is not owned by its managed service")
             raise ValueError(f"Port {port} is already occupied by another process")
-        environment = os.environ.copy()
+        environment = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+                       **_trusted_environment()}
         environment.update({"HOME": str(home), "ANVIL_HOME": os.environ.get("ANVIL_HOME", str(home / ".anvil")),
                             "XDG_CONFIG_HOME": os.environ.get("XDG_CONFIG_HOME", str(home / ".config")),
                             "XDG_DATA_HOME": str(_data_home(home)),
@@ -412,7 +456,8 @@ def sync(config: Path, home: Path, systemd_dir: Path, port: int, *, activate: bo
     unit = _safe_unit_path(systemd_dir)
     manager = _is_active_user_unit_dir(unit.parent, home) and _systemd_available()
     python = _service_runtime(config, home, require_ready=activate)
-    payload = _unit_text(config.absolute(), home.absolute(), port, python)
+    payload = _unit_text(config.absolute(), home.absolute(), port, python,
+                         service_environment=_systemd_trusted_environment())
     if not config.is_absolute() or not config.is_dir():
         raise ValueError("Analytics service WorkingDirectory must be an existing absolute config directory")
     verify_interpreter = None
@@ -482,7 +527,8 @@ def validate_candidate(config: Path, home: Path, systemd_dir: Path, port: int,
     # must reference the content-addressed final path that receives it during
     # activation; the hidden staging directory is atomically renamed away.
     service_python = _service_runtime(config, home, require_ready=False)
-    generated = _unit_text(config.absolute(), home.absolute(), port, service_python)
+    generated = _unit_text(config.absolute(), home.absolute(), port, service_python,
+                           service_environment=_systemd_trusted_environment())
     if not config.is_absolute() or not config.is_dir():
         raise ValueError("Analytics service WorkingDirectory must be an existing absolute config directory")
     lock = config / "runtime" / "analytics-requirements.lock"

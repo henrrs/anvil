@@ -779,13 +779,15 @@ function toggleFavorite(fullName) {
 function renderHomeList(container, items, onClick = null) {
   container.replaceChildren();
   for (const item of items.slice(0, 5)) {
-    const row = onClick ? button("", "home-row", () => onClick(item), item.title || "Open item") : node("div", "home-row static");
+    const row = item.actionLabel ? node("div", "home-row static")
+      : onClick ? button("", "home-row", () => onClick(item), item.title || "Open item") : node("div", "home-row static");
     row.append(node("span", "home-row-icon", item.icon || "•"));
     const copy = node("span", "home-row-copy");
     copy.append(node("strong", "", item.title || item.name || "Analytics item"), node("small", "", item.subtitle || ""));
     row.append(copy);
     if (item.updated_at) copy.append(node("small", "local-updated", "Updated " + relativeTime(item.updated_at)));
     if (item.state) row.append(node("span", `operation-pill ${String(item.state).toLowerCase()}`, item.state));
+    if (item.actionLabel) row.append(button(item.actionLabel, "text-button", () => onClick?.(item), item.actionLabel + " " + (item.title || "operation")));
     container.append(row);
   }
 }
@@ -810,12 +812,17 @@ function renderHome() {
   $("home-dataset-count").textContent = String(readyDatasets.length);
   renderLocalDatasets(readyDatasets.slice(0, 5));
   const activeOps = state.operations.filter((item) => ["PLANNED", "RUNNING", "PAUSED", "VALIDATING"].includes(item.state));
+  const visibleOps = [...activeOps, ...state.operations.filter((item) => ["FAILED", "CANCELLED"].includes(item.state)).slice(0, 3)];
   $("home-operation-count").textContent = String(activeOps.length);
-  renderHomeList($("home-operations"), activeOps.map((item) => ({
+  renderHomeList($("home-operations"), visibleOps.map((item) => ({
     title: item.source_name || "Materialization",
-    subtitle: `${item.kind || "materialization"} · ${item.state}`,
-    state: item.state, icon: "↻",
-  })));
+    subtitle: [item.kind || "materialization", item.phase || item.state,
+      item.started_at ? `Started ${relativeTime(item.started_at)}` : "",
+      item.last_activity_at ? `Last activity ${relativeTime(item.last_activity_at)}` : "",
+      item.failure_reason ? `Reason ${item.failure_reason}` : ""].filter(Boolean).join(" · "),
+    state: item.state, icon: "↻", actionLabel: ["FAILED", "CANCELLED"].includes(item.state) ? "Retry" : "",
+    operation_id: item.operation_id,
+  })), (item) => item.actionLabel ? retryMaterialization(item.operation_id) : openTable(item.title));
   $("home-investigation-count").textContent = String(state.investigations.length);
   renderHomeList($("home-investigations"), state.investigations.map((item) => ({
     title: item.subject || item.title || "Analytics investigation",
@@ -827,7 +834,7 @@ function renderHome() {
   $("home-continue-empty").classList.toggle("hidden", Boolean(state.recentTables.length || queries.length || state.investigations.length));
   $("home-pinned-section").classList.toggle("hidden", !state.favorites.size);
   $("home-local-section").classList.toggle("hidden", !readyDatasets.length);
-  $("home-operations-section").classList.toggle("hidden", !activeOps.length);
+  $("home-operations-section").classList.toggle("hidden", !visibleOps.length);
 }
 
 function renderLocalDatasets(items) {
@@ -870,14 +877,16 @@ async function loadIdentity() {
     const modelPolicy = me.status?.model_policy || {};
     const modelLabel = $("analytics-model-label");
     if (modelLabel) {
-      modelLabel.textContent = modelPolicy.display_name || "GPT 6 Luna";
+      const providerName = modelPolicy.provider_name || "GitHub Copilot";
+      modelLabel.textContent = `${modelPolicy.display_name || "Luna 6"} · ${providerName}`;
       modelLabel.title = "Logical model: " + (modelPolicy.logical_model || "anvil-analytics") +
-        "\nProvider: " + (modelPolicy.provider || "opencode") +
-        "\nModel: " + (modelPolicy.model || "gpt-6-luna") +
+        "\nProvider: " + (modelPolicy.provider_name || modelPolicy.provider_preference || "GitHub Copilot") +
+        "\nResolved model ID: " + (modelPolicy.model_id || "not yet validated") +
+        "\nResolution: " + (modelPolicy.resolution || "NOT_CHECKED") +
         "\nFallback: " + (modelPolicy.fallback || "NONE");
       modelLabel.setAttribute("aria-label", modelLabel.textContent + ". Logical model " +
-        (modelPolicy.logical_model || "anvil-analytics") + ". Provider " +
-        (modelPolicy.provider || "opencode") + ". Fallback " + (modelPolicy.fallback || "NONE"));
+        (modelPolicy.logical_model || "anvil-analytics") + ". Provider " + providerName +
+        ". Resolution " + (modelPolicy.resolution || "NOT_CHECKED") + ". Fallback " + (modelPolicy.fallback || "NONE"));
     }
     $("user-name").textContent = me.name || "Anvil user";
     $("user-avatar").textContent = (me.name || "A").trim().charAt(0).toUpperCase() || "A";
@@ -1234,7 +1243,14 @@ async function sendChat(prefill = "") {
   try {
     await apiClient.streamChat({ prompt, context: buildChatContext(),
       deep_investigation: $("deep-investigation").checked }, (event, payload) => {
-      if (event === "status") activity.lastChild.textContent = payload.message || "Asking Anvil in the canonical session…";
+      if (event === "status") {
+        activity.lastChild.textContent = payload.message || "Asking Anvil in the canonical session…";
+        if (payload.model) {
+          const badge = $("analytics-model-label");
+          badge.textContent = `${payload.model.display_name} · ${payload.model.provider_name}`;
+          badge.title = `Logical model: ${payload.model.logical_model}\nProvider: ${payload.model.provider_name}\nModel: ${payload.model.model_id}\nResolution: READY\nFallback: NONE`;
+        }
+      }
       if (event === "result") { showAnswer(); answerText = payload.text || ""; renderSafeMarkdown(answer, answerText); receivedText = true; }
       if (event === "chunk") {
         showAnswer();
@@ -1346,8 +1362,7 @@ function openMaterialize() {
   $("materialize-columns").value = columns.slice(0, 5).map((item) => item.name).filter(Boolean).join(", ");
   $("materialize-all-columns").checked = false;
   $("materialize-selected-columns").checked = true;
-  $("confirm-full-table").checked = false;
-  $("confirm-full-table-row").classList.add("hidden");
+  $("materialize-feedback").classList.remove("error");
   $("materialize-selected-field").classList.remove("hidden");
   $("materialize-columns").disabled = false;
   $("materialize-all-rows").checked = true;
@@ -1365,19 +1380,23 @@ async function startMaterialization() {
   if (!workspace) return;
   const allColumns = $("materialize-all-columns").checked;
   const columns = allColumns ? ["*"] : $("materialize-columns").value.split(",").map((item) => item.trim()).filter(Boolean);
-  if (!columns.length) return toast("Choose at least one column.", "error");
-  const fullTableConfirmed = allColumns && $("confirm-full-table").checked;
-  if (allColumns && !fullTableConfirmed) return toast("Confirm that you want to keep all columns locally.", "error");
+  const showFormError = (message, target) => {
+    $("materialize-feedback").textContent = message;
+    $("materialize-feedback").classList.add("error");
+    target?.focus();
+  };
+  if (!columns.length) return showFormError("Please select at least one column.", $("materialize-columns"));
   const filteredRows = $("materialize-filtered-rows").checked;
   const predicate = filteredRows ? $("materialize-filter").value.trim() : "";
-  if (filteredRows && !predicate) return toast("Enter a filter for filtered rows.", "error");
+  if (filteredRows && !predicate) return showFormError("Enter a filter for filtered rows.", $("materialize-filter"));
   $("confirm-materialize").disabled = true;
   $("materialize-feedback").textContent = "Preparing local copy…";
+  $("materialize-feedback").classList.remove("error");
   try {
     const operation = await post("/api/materializations", {
       source_name: workspace.fullName, columns, predicate,
       warehouse_id: state.selectedWarehouse || "",
-      max_rows: 1000000, max_bytes: 1073741824, full_table_confirmed: fullTableConfirmed,
+      max_rows: 1000000, max_bytes: 1073741824,
     });
     if (operation.reused) {
       $("materialize-feedback").textContent = operation.message || "The current local copy covers this request.";
@@ -1391,7 +1410,7 @@ async function startMaterialization() {
     $("materialize-feedback").textContent = materializationPhaseText(workspace.operationPhase);
     renderTableWorkspace(workspace);
     pollMaterialization(operation.operation_id, workspace);
-  } catch (error) { $("materialize-feedback").textContent = error.message; }
+  } catch (error) { $("materialize-feedback").textContent = error.message; $("materialize-feedback").classList.add("error"); }
   finally { $("confirm-materialize").disabled = false; }
 }
 
@@ -1409,7 +1428,10 @@ async function pollMaterialization(id, workspace) {
         toast("Local copy is ready.", "success");
         await loadHomeData();
       }
-      if (operation.state === "FAILED") toast("Materialization failed. Review provider status and retry.", "error");
+      if (operation.state === "FAILED") {
+        toast("Materialization failed. Review the operation details and retry when ready.", "error");
+        $("materialize-feedback").textContent = `Failed · ${operation.failure_reason || operation.error_code || "transfer error"}. Retry starts a fresh transfer.`;
+      }
       workspace.activeOperation = "";
       workspace.operationPhase = "";
       $("cancel-materialization").disabled = true;
@@ -1419,6 +1441,21 @@ async function pollMaterialization(id, workspace) {
     renderTableWorkspace(workspace);
   } catch (error) { $("materialize-feedback").textContent = error.message; }
   window.setTimeout(() => pollMaterialization(id, workspace), 1800);
+}
+
+async function retryMaterialization(operationId) {
+  try {
+    const operation = await api(`/api/materializations/${encodeURIComponent(operationId)}/retry`, { method: "POST" });
+    toast("A fresh materialization attempt has started.", "success");
+    const workspace = queryWorkspace("table:" + (operation.source_name || ""));
+    if (workspace) {
+      workspace.activeOperation = operation.operation_id;
+      workspace.operationPhase = operation.phase || operation.state;
+      renderTableWorkspace(workspace);
+      pollMaterialization(operation.operation_id, workspace);
+    }
+    await loadHomeData();
+  } catch (error) { toast(error.message, "error"); }
 }
 
 function materializationPhaseText(phase) {
@@ -1695,16 +1732,12 @@ function installHandlers() {
   $("confirm-materialize").addEventListener("click", startMaterialization);
   $("materialize-all-columns").addEventListener("change", () => {
     const all = $("materialize-all-columns").checked;
-    $("confirm-full-table-row").classList.toggle("hidden", !all);
     $("materialize-selected-field").classList.toggle("hidden", all);
     $("materialize-columns").disabled = all;
-    if (!all) $("confirm-full-table").checked = false;
   });
   $("materialize-selected-columns").addEventListener("change", () => {
-    $("confirm-full-table-row").classList.add("hidden");
     $("materialize-selected-field").classList.remove("hidden");
     $("materialize-columns").disabled = false;
-    $("confirm-full-table").checked = false;
   });
   $("materialize-all-rows").addEventListener("change", () => {
     $("materialize-filter").disabled = !$("materialize-filtered-rows").checked;
@@ -1716,7 +1749,7 @@ function installHandlers() {
     const workspace = activeTableWorkspace();
     if (!workspace?.activeOperation) return;
     try {
-      await post(`/api/materializations/${encodeURIComponent(workspace.activeOperation)}/cancel`, {});
+      await api(`/api/materializations/${encodeURIComponent(workspace.activeOperation)}/cancel`, { method: "POST" });
       $("materialize-feedback").textContent = "Cancellation requested.";
       $("cancel-materialization").disabled = true;
     } catch (error) { toast(error.message, "error"); }

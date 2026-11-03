@@ -47,7 +47,7 @@ The session titled `anvil-global-analytics` represents active analytical context
 
 The canonical OpenCode session is working context, not durable memory. Losing it does not remove catalog metadata, findings, query history, operations or snapshots. Repository OpenCode sessions are isolated because the runtime uses the dedicated global Analytics workspace directory. Startup probes retry short local health requests inside a bounded deadline; service readiness includes both the OpenCode runtime and the canonical session.
 
-Analytics prompt requests select the explicit OpenCode Models provider/model reference `opencode/gpt-6-luna`. The selected model is exposed in runtime status. Provider/model errors reach the UI; Analytics does not silently route the request to another model.
+Analytics uses the logical `anvil-analytics` policy, preferring Luna 6 from connected GitHub Copilot. Before each prompt, the OpenCode adapter reads `/provider` with a route-specific 16 MiB response ceiling and validates a connected provider plus a matching model entry. It sends the exact IDs returned by the runtime; discovery and model errors reach the UI without fallback. Runtime status exposes the last successfully resolved model without probing the provider catalog.
 
 ## State and optional engines
 
@@ -61,7 +61,7 @@ Analytics prompt requests select the explicit OpenCode Models provider/model ref
 
 SQLite migrations are versioned and transactional. Runtime identity is a separate atomic JSON file so it can be inspected without querying OpenCode's private database. Dataset paths and state are permission-restricted and reject symlinked roots/files. A dataset-state pointer records CURRENT, one PREVIOUS generation with a 24-hour expiry, and hidden STAGING operations. Shared reader locks keep a generation alive during DuckDB execution; publication, pruning and explicit removal use an exclusive lock. SQLite's local-dataset registry is repairable from the verified filesystem pointer.
 
-DuckDB returns query data through Arrow before converting values for the API. This keeps the local query path aligned with the required PyArrow runtime and supports dates, timezone-aware and naive timestamps, decimals, binary values, nulls, arrays, maps, structs and nested combinations consistently with the transfer codec. Nested values remain structured in API results, decimal and temporal values use stable text forms, and binary values use Base64. The UI shows the logical Analytics model policy as GPT 6 Luna; provider/model identity and the no-fallback setting are available in the accessible label details and service status.
+DuckDB returns query data through Arrow before converting values for the API. This keeps the local query path aligned with the required PyArrow runtime and supports dates, timezone-aware and naive timestamps, decimals, binary values, nulls, arrays, maps, structs and nested combinations consistently with the transfer codec. Nested values remain structured in API results, decimal and temporal values use stable text forms, and binary values use Base64. The UI shows Luna 6 · GitHub Copilot after runtime validation; provider/model identity and the no-fallback setting are available in the accessible label details and service status.
 
 ## Shared Databricks capability
 

@@ -108,7 +108,9 @@
       if (this.scenario === "degraded") {
         throw this._error("RUNTIME_UNAVAILABLE", "The configured OpenCode runtime is unavailable in this scenario.", 503);
       }
-      onEvent?.("status", { message: "Asking Anvil in the canonical session…" });
+      onEvent?.("status", { message: "Asking Anvil in the canonical session…",
+        model: { logical_model: "anvil-analytics", display_name: "Luna 6",
+          provider_name: "GitHub Copilot", model_id: "luna-6-fixture" } });
       const table = body.context?.table;
       const answer = table
         ? "For " + table + ", start by checking the table grain and freshness.\n\n| Check | What to verify |\n| --- | --- |\n| Grain | One row per business key |\n| Freshness | Latest source update |\n\nThis response is fixture driven; it does not call a model."
@@ -130,8 +132,9 @@
         status: {
           runtime: { status: degraded ? "DEGRADED" : "READY", generation: 2,
             ...(degraded ? { error: { code: "RUNTIME_UNAVAILABLE", message: "OpenCode runtime is unavailable." } } : {}) },
-          model_policy: { logical_model: "anvil-analytics", display_name: "GPT 6 Luna",
-            provider: "opencode", model: "gpt-6-luna", fallback: "NONE" },
+          model_policy: { logical_model: "anvil-analytics", display_name: "Luna 6",
+            provider_preference: "github-copilot", provider_id: "github-copilot",
+            provider_name: "GitHub Copilot", model_id: "luna-6-fixture", resolution: "READY", fallback: "NONE" },
           databricks: { status: offline ? "DEGRADED" : "READY", profile: "anvil-demo", workspace: "https://adb-demo.azuredatabricks.net" },
           catalog: { status: offline ? "BROWSE_ONLY" : "AVAILABLE", cached_objects: this.scenario === "large-catalog" ? 30_000 : 842 },
           local: { duckdb: "READY", pyarrow: "READY", storage_bytes: 18_400_000_000 },

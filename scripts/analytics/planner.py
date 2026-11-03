@@ -30,12 +30,33 @@ class SQLToken:
 
 
 @dataclass(frozen=True)
+class QueryRequirements:
+    """The local data a read-only query needs, independent of its SQL output shape."""
+
+    tables: tuple[str, ...]
+    required_columns: tuple[str, ...]
+    row_predicate: str = ""
+    aggregates: tuple[str, ...] = ()
+    grouping: tuple[str, ...] = ()
+    ordering: tuple[str, ...] = ()
+    distinct: bool = False
+    limit: int | None = None
+    requires_all_columns: bool = False
+    requires_full_row_population: bool = True
+    local_engine_compatible: bool = True
+    unsupported_reason: str = ""
+
+
+@dataclass(frozen=True)
 class QueryPlan:
     sql: str
     source_name: str
     projection: tuple[str, ...]
     predicate: str = ""
     limit: int | None = None
+    requirements: QueryRequirements | None = None
+    source_span: tuple[int, int] = (0, 0)
+    alias: str = ""
 
     @property
     def fingerprint(self) -> str:
@@ -163,7 +184,7 @@ def ensure_read_only(sql: str) -> str:
 
 
 def parse_local_query(sql: str) -> QueryPlan | None:
-    """Parse the intentionally small, provable local query subset."""
+    """Extract conservative local data requirements from a single-table SELECT."""
     normalized = ensure_read_only(sql)
     tokens = tokenize(normalized)
     if not tokens or tokens[0].value != "select":
@@ -175,9 +196,6 @@ def parse_local_query(sql: str) -> QueryPlan | None:
     select_start = tokens[0].end
     from_start = tokens[from_index].start
     projection_tokens = tokens[1:from_index]
-    projection = _projection(projection_tokens, normalized)
-    if projection is None:
-        return None
 
     cursor = from_index + 1
     name_parts: list[str] = []
@@ -196,17 +214,31 @@ def parse_local_query(sql: str) -> QueryPlan | None:
     if cursor < len(tokens) and tokens[cursor].depth == 0 and tokens[cursor].value == ".":
         return None
     source_name = ".".join(name_parts)
+    source_start = tokens[from_index + 1].start
+    source_end = tokens[cursor - 1].end
 
-    if cursor < len(tokens):
-        first_tail = tokens[cursor]
-        if first_tail.value != ";" and (first_tail.kind != "word" or first_tail.value not in {"where", "limit"}):
-            return None
+    # Preserve a source alias because DuckDB resolves qualified columns against
+    # it after the source relation is replaced with the immutable local view.
+    alias = ""
+    if cursor < len(tokens) and tokens[cursor].depth == 0:
+        if tokens[cursor].kind == "word" and tokens[cursor].value == "as":
+            if cursor + 1 >= len(tokens) or tokens[cursor + 1].kind not in {"word", "identifier"}:
+                return None
+            alias = tokens[cursor + 1].value
+            cursor += 2
+        elif (tokens[cursor].kind in {"word", "identifier"} and
+              tokens[cursor].value not in {"where", "group", "having", "order", "limit"}):
+            alias = tokens[cursor].value
+            cursor += 1
+
     where_token = next((token for token in tokens[cursor:]
                         if token.depth == 0 and token.kind == "word" and token.value == "where"), None)
     limit_token = next((token for token in tokens[cursor:]
                         if token.depth == 0 and token.kind == "word" and token.value == "limit"), None)
     for token in tokens[cursor:]:
-        if token.depth == 0 and token.kind == "word" and token.value in UNSUPPORTED_LOCAL_WORDS:
+        if token.depth == 0 and token.kind == "word" and token.value in {
+                "join", "union", "intersect", "except", "window", "qualify",
+                "offset", "lateral", "pivot", "unpivot"}:
             return None
     if where_token and limit_token and where_token.start > limit_token.start:
         return None
@@ -219,7 +251,11 @@ def parse_local_query(sql: str) -> QueryPlan | None:
 
     predicate = ""
     if where_token:
-        end = limit_token.start if limit_token else len(normalized)
+        clause_end = next((token.start for token in tokens[cursor:]
+                           if token.depth == 0 and token.kind == "word" and
+                           token.value in {"group", "having", "order", "limit"} and
+                           token.start > where_token.start), len(normalized))
+        end = clause_end
         predicate = normalized[where_token.end:end].strip()
         if not _safe_predicate(predicate):
             return None
@@ -233,7 +269,98 @@ def parse_local_query(sql: str) -> QueryPlan | None:
         remaining = after[1:]
         if remaining and not (len(remaining) == 1 and remaining[0].value == ";"):
             return None
-    return QueryPlan(normalized, source_name, projection, predicate, limit)
+    if any(token.depth == 0 and token.kind == "word" and token.value in
+           {"join", "union", "intersect", "except"} for token in tokens):
+        return None
+
+    requirements = _query_requirements(normalized, tokens, source_name, alias,
+                                       predicate, limit, projection_tokens)
+    if requirements is None:
+        return None
+    # Projection remains a backwards-compatible summary for existing callers;
+    # coverage decisions consume QueryRequirements directly.
+    projection = ("*",) if requirements.requires_all_columns else requirements.required_columns
+    return QueryPlan(normalized, source_name, projection, predicate, limit,
+                     requirements, (source_start, source_end), alias)
+
+
+def _query_requirements(sql: str, tokens: list[SQLToken], source_name: str,
+                        alias: str, predicate: str, limit: int | None,
+                        projection_tokens: list[SQLToken]) -> QueryRequirements | None:
+    """Collect column references without treating aggregate output names as source columns."""
+    words = [token.value for token in tokens if token.kind == "word"]
+    aggregates = tuple(dict.fromkeys(token.value.upper() for index, token in enumerate(tokens[:-1])
+                                    if token.kind == "word" and token.value in
+                                    {"count", "min", "max", "sum", "avg"} and
+                                    tokens[index + 1].value == "("))
+    select_star = any(token.value == "*" and token.depth == 0 for token in projection_tokens)
+
+    reserved = {
+        "select", "distinct", "all", "from", "where", "and", "or", "not", "is", "null",
+        "like", "in", "between", "true", "false", "date", "timestamp", "as", "group", "by",
+        "having", "order", "asc", "desc", "nulls", "first", "last", "limit", "case", "when",
+        "then", "else", "end", "cast", "interval", "current_date", "current_timestamp",
+        "count", "min", "max", "sum", "avg", "coalesce", "nullif", "abs", "round",
+        "lower", "upper", "trim", "length", "substring", "extract", "year", "month", "day",
+    }
+    table_parts = {part.casefold() for part in source_name.split(".")}
+    aliases = {alias.casefold()} if alias else set()
+    required: list[str] = []
+    for index, token in enumerate(tokens):
+        if token.kind not in {"word", "identifier"}:
+            continue
+        value = token.value
+        folded = value.casefold()
+        if token.kind == "word" and folded in reserved:
+            continue
+        if folded in table_parts or folded in aliases:
+            continue
+        # Function names, table names and qualified-name prefixes are not columns.
+        previous = tokens[index - 1] if index else None
+        following = tokens[index + 1] if index + 1 < len(tokens) else None
+        if following and following.value == "(" and token.kind == "word":
+            continue
+        if following and following.value == ".":
+            continue
+        if previous and previous.kind == "word" and previous.value == "as":
+            continue
+        if previous and previous.value == ".":
+            pass
+        if not any(existing.casefold() == value.casefold() for existing in required):
+            required.append(value)
+
+    if select_star:
+        required_columns: tuple[str, ...] = ()
+    else:
+        required_columns = tuple(required)
+    group_by: tuple[str, ...] = ()
+    order_by: tuple[str, ...] = ()
+    for clause, output in (("group", "group"), ("order", "order")):
+        clause_index = next((i for i, token in enumerate(tokens)
+                             if token.depth == 0 and token.kind == "word" and token.value == clause), None)
+        if clause_index is None or clause_index + 1 >= len(tokens) or tokens[clause_index + 1].value != "by":
+            continue
+        end = next((token.start for token in tokens[clause_index + 2:]
+                    if token.depth == 0 and token.kind == "word" and
+                    token.value in ({"having", "order", "limit"} if output == "group" else {"limit"})),
+                   len(sql))
+        clause_text = sql[tokens[clause_index + 1].end:end].strip()
+        columns = tuple(dict.fromkeys(token.value for token in tokenize(clause_text)
+                                      if token.kind in {"word", "identifier"} and
+                                      token.value not in reserved and
+                                      token.value.casefold() not in table_parts | aliases))
+        if output == "group":
+            group_by = columns
+        else:
+            order_by = columns
+
+    return QueryRequirements(
+        tables=(source_name,), required_columns=required_columns,
+        row_predicate=predicate, aggregates=aggregates, grouping=group_by,
+        ordering=order_by, distinct=any(token.depth == 0 and token.kind == "word" and
+                                        token.value == "distinct" for token in projection_tokens),
+        limit=limit, requires_all_columns=select_star,
+        requires_full_row_population=True)
 
 
 def _original_word(sql: str, token: SQLToken) -> str:
@@ -321,8 +448,6 @@ def plan_materialization(*, workspace_identity: str, source_name: str,
     intent_projection = columns
     if not columns:
         raise ValidationError("Materialization requires at least one projected column")
-    if columns == ("*",) and not full_table_confirmed:
-        raise ValidationError("Full-table projection requires explicit confirmation")
     if columns != ("*",) and (len(columns) > 1000 or len({c.casefold() for c in columns}) != len(columns)):
         raise ValidationError("Materialization projection must contain at most 1000 unique columns")
     if columns != ("*",) and any(not column or any(ord(char) < 32 or char in "/\\;" for char in column)

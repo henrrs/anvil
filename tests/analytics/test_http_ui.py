@@ -38,6 +38,18 @@ class StubService:
     def investigations_recent(self, *, limit=20):
         return [{"investigation_id": "inv-1", "title": "Refund trend", "state": "COMPLETED"}][:limit]
 
+    def delete_local_dataset(self, dataset_id):
+        self.calls.append(("delete_local_dataset", dataset_id))
+        return {"dataset_id": dataset_id, "deleted": True}
+
+    def cancel_materialization(self, operation_id):
+        self.calls.append(("cancel_materialization", operation_id))
+        return {"operation_id": operation_id, "state": "RUNNING", "phase": "CANCEL_REQUESTED"}
+
+    def retry_materialization(self, operation_id):
+        self.calls.append(("retry_materialization", operation_id))
+        return {"operation_id": "fresh-operation", "source_name": "main.silver.orders", "state": "PLANNED"}
+
     def catalogs(self):
         return {"status": "CACHED", "items": []}
 
@@ -110,6 +122,21 @@ class AnalyticsHTTPTests(unittest.TestCase):
         method_status, method_headers, _ = self.request("PUT", "/api/me")
         self.assertEqual(method_status, 405)
         self.assertIn("POST", method_headers.get("Allow", ""))
+        self.assertIn("DELETE", method_headers.get("Allow", ""))
+
+    def test_delete_local_copy_and_no_body_materialization_actions(self) -> None:
+        dataset_id = "a" * 64
+        status, _, body = self.request("DELETE", f"/api/datasets/{dataset_id}")
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["deleted"])
+        self.assertIn(("delete_local_dataset", dataset_id), self.service.calls)
+        status, _, body = self.request("POST", "/api/materializations/op-1/cancel")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["phase"], "CANCEL_REQUESTED")
+        status, _, body = self.request("POST", "/api/materializations/op-1/retry")
+        self.assertEqual(status, 202)
+        self.assertEqual(json.loads(body)["operation_id"], "fresh-operation")
+        self.assertIn(("retry_materialization", "op-1"), self.service.calls)
 
     def test_warehouse_discovery_and_recent_workspace_routes(self) -> None:
         status, _, body = self.request("GET", "/api/warehouses")

@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.18.0] - 2026-11-02 (candidate; live provider and real-workspace certification remain environment-specific)
+
+- Made LOCAL/AUTO query routing coverage-first, with aggregate-aware `QueryRequirements`; verified local readiness against coverage metadata, physical Parquet schema and DuckDB schema, failing closed on mismatch or unverified physical schema.
+- Hardened materialization ownership with process identity, heartbeat leases, startup reconciliation, exact staging cleanup, a per-table process lock, and fresh-operation retry semantics. CURRENT remains queryable when a replacement fails.
+- Preserved readable CA trust paths in the managed Analytics service through an explicit allowlist, stopped inheriting the entire shell environment in fallback startup, and exposed granular Databricks configuration/auth/TLS/workspace/warehouse health.
+- Fixed local-copy DELETE and bodyless cancel/retry routes, serialized removal against active writers, kept materialization form feedback in-dialog, removed the generic all-columns confirmation, and exposed phase/activity/retry details in Home.
+- Replaced the invalid static Ask Anvil model selector with live `/provider` discovery. The logical policy prefers Luna 6 through GitHub Copilot, validates connection and exact runtime IDs before prompting, uses a route-specific bounded catalog response, and fails closed without fallback.
+- Updated Analytics and release documentation and expanded offline regression tests. Live GitHub Copilot model availability, native DuckDB/PyArrow execution and live Databricks workspace access remain environment-specific checks.
+
 ## [2.17.1] - 2026-11-02 (candidate; real-machine rehearsal remains environment-specific)
 
 - Fixed Analytics service unit path serialization, validates candidate units before activation, accepts standard venv interpreter symlinks only when execution and `sys.prefix` match the staged environment, and migrates only positively identified legacy Anvil listeners.

@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
-.PHONY: help inspect test reforge upgrade update-runtime upgrade-runtime migrate-runtime doctor capabilities stats databricks-setup rollback analytics analytics-dev analytics-status analytics-stop analytics-ui-mock eval-analytics eval-analytical eval-analytical-semantic eval-analytical-model eval-analytical-full eval-analytical-baseline eval-analytical-review
+.PHONY: help inspect test test-core test-lifecycle reforge upgrade update-runtime upgrade-runtime migrate-runtime doctor capabilities stats databricks-setup rollback analytics analytics-dev analytics-status analytics-stop analytics-ui-mock eval-analytics eval-analytical eval-analytical-semantic eval-analytical-model eval-analytical-full eval-analytical-baseline eval-analytical-review
 
 VERSION := $(shell cat VERSION 2>/dev/null || printf 'unknown')
 
@@ -49,6 +49,12 @@ inspect:
 
 test:
 	@bash scripts/test.sh
+
+test-core:
+	@ANVIL_TEST_PHASE=core bash scripts/test.sh
+
+test-lifecycle:
+	@ANVIL_TEST_PHASE=lifecycle bash scripts/test.sh
 
 reforge:
 	@bash scripts/reforge.sh

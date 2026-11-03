@@ -16,6 +16,11 @@ candidate_v1_min="$5"
 version_v1_min="${6#opencode }"
 version_v1_min="${version_v1_min#v}"
 tmp_root="$7"
+test_phase="${ANVIL_TEST_PHASE:-all}"
+case "$test_phase" in
+  all|core|lifecycle) ;;
+  *) printf 'FAIL ANVIL_TEST_PHASE must be all, core, or lifecycle\n' >&2; exit 2 ;;
+esac
 
 # Every test subprocess gets a clean user and XDG namespace. Keep only the
 # selected Python runtime plus standard system tools on PATH; developer tools,
@@ -54,6 +59,7 @@ import sys
 if sys.version_info < (3, 11): raise SystemExit(1)
 PY
 
+if [[ "$test_phase" != lifecycle ]]; then
 while IFS= read -r -d '' script; do
   bash -n "$script" || fail "shell syntax: $script"
 done < <(find "$ROOT/scripts" "$ROOT/tests" -type f -name '*.sh' -print0)
@@ -285,12 +291,18 @@ for result in data["long_horizon_replay_comparison"].values():
     assert result["state_write_delta"] == 0
 PY
 pass 'Adaptive activation separates task risk from project size and reuses valid scoped architecture evidence'
+fi
+
+if [[ "$test_phase" != core ]]; then
 python3 "$ROOT/tests/lifecycle_model.py" || fail 'lifecycle state normalization'
 python3 "$ROOT/tests/lifecycle_plan.py" || fail 'lifecycle planning'
 python3 "$ROOT/tests/lifecycle_execution.py" || fail 'lifecycle plan execution contract'
 python3 "$ROOT/tests/configure_first_install.py" || fail 'first-install configuration characterization'
 python3 "$ROOT/tests/lifecycle.py" "$ROOT" "$candidate_v2" "$version_v2" "$candidate_v1" "$version_v1" "$tmp_root" || fail 'upgrade/reforge/migrate-runtime/rollback lifecycle integration'
 python3 "$ROOT/tests/analytics_lifecycle.py" || fail 'Analytics fresh install, upgrade, dry-run and rollback integration'
+fi
+
+if [[ "$test_phase" != lifecycle ]]; then
 PYTHONPATH="$ROOT:$ROOT/tests/fixtures/network-denied" python3 -m unittest discover -s "$ROOT/tests/analytics" -p 'test_*.py' || fail 'Analytics runtime, catalog, query, transfer, BFF and tool regressions'
 pass 'Analytics offline contracts and failure paths'
 
@@ -304,6 +316,7 @@ stats_output="$(python3 "$ROOT/scripts/stats.py" --days 7 < "$tmp_root/stats-sam
 contains_stats="$(python3 -c 'import sys; print(int("total tokens    135" in sys.argv[1] and "test/fixture" in sys.argv[1]))' "$stats_output")"
 [[ "$contains_stats" == 1 ]] || fail 'stats summary fields'
 pass 'Native OpenCode statistics are rendered from structured JSON'
+fi
 
 python3 - "$ANVIL_NETWORK_GUARD_LOG" <<'PY' || fail 'unexpected external network attempt in offline suite'
 import sys

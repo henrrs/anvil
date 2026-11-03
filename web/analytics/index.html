@@ -140,7 +140,7 @@
 
       <aside class="panel assistant-panel" id="assistant-panel" aria-label="Ask Anvil">
         <div class="panel-heading assistant-heading">
-          <div class="assistant-title"><span class="assistant-mark">✳</span><div><span class="eyebrow">ASSISTANT</span><h2>Ask Anvil</h2></div><span class="model-policy-badge" id="analytics-model-label" title="Logical model: anvil-analytics">GPT 6 Luna</span></div>
+          <div class="assistant-title"><span class="assistant-mark">✳</span><div><span class="eyebrow">ASSISTANT</span><h2>Ask Anvil</h2></div><span class="model-policy-badge" id="analytics-model-label" title="Logical model: anvil-analytics · model/provider validated before each request">Luna 6 · GitHub Copilot</span></div>
           <div class="heading-actions"><button class="icon-button" id="clear-chat" type="button" title="Clear conversation" aria-label="Clear conversation" aria-haspopup="true" aria-expanded="false" aria-controls="clear-chat-confirm"><span class="visually-hidden">Clear conversation</span></button>
             <div class="clear-chat-confirm" id="clear-chat-confirm" role="group" aria-labelledby="clear-chat-confirm-title" hidden>
               <p id="clear-chat-confirm-title">Clear the visible conversation? The canonical Analytics session remains available.</p>
@@ -182,7 +182,6 @@
         <label class="choice-option"><input id="materialize-all-columns" name="materialize-column-mode" type="radio" value="all"><span>All columns</span></label>
         <label class="choice-option"><input id="materialize-selected-columns" name="materialize-column-mode" type="radio" value="selected" checked><span>Selected columns</span></label>
         <label class="field-label" id="materialize-selected-field">Columns <input id="materialize-columns" type="text" required placeholder="order_id, status, created_at"></label>
-        <label class="confirm-full-table hidden" id="confirm-full-table-row"><input id="confirm-full-table" type="checkbox"><span>I confirm keeping all columns locally</span></label>
       </fieldset>
       <fieldset class="choice-group"><legend>Rows</legend>
         <label class="choice-option"><input id="materialize-all-rows" name="materialize-row-mode" type="radio" value="all" checked><span>All rows</span></label>

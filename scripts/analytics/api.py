@@ -121,6 +121,8 @@ class AnalyticsAPI:
                 return 200, self.service.cancel_materialization(unquote(suffix.removesuffix("/cancel")))
             if suffix.endswith("/refresh") and method == "POST":
                 return 202, self.service.resume_materialization(unquote(suffix.removesuffix("/refresh")))
+            if suffix.endswith("/retry") and method == "POST":
+                return 202, self.service.retry_materialization(unquote(suffix.removesuffix("/retry")))
             if method == "GET" and "/" not in suffix:
                 return 200, self.service.materialization(unquote(suffix))
         if method == "POST" and path == "/api/anvil/chat":

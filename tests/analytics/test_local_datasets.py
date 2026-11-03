@@ -9,6 +9,7 @@ from pathlib import Path
 
 from scripts.analytics.api import AnalyticsAPI
 from scripts.analytics.coverage import dataset_identity, source_key
+from scripts.analytics.errors import ConflictError
 from scripts.analytics.paths import AnalyticsPaths
 from scripts.analytics.service import AnalyticsService
 from scripts.analytics.store import ContextStore
@@ -104,6 +105,23 @@ class AnalyticsLocalDatasetTests(unittest.TestCase):
         self.assertEqual(coverage["columns_mode"], "ALL")
         self.assertEqual(coverage["rows_mode"], "FULL")
         self.assertEqual(coverage["freshness"], "UNKNOWN")
+
+    def test_remove_is_serialized_with_cross_process_materialization_lock(self) -> None:
+        snapshot_id = "d" * 64
+        self._publish(snapshot_id)
+        root = self.paths.datasets / source_key(self.source, self.workspace)
+        (root / "dataset-state.json").write_text(json.dumps({
+            "version": 1, "current": {"snapshot_id": snapshot_id}, "previous": None, "staging": []}),
+            encoding="utf-8")
+        self.service.local_datasets()
+        lease = self.service.materializations.claim_table_for(self.source, self.workspace)
+        try:
+            with self.assertRaises(ConflictError) as raised:
+                self.api.handle("DELETE", f"/api/datasets/{dataset_identity(self.workspace, self.source)}", {})
+            self.assertEqual(raised.exception.code, "DATASET_UPDATE_RUNNING")
+            self.assertTrue((root / "snapshots" / snapshot_id).is_dir())
+        finally:
+            self.service.materializations.release_table(lease)
 
 
 if __name__ == "__main__":

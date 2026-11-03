@@ -679,6 +679,40 @@ class ContextStore:
             """, (record.operation_id, record.kind, record.state.value, _json(record.payload),
                   _json(record.checkpoint), record.error_code, now, now))
 
+    def operation_heartbeat(self, operation_id: str, worker_instance_id: str,
+                            heartbeat_at: str | None = None) -> bool:
+        """Refresh only lease metadata without overwriting the worker checkpoint."""
+        with self.transaction() as db:
+            row = db.execute("SELECT state,checkpoint_json FROM operations WHERE operation_id=?",
+                             (operation_id,)).fetchone()
+            if row is None or row["state"] in {"READY", "FAILED", "CANCELLED"}:
+                return False
+            checkpoint = json.loads(row["checkpoint_json"])
+            if checkpoint.get("worker_instance_id") != worker_instance_id:
+                return False
+            timestamp = heartbeat_at or _now()
+            checkpoint["heartbeat_at"] = timestamp
+            db.execute("UPDATE operations SET checkpoint_json=?,updated_at=? WHERE operation_id=?",
+                       (_json(checkpoint), timestamp, operation_id))
+            return True
+
+    def operation_checkpoint_update(self, operation_id: str, updates: dict[str, Any], *,
+                                    active_only: bool = False) -> bool:
+        """Atomically merge worker/UI metadata into the latest checkpoint."""
+        if not isinstance(updates, dict):
+            raise ValidationError("Operation checkpoint updates must be an object")
+        with self.transaction() as db:
+            row = db.execute("SELECT state,checkpoint_json FROM operations WHERE operation_id=?",
+                             (operation_id,)).fetchone()
+            if row is None or (active_only and row["state"] in {"READY", "FAILED", "CANCELLED"}):
+                return False
+            checkpoint = json.loads(row["checkpoint_json"])
+            checkpoint.update(updates)
+            timestamp = str(updates.get("heartbeat_at") or _now())
+            db.execute("UPDATE operations SET checkpoint_json=?,updated_at=? WHERE operation_id=?",
+                       (_json(checkpoint), timestamp, operation_id))
+            return True
+
     def operation_get(self, operation_id: str) -> OperationRecord | None:
         with self._connect() as db:
             row = db.execute("SELECT * FROM operations WHERE operation_id=?", (operation_id,)).fetchone()

@@ -30,6 +30,33 @@ class LinkParser(HTMLParser):
 
 
 class AnalyticsUIMockTests(unittest.TestCase):
+    def test_materialization_validation_is_inline_and_all_columns_has_no_extra_gate(self):
+        html = (ROOT / "web/analytics/index.html").read_text(encoding="utf-8")
+        app = (ROOT / "web/analytics/app.js").read_text(encoding="utf-8")
+        self.assertIn('id="materialize-feedback"', html)
+        self.assertNotIn("confirm-full-table", html + app)
+        self.assertIn('Please select at least one column.', app)
+        self.assertIn('Enter a filter for filtered rows.', app)
+        start = app.split("async function startMaterialization()", 1)[1].split("async function pollMaterialization", 1)[0]
+        self.assertNotIn("toast(", start)
+
+    def test_local_operation_only_disables_conflicting_materialization_action(self):
+        app = (ROOT / "web/analytics/app.js").read_text(encoding="utf-8")
+        render = app.split("function renderTableWorkspace(workspace)", 1)[1].split("function renderTableOverview", 1)[0]
+        self.assertIn('localAction.disabled = Boolean(workspace.activeOperation)', render)
+        self.assertNotIn("tab.disabled", render)
+        self.assertIn('actionLabel: ["FAILED", "CANCELLED"].includes(item.state) ? "Retry"', app)
+
+    def test_ask_anvil_badge_shows_resolved_model_and_provider_without_scattered_model_ids(self):
+        html = (ROOT / "web/analytics/index.html").read_text(encoding="utf-8")
+        app = (ROOT / "web/analytics/app.js").read_text(encoding="utf-8")
+        service = (ROOT / "scripts/analytics/service.py").read_text(encoding="utf-8")
+        self.assertIn("Luna 6 · GitHub Copilot", html)
+        self.assertIn('payload.model.provider_name', app)
+        self.assertIn('modelPolicy.provider_preference', app)
+        self.assertIn('preferred_provider_name: str = "GitHub Copilot"', service)
+        self.assertNotIn('model_id: str = "gpt-6-luna"', service)
+
     def test_production_ui_uses_http_adapter_and_has_no_external_brand_link(self) -> None:
         html = (ROOT / "web/analytics/index.html").read_text(encoding="utf-8")
         parser = LinkParser()

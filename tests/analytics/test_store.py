@@ -117,6 +117,24 @@ class AnalyticsContextStoreTests(unittest.TestCase):
         self.assertEqual(reopened.knowledge_recent()[0]["id"], first_id)
         self.assertEqual(reopened.query_recent()[0]["id"], query_id)
 
+    def test_operation_heartbeat_preserves_checkpoint_and_requires_current_owner(self) -> None:
+        record = OperationRecord(
+            "op-lease", "MATERIALIZATION", MaterializationState.RUNNING,
+            {"table": "main.sales.orders"},
+            {"phase": "FETCHING", "worker_instance_id": "worker-a",
+             "chunks": [{"index": 0}], "heartbeat_at": "old"})
+        self.store.operation_put(record)
+        self.assertFalse(self.store.operation_heartbeat("op-lease", "worker-b", "wrong-owner"))
+        self.assertTrue(self.store.operation_heartbeat("op-lease", "worker-a", "2026-11-02T12:00:00Z"))
+        updated = self.store.operation_get("op-lease")
+        self.assertEqual(updated.checkpoint["chunks"], [{"index": 0}])
+        self.assertEqual(updated.checkpoint["phase"], "FETCHING")
+        self.assertEqual(updated.checkpoint["heartbeat_at"], "2026-11-02T12:00:00Z")
+        self.store.operation_put(OperationRecord(
+            "op-lease", "MATERIALIZATION", MaterializationState.FAILED,
+            record.payload, updated.checkpoint, "SERVICE_RESTARTED"))
+        self.assertFalse(self.store.operation_heartbeat("op-lease", "worker-a", "later"))
+
     def test_catalog_search_reaches_nested_cached_tables_and_bounds_results(self) -> None:
         self.store.catalog_upsert([
             CatalogObject("main", CatalogObjectType.CATALOG),

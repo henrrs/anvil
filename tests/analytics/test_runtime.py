@@ -60,6 +60,11 @@ class FakeOpenCode:
 class ChatFakeOpenCode(FakeOpenCode):
     generation = 1
 
+    def providers(self):
+        return {"connected": ["github-copilot"], "all": [{"id": "github-copilot",
+            "name": "GitHub Copilot", "models": {"luna-6-verified": {
+                "id": "luna-6-verified", "name": "Luna 6"}}}]}
+
     def prompt(self, session_id, text, *, model=None):
         self.prompts.append((session_id, text, model))
         return {"parts": [{"type": "text", "text": "Analytics answer from the shared Anvil runtime."}]}
@@ -69,6 +74,7 @@ class RuntimeHTTPHandler(BaseHTTPRequestHandler):
     generation = 1
     requests = []
     message_reads = 0
+    provider_padding = ""
 
     def log_message(self, *_args):
         pass
@@ -90,6 +96,12 @@ class RuntimeHTTPHandler(BaseHTTPRequestHandler):
         RuntimeHTTPHandler.requests.append(("GET", self.path, None))
         if path == "/global/health":
             self._reply({"healthy": True})
+        elif path == "/provider" or path == "/api/provider":
+            self._reply({"connected": ["github-copilot"], "all": [{"id": "github-copilot",
+                "name": "GitHub Copilot", "models": {"luna-6-verified": {
+                    "id": "luna-6-verified", "name": "Luna 6"}}}], "padding": self.provider_padding})
+        elif path == "/oversized":
+            self._reply({"padding": self.provider_padding})
         elif path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "http://example.com/collect")
@@ -130,11 +142,35 @@ class OpenCodeRuntimeTests(unittest.TestCase):
         self.paths = AnalyticsPaths.from_root(Path(self.temp.name) / ".anvil", create=True)
         self.store = ContextStore(paths=self.paths)
 
+    def test_databricks_cli_tls_errors_are_classified_without_echoing_provider_text(self):
+        from scripts.databricks import _structured_cli_error
+        self.assertEqual(_structured_cli_error("x509: certificate signed by unknown authority"),
+                         "TLS_TRUST_FAILED")
+        self.assertEqual(_structured_cli_error("certificate verify failed: unable to get local issuer certificate"),
+                         "TLS_TRUST_FAILED")
+
+    def test_analytics_model_policy_fails_closed_on_provider_discovery_or_model_miss(self):
+        from scripts.analytics.service import _resolve_analytics_model
+        class DiscoveryFailure:
+            def providers(self):
+                raise OSError("provider endpoint unavailable")
+        with self.assertRaises(ProviderError) as discovery:
+            _resolve_analytics_model(DiscoveryFailure())
+        self.assertEqual(discovery.exception.code, "PROVIDER_DISCOVERY_FAILED")
+        class MissingLuna:
+            def providers(self):
+                return {"connected": ["github-copilot"], "all": [{"id": "github-copilot",
+                    "name": "GitHub Copilot", "models": {"other-model": {"id": "other-model", "name": "Other"}}}]}
+        with self.assertRaises(ProviderError) as missing:
+            _resolve_analytics_model(MissingLuna())
+        self.assertEqual(missing.exception.code, "MODEL_UNAVAILABLE")
+
     def test_opencode_health_probe_is_short_and_runtime_retries_a_swallowed_startup_probe(self):
         adapter = create_adapter(1, "http://127.0.0.1:41999", self.paths.workspace)
         with patch("scripts.analytics.opencode._LOCAL_OPENER.open", side_effect=TimeoutError("first probe stalled")) as opened:
             self.assertFalse(adapter.health())
         self.assertEqual(opened.call_args.kwargs["timeout"], 0.5)
+
 
         executable = self.paths.root / "opencode"
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -170,6 +206,23 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             result = manager._start_runtime({"executable": str(executable), "generation": 1})
         self.assertTrue(result.startswith("http://127.0.0.1:"))
         self.assertEqual(health.calls, 2)
+
+    def test_provider_discovery_uses_a_larger_route_specific_bounded_response(self):
+        RuntimeHTTPHandler.provider_padding = "x" * (2 * 1024 * 1024 + 64)
+        self.addCleanup(setattr, RuntimeHTTPHandler, "provider_padding", "")
+        server = ThreadingHTTPServer(("127.0.0.1", 0), RuntimeHTTPHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            adapter = create_adapter(1, f"http://127.0.0.1:{server.server_port}", self.paths.workspace)
+            catalog = adapter.providers()
+            self.assertEqual(catalog["connected"], ["github-copilot"])
+            with self.assertRaises(ProviderError):
+                adapter._request("GET", "/oversized")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
 
     def test_dead_persisted_runtime_discards_adapter_and_starts_a_new_runtime(self):
         executable = self.paths.root / "opencode"
@@ -363,7 +416,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
                 "columns": ["status"], "preview": {"columns": ["status"], "rows": [["failed"]]},
             })
             self.assertIn("Analytics answer", result["text"])
-            self.assertEqual(adapter.prompts[0][2], {"providerID": "opencode", "modelID": "gpt-6-luna"})
+            self.assertEqual(adapter.prompts[0][2], {"providerID": "github-copilot", "modelID": "luna-6-verified"})
             self.assertIn("failed orders cluster after midnight UTC", adapter.prompts[0][1])
             self.assertIn("main.ops.orders", adapter.prompts[0][1])
             canonical_id = adapter.prompts[0][0]
@@ -375,6 +428,26 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             state = json.loads(self.paths.runtime.read_text(encoding="utf-8"))
             self.assertEqual(state["canonical_session_id"], canonical_id)
             self.assertEqual(adapter.context[-1][0], canonical_id)
+        finally:
+            service.close()
+
+    def test_ask_anvil_surfaces_provider_discovery_failure_before_creating_or_prompting_session(self):
+        class NoProviderCatalog(ChatFakeOpenCode):
+            def providers(self):
+                raise OSError("private runtime detail")
+        adapter = NoProviderCatalog()
+        runtime = AnalyticsRuntimeManager(self.paths,
+            runtime={"supported": True, "generation": 1, "version": "1.19.0", "executable": "/fake/opencode"},
+            base_url=adapter.base_url, adapter=adapter)
+        sessions = AnalyticsSessionManager(runtime, self.store, paths=self.paths)
+        service = AnalyticsService(paths=self.paths, store=self.store, runtime=runtime,
+                                   sessions=sessions, web_root=Path(self.temp.name))
+        try:
+            with self.assertRaises(ProviderError) as raised:
+                service.ask_anvil("Explain this data")
+            self.assertEqual(raised.exception.code, "PROVIDER_DISCOVERY_FAILED")
+            self.assertEqual(adapter.prompts, [])
+            self.assertEqual(adapter.sessions, {})
         finally:
             service.close()
 

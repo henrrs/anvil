@@ -404,7 +404,7 @@ def certify_local_intelligence(browser: Browser, base: str) -> None:
         accessible: scroller?.getAttribute('role') === 'region' && scroller.tabIndex === 0,
         activityFinished: !document.querySelector('.assistant-activity'),
         completeResponse: answer?.textContent.includes('does not call a model.'),
-        model: document.querySelector('#analytics-model-label').textContent === 'GPT 6 Luna'
+        model: document.querySelector('#analytics-model-label').textContent === 'Luna 6 · GitHub Copilot'
           && document.querySelector('#analytics-model-label').title.includes('Fallback: NONE'),
         safe: !unsafe.querySelector('img') && unsafe.textContent.includes('<img')};
     """)
