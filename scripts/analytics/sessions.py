@@ -119,6 +119,7 @@ class AnalyticsSessionManager:
                 "version": runtime_state.get("version", ""),
                 "runtime_generation": runtime_state.get("generation"),
                 "canonical_session_id": session_id,
+                "conversation_generation": int(current.get("conversation_generation") or 0),
                 "last_validated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }
             _write_state(self.paths.runtime, persisted, self.paths)
@@ -127,6 +128,30 @@ class AnalyticsSessionManager:
 
     def recover_canonical(self) -> dict[str, Any]:
         return self.ensure_canonical()
+
+    def clear_conversation(self) -> dict[str, Any]:
+        """Rotate only the cognitive thread; durable Analytics context remains intact."""
+        with exclusive_lock(self.paths.state / "runtime.lock"):
+            runtime_state = self.runtime.ensure(lock=False)
+            adapter: OpenCodeRuntimePort = self.runtime.adapter
+            previous = _read_state(self.paths.runtime)
+            session = adapter.create_session(CANONICAL_TITLE)
+            session_id = str(session.get("id") or "")
+            if not session_id:
+                raise ProviderError("OpenCode did not return a new Analytics conversation")
+            adapter.add_context(session_id, self.context.rehydration_text())
+            self.context.session_record(session_id, role="canonical", title=CANONICAL_TITLE)
+            current = {**previous, "schema_version": 1,
+                       "workspace": str(self.paths.workspace),
+                       "base_url": runtime_state["base_url"],
+                       "executable": runtime_state.get("executable", ""),
+                       "version": runtime_state.get("version", ""),
+                       "runtime_generation": runtime_state.get("generation"),
+                       "canonical_session_id": session_id,
+                       "conversation_generation": int(previous.get("conversation_generation") or 0) + 1,
+                       "last_validated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            _write_state(self.paths.runtime, current, self.paths)
+            return {"session_id": session_id, "conversation_generation": current["conversation_generation"]}
 
     @staticmethod
     def _find_canonical(adapter: OpenCodeRuntimePort) -> dict[str, Any] | None:

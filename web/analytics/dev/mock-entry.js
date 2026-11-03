@@ -1,6 +1,8 @@
 (function installMockWorkspace(global) {
   const allowed = ["healthy", "home-populated", "table-remote", "table-local", "query-results", "ask-anvil", "active-operation",
-    "offline", "degraded", "materializing", "large-catalog", "single-warehouse", "no-warehouses", "warehouse-disappeared"];
+    "offline", "degraded", "materializing", "large-catalog", "single-warehouse", "no-warehouses", "warehouse-disappeared",
+    "legacy-migrating", "local-needs-update", "parallel-materializations", "queued-materialization", "half-progress",
+    "network-retry", "resumable-transfer", "identity-degraded", "persistent-chat", "failed-operations", "many-local", "many-recent"];
   const requested = new URLSearchParams(global.location.search).get("scenario") || "healthy";
   const scenario = allowed.includes(requested) ? requested : "healthy";
   const firstLoad = sessionStorage.getItem("anvil:analytics:mock-scenario") !== scenario;
@@ -9,8 +11,11 @@
       localStorage.removeItem(key);
     sessionStorage.setItem("anvil:analytics:mock-scenario", scenario);
   }
-  if (firstLoad && ["home-populated", "table-remote", "table-local", "query-results", "ask-anvil"].includes(scenario)) {
-    localStorage.setItem("anvil:analytics:recent-tables:v1", JSON.stringify(["main.finance.transactions", "main.finance.daily_revenue"]));
+  if (firstLoad && ["home-populated", "table-remote", "table-local", "query-results", "ask-anvil", "many-recent"].includes(scenario)) {
+    localStorage.setItem("anvil:analytics:recent-tables:v1", JSON.stringify(scenario === "many-recent"
+      ? ["main.finance.transactions", "main.finance.payment_events", "main.finance.customer_accounts",
+        "main.operations.fulfillment_events", "main.operations.inventory_position"]
+      : ["main.finance.transactions", "main.finance.daily_revenue"]));
     localStorage.setItem("anvil:analytics:favorites:v1", JSON.stringify(["main.finance.payment_events"]));
   }
   global.anvilAnalyticsApi = new global.MockAnalyticsApi(scenario);

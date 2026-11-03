@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import stat
+import tempfile
 import time
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from .planner import QueryPlan, predicate_columns
 from .store import ContextStore
 
 _LOG = logging.getLogger(__name__)
+DATASET_STATE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -77,15 +79,36 @@ def dataset_state(root: Path) -> dict[str, Any]:
     if state_path.is_symlink():
         raise IntegrityError("Analytics dataset state must not be a symlink")
     if state_path.is_file():
-        return LocalCoverageService._read_json(state_path, maximum_bytes=64 * 1024)
+        return _normalize_dataset_state(root, LocalCoverageService._read_json(state_path, maximum_bytes=64 * 1024))
     legacy = root / "current.json"
     if legacy.is_symlink():
         raise IntegrityError("Analytics snapshot pointer must not be a symlink")
     if legacy.is_file():
         value = LocalCoverageService._read_json(legacy, maximum_bytes=64 * 1024)
         current = value.get("current") if isinstance(value.get("current"), dict) else value
-        return {"version": 1, "current": current, "previous": None, "staging": []}
-    return {"version": 1, "current": None, "previous": None, "staging": []}
+        return _normalize_dataset_state(root, {"version": 1, "current": current, "previous": None, "staging": []})
+    return _normalize_dataset_state(root, {"current": None, "previous": None, "staging": []})
+
+
+def _normalize_dataset_state(root: Path, value: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise IntegrityError("Analytics dataset state is invalid")
+    version = value.get("schema_version", value.get("version", 1))
+    if type(version) is not int or version < 1 or version > DATASET_STATE_VERSION:
+        raise IntegrityError("Analytics dataset state has an unsupported version")
+    current = value.get("current") if isinstance(value.get("current"), dict) else None
+    previous = value.get("previous") if isinstance(value.get("previous"), dict) else None
+    staging = value.get("staging") if isinstance(value.get("staging"), list) else []
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return {**value, "version": DATASET_STATE_VERSION, "schema_version": DATASET_STATE_VERSION,
+            "table_identity": str(value.get("table_identity") or root.name),
+            "coverage": value.get("coverage") if isinstance(value.get("coverage"), dict) else {},
+            "source_schema": value.get("source_schema") if isinstance(value.get("source_schema"), dict) else {},
+            "physical_schema": value.get("physical_schema") if isinstance(value.get("physical_schema"), dict) else {},
+            "current": current, "previous": previous, "staging": staging,
+            "current_generation": str(current.get("snapshot_id") or "") if current else "",
+            "previous_generation": str(previous.get("snapshot_id") or "") if previous else "",
+            "created_at": str(value.get("created_at") or now), "updated_at": str(value.get("updated_at") or now)}
 
 
 def atomic_dataset_state(root: Path, value: dict[str, Any]) -> None:
@@ -95,6 +118,8 @@ def atomic_dataset_state(root: Path, value: dict[str, Any]) -> None:
     for path in (state_path, legacy_path):
         if path.is_symlink():
             raise IntegrityError("Analytics snapshot pointer must not be a symlink")
+    value = _normalize_dataset_state(root, value)
+    value["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True,
                          separators=(",", ":"), allow_nan=False).encode("utf-8") + b"\n"
     if len(payload) > 64 * 1024:
@@ -260,36 +285,89 @@ class LocalCoverageService:
         if not isinstance(file_bytes, dict) or not isinstance(file_hashes, dict):
             raise IntegrityError("Analytics snapshot file inventory is invalid")
         files: list[Path] = []
+        file_stats: list[tuple[str, int, int, int, int]] = []
         for name in names:
             if not isinstance(name, str) or name in {"", ".", ".."} or "/" in name or "\\" in name:
                 raise IntegrityError("Analytics snapshot contains an invalid data file path")
             file_path = snapshot_dir / name
             if file_path.is_symlink() or not file_path.is_file():
                 raise IntegrityError("Analytics snapshot data file is missing or unsafe")
+            physical = file_path.stat()
+            file_stats.append((name, physical.st_size, physical.st_mtime_ns,
+                               physical.st_ctime_ns, physical.st_ino))
             expected_size = file_bytes.get(name)
-            if isinstance(expected_size, int) and file_path.stat().st_size != expected_size:
+            if isinstance(expected_size, int) and physical.st_size != expected_size:
                 raise IntegrityError("Analytics snapshot data file size does not match its manifest")
-            expected_hash = file_hashes.get(name)
-            if expected_hash is not None:
-                if not isinstance(expected_hash, str) or not re.fullmatch(r"[a-f0-9]{64}", expected_hash):
-                    raise IntegrityError("Analytics snapshot data file hash is invalid")
-                digest = hashlib.sha256()
-                with file_path.open("rb") as handle:
-                    for block in iter(lambda: handle.read(1024 * 1024), b""):
-                        digest.update(block)
-                if digest.hexdigest() != expected_hash:
-                    raise IntegrityError("Analytics snapshot data file hash does not match its manifest")
             files.append(file_path)
+        manifest_fingerprint = hashlib.sha256(json.dumps(manifest, sort_keys=True,
+            separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+        evidence_path = source_root / "verification.json"
+        if evidence_path.is_symlink():
+            raise IntegrityError("Analytics verification evidence must not be a symlink")
         if not files:
             raise IntegrityError("Analytics snapshot does not contain Parquet data")
+        try:
+            evidence = (self._read_json(evidence_path, maximum_bytes=2 * 1024 * 1024)
+                        if evidence_path.is_file() else {})
+        except IntegrityError:
+            evidence = {}
+        evidence_matches = (evidence.get("generation_id") == snapshot_id and
+                            evidence.get("manifest_fingerprint") == manifest_fingerprint and
+                            evidence.get("file_stats") == [list(item) for item in file_stats])
+        if not evidence_matches:
+            for name, file_path in zip(names, files):
+                expected_hash = file_hashes.get(name)
+                if expected_hash is not None:
+                    if not isinstance(expected_hash, str) or not re.fullmatch(r"[a-f0-9]{64}", expected_hash):
+                        raise IntegrityError("Analytics snapshot data file hash is invalid")
+                    digest = hashlib.sha256()
+                    with file_path.open("rb") as handle:
+                        for block in iter(lambda: handle.read(1024 * 1024), b""):
+                            digest.update(block)
+                    if digest.hexdigest() != expected_hash:
+                        raise IntegrityError("Analytics snapshot data file hash does not match its manifest")
+            self._write_verification(evidence_path, {"generation_id": snapshot_id,
+                "manifest_fingerprint": manifest_fingerprint,
+                "file_stats": [list(item) for item in file_stats],
+                "verified_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
         with self.store.transaction() as db:
             row = db.execute("SELECT state FROM materializations WHERE materialization_id=?",
                              (snapshot_id,)).fetchone()
-        if row is None or row["state"] != "READY":
+        if row is None:
+            self.store.materialization_put({"materialization_id": snapshot_id,
+                "source_name": source_name, "source_version": str(manifest.get("source_version") or ""),
+                "filters": [manifest["predicate"]] if manifest.get("predicate") else [],
+                "columns": manifest.get("columns", []), "coverage": manifest, "state": "READY",
+                "files": names, "byte_count": int(manifest.get("bytes") or 0),
+                "principal": str(manifest.get("principal") or "")})
+            _LOG.info(json.dumps({"event": "local_dataset_reconciled", "snapshot_id": snapshot_id,
+                                  "reason_code": "MISSING_SUMMARY"}, sort_keys=True))
+        elif row["state"] != "READY":
             return None
         return {"snapshot_id": snapshot_id, "snapshot_dir": snapshot_dir,
                 "manifest": manifest, "files": tuple(files), "dataset_root": source_root,
-                "workspace_identity": manifest_workspace, "state": state}
+                "workspace_identity": manifest_workspace, "state": state,
+                "verification_fingerprint": hashlib.sha256(json.dumps(
+                    [manifest_fingerprint, file_stats], separators=(",", ":")).encode("utf-8")).hexdigest()}
+
+    @staticmethod
+    def _write_verification(path: Path, value: dict[str, Any]) -> None:
+        descriptor, temporary = tempfile.mkstemp(prefix=".verification-", dir=path.parent)
+        try:
+            os.fchmod(descriptor, stat.S_IRUSR | stat.S_IWUSR)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(value, handle, sort_keys=True, separators=(",", ":"))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+            directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
     def publish_dataset_record(self, current: dict[str, Any], state: str = "LOCAL_CURRENT") -> None:
         """Repair the SQLite summary from the filesystem publication record."""
@@ -308,8 +386,11 @@ class LocalCoverageService:
             "selected_columns": (manifest.get("selected_columns") if isinstance(
                 manifest.get("selected_columns"), list) else
                 [] if manifest.get("all_columns") else manifest.get("columns", [])),
-            "rows_mode": str(manifest.get("rows_mode") or
-                              ("FILTERED" if manifest.get("predicate") else "FULL")),
+            # The v4 SQLite summary has a legacy CHECK constraint. The manifest
+            # remains authoritative and explicitly records LIMITED coverage.
+            "rows_mode": ("UNKNOWN" if str(manifest.get("rows_mode") or "").upper() == "LIMITED" else
+                          str(manifest.get("rows_mode") or
+                              ("FILTERED" if manifest.get("predicate") else "FULL"))),
             "predicate": str(manifest.get("predicate") or ""),
             "schema_identity": str(manifest.get("schema_identity") or ""),
             "source_version": str(manifest.get("source_version") or ""),
@@ -461,11 +542,16 @@ class LocalCoverageService:
                 partial = snapshots / ("." + operation_id + ".partial")
                 if partial.is_symlink():
                     continue
+                if (operation.state.value == "FAILED" and
+                        bool(operation.checkpoint.get("resume_available")) and partial.is_dir()):
+                    retained_staging.append(operation_id)
+                    continue
                 if partial.is_dir():
                     shutil.rmtree(partial)
                 continue
             retained_staging.append(operation_id)
-        updated = {**state, "version": 1, "current": current,
+        updated = {**state, "version": DATASET_STATE_VERSION,
+                   "schema_version": DATASET_STATE_VERSION, "current": current,
                    "previous": previous, "staging": retained_staging[-100:]}
         if updated != state:
             atomic_dataset_state(root, updated)
@@ -499,7 +585,7 @@ class LocalCoverageService:
             return CoverageDecision(False, "No local copy exists for this table.", state="NOT_COVERED",
                                     reasons=("missing_dataset",))
         manifest = current["manifest"]
-        if not manifest.get("complete"):
+        if not manifest.get("complete") or str(manifest.get("rows_mode") or "").upper() == "LIMITED":
             return CoverageDecision(False, "The local snapshot is partial and cannot prove complete query coverage.",
                                     snapshot_id=current["snapshot_id"], state="PARTIALLY_COVERED",
                                     reasons=("missing_rows",))

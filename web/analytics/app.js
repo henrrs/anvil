@@ -50,6 +50,7 @@ const state = {
   catalogSyncedAt: null,
   layout: readStorage(LAYOUT_KEY, {}),
   chatBusy: false,
+  chatNextBefore: null,
 };
 
 function node(tag, className = "", value = undefined) {
@@ -792,6 +793,57 @@ function renderHomeList(container, items, onClick = null) {
   }
 }
 
+function renderOperationCards(items) {
+  const container = $("home-operations");
+  container.replaceChildren();
+  for (const operation of items) {
+    const failed = operation.state === "FAILED";
+    const row = node("article", `operation-row ${failed ? "needs-attention" : ""}`);
+    const heading = node("div", "operation-heading");
+    heading.append(node("strong", "", operation.source_name || "Local data"),
+      node("span", `operation-pill ${String(operation.state).toLowerCase()}`,
+        failed ? "Needs attention" : operation.state === "QUEUED" ? "Queued" : "In progress"));
+    row.append(heading);
+    row.append(node("div", "operation-detail", failed
+      ? (operation.failure_reason === "TRANSFER_ERROR" ? "Download interrupted. Network connection was interrupted." :
+        `Local copy interrupted · ${operation.failure_reason || operation.error_code || "Retry available"}`)
+      : materializationPhaseText(operation.phase || operation.state)));
+    const percent = Number.isFinite(operation.percent) ? Math.min(100, Math.max(0, Number(operation.percent))) : null;
+    if (operation.state !== "QUEUED" && (percent !== null || !failed)) {
+      const progress = node("div", `operation-progress ${percent === null ? "indeterminate" : ""}`);
+      progress.setAttribute("role", "progressbar");
+      progress.setAttribute("aria-label", `Download progress for ${operation.source_name || "local data"}`);
+      if (percent !== null) progress.setAttribute("aria-valuenow", String(percent));
+      progress.setAttribute("aria-valuemin", "0");
+      progress.setAttribute("aria-valuemax", "100");
+      progress.append(node("span"));
+      if (percent !== null) progress.firstChild.style.width = `${percent}%`;
+      row.append(progress);
+    }
+    const completed = Number(operation.completed_rows || operation.rows || 0);
+    const planned = Number(operation.planned_rows || 0);
+    const details = [
+      percent !== null ? `${percent.toFixed(1)}%` : "",
+      planned > 0 ? `${completed.toLocaleString()} / ${planned.toLocaleString()} rows` :
+        completed > 0 ? `${completed.toLocaleString()} rows` : "",
+      Number(operation.completed_chunks || 0) > 0 ? `${operation.completed_chunks} chunks` : "",
+      Number(operation.completed_bytes || operation.bytes || 0) > 0 ? formatBytes(operation.completed_bytes || operation.bytes) : "",
+      operation.started_at ? `Started ${relativeTime(operation.started_at)}` : "",
+    ].filter(Boolean).join(" · ");
+    if (details) row.append(node("div", "operation-detail", details));
+    const actions = node("div", "operation-actions");
+    if (failed) actions.append(button(operation.resume_available ? "Resume" : "Retry", "text-button",
+      () => retryMaterialization(operation.operation_id, Boolean(operation.resume_available))));
+    else if (["QUEUED", "PLANNED", "RUNNING", "PAUSED", "VALIDATING"].includes(operation.state))
+      actions.append(button("Cancel", "text-button", async () => {
+        try { await post(`/api/materializations/${encodeURIComponent(operation.operation_id)}/cancel`); await loadHomeData(); }
+        catch (error) { toast(error.message, "error"); }
+      }));
+    row.append(actions);
+    container.append(row);
+  }
+}
+
 function renderHome() {
   const givenName = state.profile?.name?.split(/[\s@]/)[0] || "there";
   $("greeting-name").textContent = givenName;
@@ -809,31 +861,30 @@ function renderHome() {
   renderHomeList($("home-recent-queries"), queries,
     (item) => createQuery(item.sql || "", "Recent query"));
   const readyDatasets = state.datasets.filter((item) => item.state === "READY");
-  $("home-dataset-count").textContent = String(readyDatasets.length);
-  renderLocalDatasets(readyDatasets.slice(0, 5));
-  const activeOps = state.operations.filter((item) => ["PLANNED", "RUNNING", "PAUSED", "VALIDATING"].includes(item.state));
+  $("home-dataset-count").textContent = String(state.datasets.length);
+  $("home-dataset-size").textContent = formatBytes(readyDatasets.reduce((sum, item) => sum + Number(item.bytes || 0), 0));
+  renderLocalDatasets(state.datasets.slice(0, 5));
+  const activeOps = state.operations.filter((item) => ["QUEUED", "PLANNED", "RUNNING", "PAUSED", "VALIDATING"].includes(item.state));
   const visibleOps = [...activeOps, ...state.operations.filter((item) => ["FAILED", "CANCELLED"].includes(item.state)).slice(0, 3)];
   $("home-operation-count").textContent = String(activeOps.length);
-  renderHomeList($("home-operations"), visibleOps.map((item) => ({
-    title: item.source_name || "Materialization",
-    subtitle: [item.kind || "materialization", item.phase || item.state,
-      item.started_at ? `Started ${relativeTime(item.started_at)}` : "",
-      item.last_activity_at ? `Last activity ${relativeTime(item.last_activity_at)}` : "",
-      item.failure_reason ? `Reason ${item.failure_reason}` : ""].filter(Boolean).join(" · "),
-    state: item.state, icon: "↻", actionLabel: ["FAILED", "CANCELLED"].includes(item.state) ? "Retry" : "",
-    operation_id: item.operation_id,
-  })), (item) => item.actionLabel ? retryMaterialization(item.operation_id) : openTable(item.title));
+  renderOperationCards(visibleOps);
   $("home-investigation-count").textContent = String(state.investigations.length);
   renderHomeList($("home-investigations"), state.investigations.map((item) => ({
     title: item.subject || item.title || "Analytics investigation",
     subtitle: String(item.summary || item.content || "").slice(0, 82), icon: "✳",
   })));
+  const completed = state.operations.filter((item) => item.state === "READY").slice(0, 3);
+  renderHomeList($("home-completed-operations"), completed.map((item) => ({
+    title: tableName(item.source_name || "Local copy"),
+    subtitle: `Local copy completed ${relativeTime(item.updated_at)}`, icon: "✓",
+  })));
   $("home-recent-tables-group").classList.toggle("hidden", !state.recentTables.length);
   $("home-recent-queries-group").classList.toggle("hidden", !queries.length);
   $("home-investigations-group").classList.toggle("hidden", !state.investigations.length);
-  $("home-continue-empty").classList.toggle("hidden", Boolean(state.recentTables.length || queries.length || state.investigations.length));
+  $("home-continue-empty").classList.toggle("hidden", Boolean(state.recentTables.length || queries.length));
   $("home-pinned-section").classList.toggle("hidden", !state.favorites.size);
-  $("home-local-section").classList.toggle("hidden", !readyDatasets.length);
+  $("home-local-section").classList.toggle("hidden", !state.datasets.length);
+  $("home-activity-section").classList.toggle("hidden", !state.investigations.length && !completed.length);
   $("home-operations-section").classList.toggle("hidden", !visibleOps.length);
 }
 
@@ -846,7 +897,9 @@ function renderLocalDatasets(items) {
     row.append(node("span", "home-row-icon", "●"));
     const copy = node("span", "home-row-copy");
     const columnCount = Array.isArray(item.columns) ? item.columns.length : (item.columns_mode === "ALL" ? "all" : 0);
-    const detail = `${Number(item.rows || 0).toLocaleString()} rows · ${columnCount} columns · ${formatBytes(item.bytes || 0)}`;
+    const detail = item.state === "READY"
+      ? `${Number(item.rows || 0).toLocaleString()} rows · ${columnCount} columns · ${formatBytes(item.bytes || 0)}`
+      : "Local copy needs update";
     copy.append(node("strong", "", tableName(sourceName)), node("small", "", detail));
     row.append(copy);
     row.append(button("Open", "text-button", () => openTable(sourceName), `Open ${sourceName}`));
@@ -1069,17 +1122,46 @@ function buildChatContext() {
   return context;
 }
 
-function addChatMessage(role, value) {
-  const thread = $("chat-thread");
-  if (thread.querySelector(".welcome-message")) thread.replaceChildren();
+function chatMessageElement(role, value) {
   const item = node("article", `chat-message ${role}`);
   item.append(node("div", "message-role", role === "user" ? "YOU" : "ANVIL"));
   const text = role === "assistant" ? node("div", "message-text markdown-body") : node("p", "message-text", value);
   if (role === "assistant") renderSafeMarkdown(text, value);
   item.append(text);
+  return { item, text };
+}
+
+function addChatMessage(role, value) {
+  const thread = $("chat-thread");
+  if (thread.querySelector(".welcome-message")) thread.replaceChildren();
+  const { item, text } = chatMessageElement(role, value);
   thread.append(item);
   thread.scrollTop = thread.scrollHeight;
   return text;
+}
+
+async function loadChatHistory(before = null) {
+  try {
+    const route = "/api/anvil/chat/history?limit=30" + (before ? `&before=${encodeURIComponent(before)}` : "");
+    const history = await api(route);
+    const items = Array.isArray(history.items) ? history.items : [];
+    const thread = $("chat-thread");
+    if (items.length && !before && !state.chatBusy && !thread.querySelector(".chat-message")) {
+      thread.replaceChildren();
+    }
+    if (before) {
+      const oldHeight = thread.scrollHeight;
+      const fragment = document.createDocumentFragment();
+      items.forEach((message) => fragment.append(chatMessageElement(message.role, message.content).item));
+      thread.prepend(fragment);
+      thread.scrollTop += thread.scrollHeight - oldHeight;
+    } else if (!state.chatBusy && !thread.querySelector(".chat-message")) {
+      items.forEach((message) => thread.append(chatMessageElement(message.role, message.content).item));
+      thread.scrollTop = thread.scrollHeight;
+    }
+    state.chatNextBefore = history.next_before || null;
+    $("load-older-chat").hidden = !state.chatNextBefore;
+  } catch (error) { /* A temporarily unavailable history endpoint must not block the workspace. */ }
 }
 
 function renderSafeMarkdown(container, value) {
@@ -1396,7 +1478,6 @@ async function startMaterialization() {
     const operation = await post("/api/materializations", {
       source_name: workspace.fullName, columns, predicate,
       warehouse_id: state.selectedWarehouse || "",
-      max_rows: 1000000, max_bytes: 1073741824,
     });
     if (operation.reused) {
       $("materialize-feedback").textContent = operation.message || "The current local copy covers this request.";
@@ -1422,7 +1503,13 @@ async function pollMaterialization(id, workspace) {
     $("materialize-feedback").textContent = operation.state === "READY"
       ? "Local copy ready · " + Number(operation.rows || 0).toLocaleString() +
         " rows · " + formatBytes(operation.bytes || 0)
-      : materializationPhaseText(workspace.operationPhase);
+      : [materializationPhaseText(workspace.operationPhase),
+         Number.isFinite(operation.percent) ? `${Number(operation.percent).toFixed(1)}%` : "",
+         Number(operation.planned_rows || 0) > 0
+           ? `${Number(operation.rows || 0).toLocaleString()} / ${Number(operation.planned_rows).toLocaleString()} rows`
+           : Number(operation.rows || 0) > 0 ? `${Number(operation.rows).toLocaleString()} rows` : "",
+         Number(operation.completed_chunks || 0) > 0 ? `${operation.completed_chunks} chunks` : "",
+         Number(operation.bytes || 0) > 0 ? formatBytes(operation.bytes) : ""].filter(Boolean).join(" · ");
     if (["READY", "FAILED", "CANCELLED"].includes(operation.state)) {
       if (operation.state === "READY") {
         toast("Local copy is ready.", "success");
@@ -1430,7 +1517,7 @@ async function pollMaterialization(id, workspace) {
       }
       if (operation.state === "FAILED") {
         toast("Materialization failed. Review the operation details and retry when ready.", "error");
-        $("materialize-feedback").textContent = `Failed · ${operation.failure_reason || operation.error_code || "transfer error"}. Retry starts a fresh transfer.`;
+        $("materialize-feedback").textContent = `Failed · ${operation.failure_reason || operation.error_code || "transfer error"}. ${operation.resume_available ? "Resume keeps saved chunks." : "Retry starts a clean transfer."}`;
       }
       workspace.activeOperation = "";
       workspace.operationPhase = "";
@@ -1443,10 +1530,10 @@ async function pollMaterialization(id, workspace) {
   window.setTimeout(() => pollMaterialization(id, workspace), 1800);
 }
 
-async function retryMaterialization(operationId) {
+async function retryMaterialization(operationId, resume = false) {
   try {
     const operation = await api(`/api/materializations/${encodeURIComponent(operationId)}/retry`, { method: "POST" });
-    toast("A fresh materialization attempt has started.", "success");
+    toast(resume ? "Resuming the saved download." : "A new materialization attempt has started.", "success");
     const workspace = queryWorkspace("table:" + (operation.source_name || ""));
     if (workspace) {
       workspace.activeOperation = operation.operation_id;
@@ -1461,7 +1548,11 @@ async function retryMaterialization(operationId) {
 function materializationPhaseText(phase) {
   const labels = {
     PLANNED: "Preparing local copy…",
+    QUEUED: "Waiting for an available transfer worker…",
     STARTING_WAREHOUSE: "Starting SQL Warehouse…",
+    SUBMITTING_QUERY: "Submitting Databricks query…",
+    WAITING_FOR_RESULT: "Waiting for Databricks result…",
+    RESULT_READY: "Databricks result is ready…",
     EXECUTING: "Executing Databricks query…",
     REMOTE_QUERY: "Executing Databricks query…",
     SUBMITTED: "Waiting for Databricks query…",
@@ -1472,6 +1563,7 @@ function materializationPhaseText(phase) {
     ACTIVATING: "Activating local copy…",
     RUNNING: "Creating local copy…",
     PAUSED: "Local copy paused",
+    RESUMABLE: "Download interrupted. Saved progress can be resumed.",
     FAILED: "Local copy failed",
     CANCELLED: "Local copy creation canceled",
     CANCELED: "Local copy creation canceled",
@@ -1513,7 +1605,7 @@ async function loadHomeData() {
 }
 
 function renderOperationsFooter() {
-  const active = state.operations.filter((item) => ["PLANNED", "RUNNING", "PAUSED", "VALIDATING"].includes(item.state));
+  const active = state.operations.filter((item) => ["QUEUED", "PLANNED", "RUNNING", "PAUSED", "VALIDATING"].includes(item.state));
   const label = active.length ? `${active.length} active operation${active.length === 1 ? "" : "s"}` : "No active operations";
   $("operations-label").textContent = label;
   $("operations-label").title = active.map((item) => (item.source_name || "Local data") + ": " + item.state).join("\n") || "No active Analytics operations";
@@ -1700,6 +1792,7 @@ function installHandlers() {
   });
   $("refresh-warehouses").addEventListener("click", () => loadWarehouses(true));
   $("send-chat").addEventListener("click", () => sendChat());
+  $("load-older-chat").addEventListener("click", () => loadChatHistory(state.chatNextBefore));
   $("chat-input").addEventListener("input", resizeChatComposer);
   $("chat-input").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendChat(); }
@@ -1721,13 +1814,21 @@ function installHandlers() {
     closeClearConfirmation();
     clearChatButton.focus();
   });
-  $("confirm-clear-chat").addEventListener("click", () => {
-    $("chat-thread").replaceChildren();
-    const welcome = node("div", "welcome-message");
-    welcome.append(node("div", "assistant-mark small", "✳"), node("p", "", "Conversation view cleared. The canonical Analytics session remains available."));
-    $("chat-thread").append(welcome);
-    closeClearConfirmation();
-    clearChatButton.focus();
+  $("confirm-clear-chat").addEventListener("click", async () => {
+    const confirm = $("confirm-clear-chat");
+    confirm.disabled = true;
+    try {
+      await post("/api/anvil/chat/clear");
+      $("chat-thread").replaceChildren();
+      const welcome = node("div", "welcome-message");
+      welcome.append(node("div", "assistant-mark small", "✳"), node("p", "", "Start a new Ask Anvil conversation. Your saved Analytics context is still available."));
+      $("chat-thread").append(welcome);
+      state.chatNextBefore = null;
+      $("load-older-chat").hidden = true;
+      closeClearConfirmation();
+      clearChatButton.focus();
+    } catch (error) { toast(error.message, "error"); }
+    finally { confirm.disabled = false; }
   });
   $("confirm-materialize").addEventListener("click", startMaterialization);
   $("materialize-all-columns").addEventListener("change", () => {
@@ -1787,7 +1888,7 @@ async function start() {
   renderHome();
   renderActiveWorkspace();
   updateAskContext();
-  await Promise.all([loadIdentity(), loadCatalog(), loadWarehouses(), loadHomeData()]);
+  await Promise.all([loadIdentity(), loadCatalog(), loadWarehouses(), loadHomeData(), loadChatHistory()]);
   if (typeof window.anvilAnalyticsVisualSetup === "function") await window.anvilAnalyticsVisualSetup();
   window.setInterval(() => loadWarehouses(false), 60_000);
   window.setInterval(loadHomeData, 15_000);

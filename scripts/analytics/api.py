@@ -127,6 +127,15 @@ class AnalyticsAPI:
                 return 200, self.service.materialization(unquote(suffix))
         if method == "POST" and path == "/api/anvil/chat":
             raise ValidationError("Ask Anvil uses the streaming endpoint")
+        if method == "GET" and path == "/api/anvil/chat/history":
+            before_text = self._one(query, "before") if query.get("before") else ""
+            before = int(before_text) if before_text and before_text.isdecimal() else None
+            if before_text and before is None:
+                raise ValidationError("Chat history cursor is invalid")
+            return 200, self.service.chat_history(before=before,
+                limit=self._int_query(query, "limit", 30, 1, 100))
+        if method == "POST" and path == "/api/anvil/chat/clear":
+            return 200, self.service.clear_conversation()
         raise NotFoundError("Analytics API route was not found")
 
     @staticmethod

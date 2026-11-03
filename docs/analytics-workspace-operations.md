@@ -31,9 +31,13 @@ Service readiness requires installed code, an enabled/active unit (or managed fa
 | Preview/query asks for a warehouse | Remote Databricks SQL needs an explicitly selected warehouse | Choose a warehouse by name; remote queries start a stopped selection and wait, subject to workspace permission |
 | Ask Anvil degraded | OpenCode is missing, unsupported or not responding | Check `make inspect`, close conflicting runtime processes, then retry the service/chat |
 | Local SQL or materialization unavailable | Managed dependency runtime is missing/unhealthy, provider access is unavailable, or disk is insufficient | Run `make upgrade` to restore release-pinned DuckDB/PyArrow; review provider and disk readiness. Do not use system `pip` as a recovery path |
+| Local copy needs to be updated | Parquet and recorded schema disagree, or coverage cannot be proven | Update the local copy when remote access is available; a recoverable legacy copy is reconciled automatically at startup |
+| Materialization failed after some chunks | Transfer lost connectivity or the provider returned an error | Use Retry; Anvil resumes verified chunks if the remote result still exists, otherwise starts a clean generation; CURRENT remains available |
 | WSL page does not open | Windows localhost forwarding/firewall policy may be unavailable | Try the same configured port on Windows localhost; host-side changes are environment-specific and are not made by Anvil |
 
 The default Anvil-owned Databricks profile and authentication remain the only supported identity source. Run `make databricks-setup` if it has not been set up. Analytics does not log into Databricks independently, install its CLI implicitly during feature startup, or adopt an external profile. Warehouse start calls are made only after the query router selects remote Databricks execution; LOCAL and AUTO-to-LOCAL routes never start compute.
+
+The UI header resolves the authenticated Databricks identity from the selected Anvil profile. During a temporary provider outage it shows the last verified identity for that workspace. It never substitutes the Linux or WSL account name. Ask Anvil chat messages are projected into private SQLite for reload and pagination; the canonical OpenCode session remains the cognitive thread. Confirming Clear conversation rotates that session and preserves saved Analytics context, local data and favorites.
 
 ## Runtime update and migration
 
@@ -80,4 +84,4 @@ It binds to `127.0.0.1`, serves repository static assets, and uses fixtures in `
 
 ## Offline certification
 
-`make test` runs offline Anvil regressions and Analytics contracts/lifecycle fixtures. `make eval-analytics` emits `summary.md`, `report.json`, `scenarios.json` and JUnit-compatible `pytest.xml` under `artifacts/analytics-certification/`. The separate Firefox geometry run emits screenshots under `artifacts/analytics-production-hardening/ui/query-splitter/`. Offline checks use fake providers and do not install/download wheels or contact live Databricks, an OpenCode model, production credentials or a Windows browser.
+`make test` runs offline Anvil regressions and Analytics contracts/lifecycle fixtures. `make eval-analytics` emits `summary.md`, `report.json`, `scenarios.json` and JUnit-compatible `pytest.xml` under `artifacts/analytics-certification/`. The separate Firefox geometry run emits screenshots under `artifacts/analytics-local-reliability/ui/final/`. Offline checks use fake providers and do not install/download wheels or contact live Databricks, an OpenCode model, production credentials or a Windows browser. The physical legacy fixture requires the pinned DuckDB/PyArrow environment; run `/path/to/analytics-python -m unittest discover -s tests/analytics -p 'test_legacy_physical.py' -q` when system Python does not contain those packages.

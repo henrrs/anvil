@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.19.0] - 2026-11-03 (candidate; live workspace certification remains environment-specific)
+
+- Migrated legacy LocalDataset pointers automatically and verified persisted Parquet against canonical Arrow and DuckDB schemas; internal validator faults no longer misclassify valid data as corrupt.
+- Removed implicit row and byte limits from All rows acquisition. Explicit row bounds produce limited coverage, while manifest totals and disk checks prevent silent truncation.
+- Added chunk-level network retries, signed-link refresh, restart-safe checkpoint resume, and clean new generations after remote result expiry. CURRENT stays available until a complete replacement is published.
+- Added a bounded, configurable parallel materialization worker pool with FIFO queuing and per-table writer leases; Home shows measured progress and actionable Resume/Retry states.
+- Resolved the header from the authenticated Databricks identity with a private workspace cache, persisted Ask Anvil history across reloads, and made Clear conversation rotate the canonical session.
+- Reorganized Home content, aligned production/mock markup, expanded visual scenarios and physical/offline regression coverage. Live corporate Databricks and installed OpenCode certification remain machine-specific.
+
 ## [2.18.0] - 2026-11-02 (candidate; live provider and real-workspace certification remain environment-specific)
 
 - Made LOCAL/AUTO query routing coverage-first, with aggregate-aware `QueryRequirements`; verified local readiness against coverage metadata, physical Parquet schema and DuckDB schema, failing closed on mismatch or unverified physical schema.

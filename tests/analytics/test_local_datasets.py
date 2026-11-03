@@ -95,6 +95,9 @@ class AnalyticsLocalDatasetTests(unittest.TestCase):
             "staging": [],
         }), encoding="utf-8")
         self.service._table_coverage_metadata = lambda _name: (None, "")
+        # This endpoint test uses placeholder bytes; physical Parquet validation
+        # is certified separately with real Arrow/Parquet fixtures.
+        self.service._validate_local_snapshot = lambda _snapshot: None
 
         status, coverage = self.api.handle(
             "GET", "/api/tables/" + self.source + "/coverage", {})

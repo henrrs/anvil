@@ -72,8 +72,8 @@ class AcquisitionPlan:
     source_version: str
     projection: tuple[str, ...]
     predicate: str
-    max_rows: int
-    max_bytes: int
+    max_rows: int | None
+    max_bytes: int | None
     estimated_bytes: int | None
     force_refresh: bool
     intent_projection: tuple[str, ...] | None = None
@@ -89,7 +89,8 @@ class AcquisitionPlan:
         sql = f"SELECT {fields} FROM {source}"
         if self.predicate:
             sql += " WHERE " + self.predicate
-        sql += f" LIMIT {self.max_rows}"
+        if self.max_rows is not None:
+            sql += f" LIMIT {self.max_rows}"
         return sql
 
 
@@ -434,8 +435,8 @@ def rewrite_expression_identifiers(value: str, quote: str = '"') -> str:
 
 def plan_materialization(*, workspace_identity: str, source_name: str,
                          projection: list[str] | tuple[str, ...], predicate: str = "",
-                         source_version: str = "", max_rows: int = 100_000,
-                         max_bytes: int = 512 * 1024 * 1024,
+                         source_version: str = "", max_rows: int | None = None,
+                         max_bytes: int | None = None,
                          estimated_bytes: int | None = None,
                          full_table_confirmed: bool = False,
                          force_refresh: bool = False,
@@ -453,13 +454,13 @@ def plan_materialization(*, workspace_identity: str, source_name: str,
     if columns != ("*",) and any(not column or any(ord(char) < 32 or char in "/\\;" for char in column)
                                   for column in columns):
         raise ValidationError("Materialization columns must be simple catalog column names")
-    if not 1 <= max_rows <= 1_000_000:
-        raise ValidationError("Materialization row bound must be between 1 and 1000000")
-    if not 1_048_576 <= max_bytes <= 1_073_741_824:
-        raise ValidationError("Materialization byte bound must be between 1 MiB and 1 GiB")
+    if max_rows is not None and (type(max_rows) is not int or not 1 <= max_rows <= 10_000_000_000):
+        raise ValidationError("Explicit materialization row bound must be between 1 and 10 billion")
+    if max_bytes is not None and (type(max_bytes) is not int or not 1_048_576 <= max_bytes <= 100 * 1024 ** 3):
+        raise ValidationError("Explicit materialization byte bound must be between 1 MiB and 100 GiB")
     if estimated_bytes is not None and estimated_bytes < 0:
         raise ValidationError("Estimated source size must not be negative")
-    if estimated_bytes is not None and estimated_bytes > max_bytes:
+    if estimated_bytes is not None and max_bytes is not None and estimated_bytes > max_bytes:
         raise ValidationError("Estimated materialization size exceeds the configured byte limit")
     source_version = source_version.strip()[:200] or "UNVERIFIED"
     probe_projection = "*" if columns == ("*",) else ", ".join(quote_identifier(c) for c in columns)

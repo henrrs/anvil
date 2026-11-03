@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "anvil_version": "2.17.0",
+  "anvil_version": "2.19.0",
   "status": "PASS",
-  "run_at": "2026-11-01T23:04:23Z",
-  "duration_seconds": 11.413,
+  "run_at": "2026-11-03T09:22:58Z",
+  "duration_seconds": 17.312,
   "totals": {
-    "tests": 93,
+    "tests": 148,
     "failures": 0,
     "errors": 0,
     "skipped": 0
@@ -15,11 +15,11 @@
       "id": "context_store",
       "description": "SQLite context, privacy, WAL, migration and search",
       "status": "PASS",
-      "tests": 8,
+      "tests": 10,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 0.039,
+      "duration_seconds": 0.058,
       "cases": [
         {
           "id": "tests.analytics.test_store.AnalyticsContextStoreTests.test_catalog_hydration_progress_is_persisted_and_bounded",
@@ -42,6 +42,16 @@
           "message": ""
         },
         {
+          "id": "tests.analytics.test_store.AnalyticsContextStoreTests.test_local_dataset_metadata_is_unique_and_round_trips",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_store.AnalyticsContextStoreTests.test_operation_heartbeat_preserves_checkpoint_and_requires_current_owner",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_store.AnalyticsContextStoreTests.test_private_paths_are_outside_managed_config_and_sqlite_uses_wal",
           "status": "PASS",
           "message": ""
@@ -52,7 +62,7 @@
           "message": ""
         },
         {
-          "id": "tests.analytics.test_store.AnalyticsContextStoreTests.test_v2_catalog_hydration_schema_migrates_to_v3",
+          "id": "tests.analytics.test_store.AnalyticsContextStoreTests.test_v2_catalog_hydration_schema_migrates_to_v5_and_preserves_rows",
           "status": "PASS",
           "message": ""
         },
@@ -67,11 +77,11 @@
       "id": "catalog",
       "description": "Shared Databricks capability, cached catalog and lazy hydration",
       "status": "PASS",
-      "tests": 14,
+      "tests": 15,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 1.838,
+      "duration_seconds": 2.025,
       "cases": [
         {
           "id": "tests.analytics.test_catalog.AnalyticsCatalogTests.test_catalog_hydration_is_scoped_lazy_paginated_and_cached",
@@ -90,6 +100,11 @@
         },
         {
           "id": "tests.analytics.test_catalog.AnalyticsCatalogTests.test_confirmed_empty_permission_error_and_unloaded_are_distinct",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_catalog.AnalyticsCatalogTests.test_explicit_transfer_starts_a_stopped_warehouse",
           "status": "PASS",
           "message": ""
         },
@@ -171,14 +186,49 @@
       "id": "query_materialization",
       "description": "Read-only routing, coverage, Parquet snapshots and resumable transfer",
       "status": "PASS",
-      "tests": 16,
+      "tests": 42,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 0.091,
+      "duration_seconds": 0.436,
       "cases": [
         {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_all_intent_and_selected_type_changes_are_stale_schema",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_all_rows_plan_has_no_implicit_remote_or_sql_limit",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_auto_falls_back_to_remote_for_mismatch_or_missing_duckdb",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_auto_reports_remote_unavailable_when_local_coverage_is_insufficient",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_auto_route_uses_only_the_selected_workspace_local_copy",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_auto_uses_local_for_covered_aggregate_without_remote_or_warehouse",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_count_star_is_covered_by_full_rows_without_required_columns",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_coverage_is_scoped_to_the_workspace_and_predicate_subsets_are_proven",
           "status": "PASS",
           "message": ""
         },
@@ -188,7 +238,17 @@
           "message": ""
         },
         {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_expired_remote_result_starts_clean_generation",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_explicit_remote_route_records_the_actual_route",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_failed_materialization_retains_checkpoint_and_resumes",
           "status": "PASS",
           "message": ""
         },
@@ -198,22 +258,67 @@
           "message": ""
         },
         {
-          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_full_table_and_unsafe_materialization_plans_require_confirmation_or_fail",
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_full_4_7m_row_result_and_network_reset_after_seven_chunks",
           "status": "PASS",
           "message": ""
         },
         {
-          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_interrupted_materialization_resumes_checkpoint_without_duplicate_query",
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_full_table_projection_needs_no_generic_confirmation_but_unsafe_plans_fail",
           "status": "PASS",
           "message": ""
         },
         {
-          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_local_parser_accepts_simple_select_but_defers_joins_and_ctes",
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_internal_schema_verifier_failure_is_not_physical_corruption",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_legacy_dataset_state_is_normalized_to_current_schema_version",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_legacy_duplicate_reconciliation_selects_the_broadest_verified_generation",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_local_aggregate_reports_missing_column_and_never_falls_back",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_local_coverage_requires_filter_columns_for_duckdb_execution",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_local_engine_rejects_coverage_that_disagrees_with_duckdb_schema",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_local_engine_runs_original_aggregate_against_local_snapshot",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_local_parser_extracts_query_requirements_but_defers_joins_and_ctes",
           "status": "PASS",
           "message": ""
         },
         {
           "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_local_routing_needs_proven_coverage_and_never_calls_remote",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_local_schema_is_not_claimed_ready_without_independent_parquet_reader",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_local_type_normalizer_executes_without_name_error",
           "status": "PASS",
           "message": ""
         },
@@ -228,12 +333,22 @@
           "message": ""
         },
         {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_materialization_planner_reuses_broad_copy_and_expands_partial_copy",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_materialization_service_uses_shared_plan_and_hides_provider_checkpoint_details",
           "status": "PASS",
           "message": ""
         },
         {
           "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_missing_pyarrow_degrades_before_remote_query",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_missing_remote_result_starts_clean_generation",
           "status": "PASS",
           "message": ""
         },
@@ -248,12 +363,42 @@
           "message": ""
         },
         {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_persisted_table_lock_prevents_duplicate_mutations",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_pointer_manifest_and_parquet_files_are_validated",
           "status": "PASS",
           "message": ""
         },
         {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_progress_uses_verified_rows_and_omits_unknown_percentage",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_remote_results_are_bounded_even_when_adapter_returns_too_much",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_selected_intent_survives_an_unrequested_new_remote_column",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_shared_snapshot_reader_lock_blocks_exclusive_generation_cleanup",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_startup_reconciles_every_nonterminal_phase_and_preserves_current",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_query_materialization.QueryCoverageTests.test_transient_chunk_failure_retries_only_the_failed_chunk",
           "status": "PASS",
           "message": ""
         }
@@ -263,11 +408,11 @@
       "id": "runtime_sessions",
       "description": "OpenCode 1/2 adapters, runtime warmup, canonical and task sessions",
       "status": "PASS",
-      "tests": 10,
+      "tests": 18,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 1.618,
+      "duration_seconds": 2.273,
       "cases": [
         {
           "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_adapter_is_loopback_only_and_does_not_follow_redirects",
@@ -275,7 +420,22 @@
           "message": ""
         },
         {
+          "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_analytics_model_policy_fails_closed_on_provider_discovery_or_model_miss",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_ask_anvil_surfaces_provider_discovery_failure_before_creating_or_prompting_session",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_ask_anvil_uses_global_context_canonical_session_and_distills_deep_work",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_chat_history_rehydrates_and_clear_resets_canonical_thread",
           "status": "PASS",
           "message": ""
         },
@@ -286,6 +446,21 @@
         },
         {
           "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_crash_before_runtime_identity_persist_reconciles_by_title",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_databricks_cli_tls_errors_are_classified_without_echoing_provider_text",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_databricks_identity_survives_temporary_provider_failure",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_dead_persisted_runtime_discards_adapter_and_starts_a_new_runtime",
           "status": "PASS",
           "message": ""
         },
@@ -310,6 +485,16 @@
           "message": ""
         },
         {
+          "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_provider_discovery_uses_a_larger_route_specific_bounded_response",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_service_principal_identity_is_not_os_user",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_runtime.OpenCodeRuntimeTests.test_service_startup_warms_canonical_session_and_keeps_ui_usable_when_runtime_is_missing",
           "status": "PASS",
           "message": ""
@@ -325,14 +510,34 @@
       "id": "dependency_runtime",
       "description": "Release-pinned Analytics dependencies, drift repair and safe staging",
       "status": "PASS",
-      "tests": 4,
+      "tests": 13,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 0.075,
+      "duration_seconds": 3.717,
       "cases": [
         {
+          "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_corporate_index_is_authoritative_and_public_fallback_is_explicit",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_dependency_action_cli_contracts_are_strict_and_do_not_fall_through",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_dependency_drift_is_rebuilt_and_imports_revalidated",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_disabled_fallback_never_attempts_public_source",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_explicit_fallback_uses_public_only_after_primary_package_failure",
           "status": "PASS",
           "message": ""
         },
@@ -342,12 +547,37 @@
           "message": ""
         },
         {
+          "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_local_corporate_package_index_stages_and_activates_exact_pins",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_registry_credentials_are_redacted_from_logs_and_user_output",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_release_lock_is_exact_and_content_addressed",
           "status": "PASS",
           "message": ""
         },
         {
+          "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_service_candidate_uses_final_runtime_path_not_hidden_stage_path",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_stage_is_not_active_until_activation_and_can_be_restored",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_validated_environment_is_published_only_after_all_pins_install",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_dependencies.AnalyticsDependencyTests.test_venv_python_symlinks_are_validated_by_prefix_and_execution",
           "status": "PASS",
           "message": ""
         }
@@ -357,11 +587,11 @@
       "id": "service_lifecycle",
       "description": "systemd ownership, MainPID, unit verification and service convergence",
       "status": "PASS",
-      "tests": 6,
+      "tests": 11,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 0.137,
+      "duration_seconds": 0.288,
       "cases": [
         {
           "id": "tests.analytics.test_service_management.AnalyticsServiceManagementTests.test_activate_fails_if_daemon_reload_fails",
@@ -369,7 +599,17 @@
           "message": ""
         },
         {
+          "id": "tests.analytics.test_service_management.AnalyticsServiceManagementTests.test_fallback_child_environment_does_not_inherit_unrelated_secrets",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_service_management.AnalyticsServiceManagementTests.test_generated_unit_passes_systemd_analyze_verify",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_service_management.AnalyticsServiceManagementTests.test_recognized_legacy_anvil_listener_is_stopped_gracefully",
           "status": "PASS",
           "message": ""
         },
@@ -384,12 +624,27 @@
           "message": ""
         },
         {
+          "id": "tests.analytics.test_service_management.AnalyticsServiceManagementTests.test_sync_repairs_managed_203_exec_unit_before_starting_service",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_service_management.AnalyticsServiceManagementTests.test_systemd_mainpid_zero_is_not_ready_even_when_health_answers",
           "status": "PASS",
           "message": ""
         },
         {
+          "id": "tests.analytics.test_service_management.AnalyticsServiceManagementTests.test_unit_includes_only_readable_trust_files_from_allowlist",
+          "status": "PASS",
+          "message": ""
+        },
+        {
           "id": "tests.analytics.test_service_management.AnalyticsServiceManagementTests.test_unit_uses_prepared_python_and_quoted_working_directory",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_service_management.AnalyticsServiceManagementTests.test_unknown_port_owner_is_never_signaled",
           "status": "PASS",
           "message": ""
         }
@@ -403,7 +658,7 @@
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 0.005,
+      "duration_seconds": 0.002,
       "cases": [
         {
           "id": "tests.analytics.test_warehouse_lifecycle.AnalyticsWarehouseLifecycleTests.test_permission_failure_is_actionable_and_timeout_is_explicit",
@@ -431,11 +686,11 @@
       "id": "http_ui",
       "description": "Loopback BFF, same-origin API, static UI and contextual SSE",
       "status": "PASS",
-      "tests": 7,
+      "tests": 8,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 3.536,
+      "duration_seconds": 4.034,
       "cases": [
         {
           "id": "tests.analytics.test_http_ui.AnalyticsHTTPTests.test_api_is_same_origin_and_returns_json",
@@ -454,6 +709,11 @@
         },
         {
           "id": "tests.analytics.test_http_ui.AnalyticsHTTPTests.test_chat_uses_validated_json_and_streams_server_sent_events",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_http_ui.AnalyticsHTTPTests.test_delete_local_copy_and_no_body_materialization_actions",
           "status": "PASS",
           "message": ""
         },
@@ -478,14 +738,19 @@
       "id": "frontend_ui",
       "description": "Static UI contracts, accessible resizable SQL/results split and mock scenarios",
       "status": "PASS",
-      "tests": 11,
+      "tests": 14,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 1.47,
+      "duration_seconds": 1.501,
       "cases": [
         {
           "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_active_indicator_is_bound_to_inner_tab_content",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_ask_anvil_badge_shows_resolved_model_and_provider_without_scattered_model_ids",
           "status": "PASS",
           "message": ""
         },
@@ -496,6 +761,16 @@
         },
         {
           "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_final_polish_keeps_clear_action_scoped_and_context_compact",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_local_operation_only_disables_conflicting_materialization_action",
+          "status": "PASS",
+          "message": ""
+        },
+        {
+          "id": "tests.analytics.test_ui_mock.AnalyticsUIMockTests.test_materialization_validation_is_inline_and_all_columns_has_no_extra_gate",
           "status": "PASS",
           "message": ""
         },
@@ -549,7 +824,7 @@
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 0.535,
+      "duration_seconds": 0.539,
       "cases": [
         {
           "id": "tests.analytics.test_tools_service.AnalyticsServiceExtendedTests.test_compare_requires_complete_matching_result_sets",
@@ -601,7 +876,7 @@
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 1.773,
+      "duration_seconds": 2.113,
       "cases": [
         {
           "id": "lifecycle",
@@ -618,7 +893,7 @@
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 0.108,
+      "duration_seconds": 0.104,
       "cases": [
         {
           "id": "frontend_syntax",
@@ -635,7 +910,7 @@
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 0.112,
+      "duration_seconds": 0.142,
       "cases": [
         {
           "id": "python_syntax",

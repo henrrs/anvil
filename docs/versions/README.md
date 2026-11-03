@@ -18,7 +18,16 @@ Anvil 2.17.0 adds release-pinned Analytics dependencies, lifecycle/service/OpenC
 
 Anvil 2.18.0 makes Analytics routing coverage-first, hardens materialization recovery and service TLS trust, and resolves Ask Anvil against the active provider catalog. Both OpenCode 1 and OpenCode 2 use the same validated logical model policy; no runtime-major migration is required.
 
+Anvil 2.19.0 migrates legacy local datasets, removes hidden All rows limits, resumes verified transfer chunks, schedules different tables concurrently, and persists Databricks identity and Ask Anvil history. Both OpenCode 1 and OpenCode 2 retain the same Analytics contract. See [release notes](v2.19.0.md), [migration](../migrations/v2.18.0-to-v2.19.0.md), and [engineering report](../analytics-local-reliability-report.md).
+
 Anvil 2.17.1 hardens real installed-state convergence: candidate systemd validation, staged-interpreter identity, stale runtime recovery, dependency rollback ordering, verified journal recovery and SQLite schema rollback. It preserves the same OpenCode 1/2 and Analytics contracts.
+
+| Anvil 2.19 Analytics capability | OpenCode 1 | OpenCode 2 |
+|---|---|---|
+| Legacy Parquet reconciliation and full-row acquisition | Shared contract | Shared contract |
+| Resumable chunks and parallel table scheduling | Shared contract | Shared contract |
+| Databricks identity cache and persistent chat projection | Shared contract | Shared contract |
+| Live corporate workspace certification in offline suite | No | No |
 
 | Anvil 2.18 Analytics capability | OpenCode 1 | OpenCode 2 |
 |---|---|---|

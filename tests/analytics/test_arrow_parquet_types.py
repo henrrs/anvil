@@ -19,7 +19,7 @@ try:
 except ImportError:
     duckdb = None
 
-from scripts.analytics.planner import QueryPlan
+from scripts.analytics.planner import parse_local_query
 from scripts.analytics.query import DuckDBLocalEngine
 from scripts.analytics.transfer import PyArrowChunkCodec
 
@@ -102,7 +102,7 @@ class AnalyticsArrowParquetTypeTests(unittest.TestCase):
             self.assertEqual(restored.column("nested_value")[0].as_py()["samples"][0]["value"], 1.5)
 
             result = DuckDBLocalEngine().query(
-                QueryPlan("", "main.silver.type_matrix", ("*",)),
+                parse_local_query("SELECT * FROM main.silver.type_matrix"),
                 {"files": [parquet_path]}, max_rows=10, max_bytes=1024 * 1024)
             self.assertEqual(result["columns"], schema.names)
             self.assertEqual(result["row_count"], 2)

@@ -47,8 +47,38 @@
       this.operations = ["materializing", "active-operation"].includes(scenario) ? [{
         operation_id: "mat-live-01", kind: "MATERIALIZATION", state: "RUNNING",
         source_name: "main.finance.payment_events", rows: 84_200, bytes: 18_400_000,
-        started_at: isoDaysAgo(0), progress: 68,
+        started_at: isoDaysAgo(0), percent: 68, planned_rows: 123_824,
+        completed_rows: 84_200, completed_bytes: 18_400_000, completed_chunks: 7, total_chunks: 11,
       }] : [];
+      if (["parallel-materializations", "queued-materialization"].includes(scenario)) this.operations = [
+        { operation_id: "mat-a", kind: "MATERIALIZATION", state: "RUNNING", phase: "DOWNLOADING_ARROW",
+          source_name: "main.finance.transactions", percent: 50, planned_rows: 4_714_788,
+          completed_rows: 2_357_394, completed_bytes: 426_000_000, completed_chunks: 21, total_chunks: 42 },
+        { operation_id: "mat-b", kind: "MATERIALIZATION", state: "RUNNING", phase: "WRITING_PARQUET",
+          source_name: "main.finance.payment_events", percent: null,
+          completed_rows: 180_000, completed_bytes: 43_000_000, completed_chunks: 2 },
+        { operation_id: "mat-c", kind: "MATERIALIZATION", state: "QUEUED", phase: "QUEUED",
+          source_name: "main.operations.inventory_position", percent: null },
+      ];
+      if (scenario === "half-progress") this.operations = [{ operation_id: "mat-half", kind: "MATERIALIZATION",
+        state: "RUNNING", phase: "DOWNLOADING_ARROW", source_name: "main.finance.transactions",
+        percent: 50, planned_rows: 4_714_788, completed_rows: 2_357_394,
+        completed_bytes: 426_000_000, completed_chunks: 21, total_chunks: 42 }];
+      if (["failed-operations", "resumable-transfer", "network-retry"].includes(scenario)) this.operations = [{
+        operation_id: "mat-resume", kind: "MATERIALIZATION", state: "FAILED", phase: "RESUMABLE",
+        source_name: "main.finance.transactions", percent: 13.4, planned_rows: 4_714_788,
+        completed_rows: 630_784, completed_bytes: 149_200_000, completed_chunks: 7,
+        total_chunks: 52, resume_available: true, failure_reason: "TRANSFER_ERROR" }];
+      this.chatStorageKey = `anvil:analytics:mock-chat:${scenario}`;
+      this.chatStorage = global.sessionStorage || { getItem: () => null, setItem: () => {} };
+      try { this.chatMessages = JSON.parse(this.chatStorage.getItem(this.chatStorageKey) || "null"); }
+      catch { this.chatMessages = null; }
+      if (!Array.isArray(this.chatMessages)) this.chatMessages = scenario === "persistent-chat" ? [
+        { id: 1, role: "user", content: "What changed in transactions?" },
+        { id: 2, role: "assistant", content: "The latest local copy has 482,211 rows." },
+        { id: 3, role: "user", content: "Is the coverage complete?" },
+        { id: 4, role: "assistant", content: "Yes. All columns and rows are covered." },
+      ] : [];
       this.materializationStarted = new Map();
     }
 
@@ -60,6 +90,18 @@
       const query = url.searchParams;
 
       if (pathname === "/api/me") return this._me();
+      if (pathname === "/api/anvil/chat/history" && method === "GET") {
+        const before = Number(query.get("before") || Number.MAX_SAFE_INTEGER);
+        const limit = Math.min(100, Math.max(1, Number(query.get("limit") || 30)));
+        const older = this.chatMessages.filter((item) => item.id < before);
+        const items = older.slice(-limit);
+        return { items, next_before: older.length > limit ? items[0].id : null };
+      }
+      if (pathname === "/api/anvil/chat/clear" && method === "POST") {
+        this.chatMessages = [];
+        this.chatStorage.setItem(this.chatStorageKey, JSON.stringify(this.chatMessages));
+        return { cleared: true, session_id: "mock-new-thread" };
+      }
       if (pathname === "/api/runtime") return this._me().status.runtime;
       if (pathname === "/api/warehouses") return this._warehouses();
       if (pathname === "/api/warehouses/refresh" && method === "POST") return this._warehouses(true);
@@ -121,13 +163,19 @@
         await new Promise((resolve) => global.setTimeout(resolve, 35));
       }
       onEvent?.("done", { state: "completed", session: "mock-canonical" });
+      const next = this.chatMessages.length ? this.chatMessages.at(-1).id + 1 : 1;
+      this.chatMessages.push({ id: next, role: "user", content: prompt },
+        { id: next + 1, role: "assistant", content: answer });
+      this.chatStorage.setItem(this.chatStorageKey, JSON.stringify(this.chatMessages));
     }
 
     _me() {
       const offline = this.scenario === "offline";
       const degraded = this.scenario === "degraded";
       return {
-        name: "Henrique", identity_source: "mock", workspace: "https://adb-demo.azuredatabricks.net",
+        name: "Henrique Engineer", identity_source: this.scenario === "identity-degraded" ? "databricks_cache" : "databricks",
+        identity_type: "user", user_name: "henrique@example.com",
+        workspace: "https://adb-demo.azuredatabricks.net",
         profile: "anvil-demo", databricks_configured: true,
         status: {
           runtime: { status: degraded ? "DEGRADED" : "READY", generation: 2,
@@ -214,6 +262,10 @@
       const fullName = suffix.replace(/\/(preview|coverage|lineage|profile)$/, "");
       if (isPreview) return { status: "READY", columns: COLUMNS.slice(0, 5).map((column) => column.name), rows: ROWS.slice(0, 5).map((row) => row.slice(0, 5)), row_count: 5, truncated: false };
       if (isCoverage) {
+        if (this.scenario === "local-needs-update" && fullName.endsWith("old_local_copy"))
+          return { covered: false, state: "INVALID", reason: "Local copy needs to be updated",
+            snapshot_id: "mock-invalid", columns: COLUMNS.map((column) => column.name),
+            rows: 0, bytes: 12_000_000, rows_mode: "FULL", columns_mode: "ALL" };
         const local = fullName.endsWith("transactions") ? "full" : fullName.endsWith("payment_events") ? "partial" : "remote";
         const sourceIsFull = local === "full";
         const sourceIsPartial = local === "partial";
@@ -245,11 +297,14 @@
     }
 
     _queryHistory() {
-      return [
+      const base = [
         { id: 91, sql_text: "SELECT status, count(*) AS transactions FROM main.finance.transactions GROUP BY status", route: "LOCAL", status: "SUCCESS", row_count: 5, created_at: isoDaysAgo(0) },
         { id: 90, sql_text: "SELECT channel, sum(amount_usd) FROM main.finance.transactions GROUP BY channel", route: "DATABRICKS", status: "SUCCESS", row_count: 4, created_at: isoDaysAgo(1) },
         { id: 89, sql_text: "SELECT * FROM main.finance.payment_events LIMIT 100", route: "DATABRICKS", status: "FAILED", error_code: "WORKSPACE_UNREACHABLE", created_at: isoDaysAgo(2) },
       ];
+      return this.scenario === "many-recent" ? base.concat(Array.from({ length: 12 }, (_, index) => ({
+        id: 80 - index, sql_text: `SELECT * FROM main.finance.local_table_${index} LIMIT 100`,
+        route: "LOCAL", status: "SUCCESS", row_count: 100, created_at: isoDaysAgo(index + 1) }))) : base;
     }
 
     _materializations() {
@@ -260,14 +315,28 @@
     }
 
     _datasets() {
-      return [
+      const datasets = [
         { dataset_id: "mock-dataset-transactions", source_name: "main.finance.transactions", state: "READY",
           columns: COLUMNS.map((column) => column.name), columns_mode: "ALL", rows_mode: "FULL",
           rows: 482_211, bytes: 2_118_342_144, updated_at: isoDaysAgo(0.3) },
         { dataset_id: "mock-dataset-payment-events", source_name: "main.finance.payment_events", state: "READY",
           columns: COLUMNS.slice(0, 3).map((column) => column.name), columns_mode: "SELECTED", rows_mode: "FILTERED",
           rows: 84_200, bytes: 18_400_000, updated_at: isoDaysAgo(1) },
-      ].concat([...((this.localCopies || new Map()).values())])
+      ];
+      if (["legacy-migrating", "many-local"].includes(this.scenario)) datasets.push({
+        dataset_id: "mock-legacy", source_name: "main.finance.ied_compute_adf", state: "READY",
+        columns: Array.from({ length: 37 }, (_, index) => `column_${index + 1}`),
+        columns_mode: "ALL", rows_mode: "FULL", rows: 468_684, bytes: 20_971_520,
+        updated_at: isoDaysAgo(0.1) });
+      if (this.scenario === "local-needs-update") datasets.push({
+        dataset_id: "mock-invalid", source_name: "main.finance.old_local_copy", state: "INVALID",
+        columns: COLUMNS.map((column) => column.name), rows: 0, bytes: 12_000_000,
+        updated_at: isoDaysAgo(1) });
+      if (this.scenario === "many-local") for (let index = 0; index < 7; index++) datasets.push({
+        dataset_id: `mock-local-${index}`, source_name: `main.finance.local_table_${index}`, state: "READY",
+        columns: COLUMNS.map((column) => column.name), rows: 100_000 + index,
+        bytes: 25_000_000 + index * 100_000, updated_at: isoDaysAgo(index) });
+      return datasets.concat([...((this.localCopies || new Map()).values())])
         .filter((item) => !this.deletedDatasets?.has(item.dataset_id));
     }
 
@@ -294,6 +363,7 @@
     }
 
     _startMaterialization(body) {
+      this.lastMaterializationRequest = { ...body };
       const operationId = `mock-materialize-${++this.operationCounter}`;
       const operation = { operation_id: operationId, kind: "MATERIALIZATION", state: "RUNNING",
         source_name: String(body.source_name || "main.finance.transactions"), rows: 0, bytes: 0, progress: 8,
@@ -310,6 +380,16 @@
         const operation = this.operations.find((item) => item.operation_id === id);
         if (operation) operation.state = "CANCELLED";
         return { operation_id: id, state: "CANCELLED" };
+      }
+      if (suffix.endsWith("/retry") && method === "POST") {
+        const id = suffix.slice(0, -"/retry".length);
+        const operation = this.operations.find((item) => item.operation_id === id);
+        if (!operation) throw this._error("NOT_FOUND", "Materialization was not found.", 404);
+        operation.state = "RUNNING";
+        operation.phase = "DOWNLOADING_ARROW";
+        operation.resume_available = false;
+        this.materializationStarted.set(id, Date.now());
+        return { ...operation };
       }
       const id = suffix.replace(/\/(refresh)$/, "");
       const operation = this.operations.find((item) => item.operation_id === id) || {

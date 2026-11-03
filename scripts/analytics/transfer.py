@@ -7,6 +7,7 @@ import ipaddress
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import socket
@@ -30,6 +31,8 @@ from .planner import AcquisitionPlan
 from .store import ContextStore
 
 MAX_CHUNKS = 100_000
+MAX_CHUNK_BYTES = 2 * 1024 ** 3
+CHUNK_RETRY_ATTEMPTS = 4
 DOWNLOAD_TIMEOUT_SECONDS = 120
 _LOG = logging.getLogger(__name__)
 
@@ -183,14 +186,16 @@ class ExternalLinkDownloader:
             raise
         except urllib.error.HTTPError as exc:
             _unlink(destination)
-            code = "TRANSFER_LINK_EXPIRED" if exc.code in {401, 403, 404} else "TRANSFER_HTTP_FAILED"
+            code = ("TRANSFER_LINK_EXPIRED" if exc.code in {401, 403, 404} else
+                    "TRANSFER_HTTP_FAILED" if exc.code >= 500 or exc.code == 429 else
+                    "TRANSFER_HTTP_REJECTED")
             raise UnavailableError("The Databricks result chunk download failed",
-                                   code=code, retryable=True) from None
-        except urllib.error.URLError:
+                                   code=code, retryable=code != "TRANSFER_HTTP_REJECTED") from None
+        except (urllib.error.URLError, TimeoutError, ssl.SSLError, ConnectionError):
             _unlink(destination)
             raise UnavailableError("The Databricks result chunk could not be downloaded",
                                    code="TRANSFER_NETWORK_FAILED", retryable=True) from None
-        except Exception:
+        except OSError:
             _unlink(destination)
             raise UnavailableError("The Databricks result chunk could not be downloaded",
                                    code="TRANSFER_NETWORK_FAILED", retryable=True) from None
@@ -245,8 +250,8 @@ class MaterializationTransfer:
                         "snapshot_id": existing_operation.checkpoint.get("snapshot_id", ""), "reused": True}
             free = shutil.disk_usage(root).free
             estimated_local = plan.estimated_bytes if plan.estimated_bytes is not None else plan.max_bytes
-            if free < estimated_local:
-                raise ConflictError("There is not enough local disk space for the estimated materialization",
+            if estimated_local is not None and free < estimated_local:
+                raise ConflictError("Not enough local disk space to safely create this local copy",
                                     code="DISK_SPACE_INSUFFICIENT")
             snapshots.mkdir(mode=0o700, exist_ok=True)
             self.paths.secure_directory(snapshots)
@@ -260,7 +265,7 @@ class MaterializationTransfer:
                 staging_ids = [item for item in staging_ids if isinstance(item, str)]
                 if plan.operation_id not in staging_ids:
                     staging_ids.append(plan.operation_id)
-                atomic_dataset_state(root, {**state, "version": 1, "staging": staging_ids[-100:]})
+                atomic_dataset_state(root, {**state, "version": 2, "staging": staging_ids[-100:]})
             operation = self.store.operation_get(plan.operation_id)
             payload = {"plan": plan.as_dict(), "warehouse_id": warehouse_id,
                        "profile": profile or "", "principal": principal[:256]}
@@ -269,11 +274,10 @@ class MaterializationTransfer:
                 return {"operation_id": plan.operation_id, "state": "READY",
                         "snapshot_id": operation.checkpoint.get("snapshot_id", ""), "reused": True}
             if operation and operation.state.value in {"FAILED", "CANCELLED", "PAUSED"}:
-                self._cleanup_staging(plan, root, staging)
                 raise ConflictError("This operation is terminal; retry it as a new materialization",
                                     code="OPERATION_NOT_RESUMABLE")
             owner = str(checkpoint.get("worker_instance_id") or "")
-            if owner and worker_instance_id and owner != worker_instance_id:
+            if owner and worker_instance_id and owner != worker_instance_id and not checkpoint.get("resume_available"):
                 raise ConflictError("This operation belongs to another worker instance",
                                     code="OPERATION_NOT_RESUMABLE")
             checkpoint = {**checkpoint,
@@ -282,7 +286,7 @@ class MaterializationTransfer:
                           "created_at": checkpoint.get("created_at") or _now_utc(),
                           "started_at": checkpoint.get("started_at") or _now_utc(),
                           "heartbeat_at": _now_utc()}
-            if checkpoint.get("phase") in {"SUBMITTING", "SUBMISSION_UNKNOWN"} and not checkpoint.get("statement_id"):
+            if checkpoint.get("phase") in {"SUBMITTING", "SUBMITTING_QUERY", "SUBMISSION_UNKNOWN"} and not checkpoint.get("statement_id"):
                 raise ConflictError("Databricks submission status is unknown; retry with a new materialization operation",
                                     code="SUBMISSION_STATUS_UNKNOWN")
             checkpoint = {**checkpoint, "phase": checkpoint.get("phase", "PLANNED")}
@@ -294,19 +298,24 @@ class MaterializationTransfer:
                     self._put_operation(plan, payload, "CANCELLED", {**checkpoint, "phase": "CANCELLED"})
                     return {"operation_id": plan.operation_id, "state": "CANCELLED", "completed_chunks": 0}
                 if not statement_id:
-                    checkpoint["phase"] = "SUBMITTING"
+                    checkpoint["phase"] = "STARTING_WAREHOUSE"
                     self._put_operation(plan, payload, "RUNNING", checkpoint)
                     _transfer_event("materialization_remote_transfer_started",
                                     source_name=plan.source_name,
                                     workspace_identity=plan.workspace_identity,
                                     warehouse_id=warehouse_id)
+                    def warehouse_ready() -> None:
+                        checkpoint["phase"] = "SUBMITTING_QUERY"
+                        self._put_operation(plan, payload, "RUNNING", checkpoint)
+
                     submitted = self.provider.transfer_submit(
                         plan.statement(), warehouse_id, profile=profile,
-                        max_rows=plan.max_rows, max_bytes=plan.max_bytes, timeout=min(timeout, 600))
+                        max_rows=plan.max_rows, max_bytes=plan.max_bytes, timeout=min(timeout, 600),
+                        on_warehouse_ready=warehouse_ready)
                     statement_id = submitted.get("statement_id") if isinstance(submitted, dict) else None
                     if not isinstance(statement_id, str) or not statement_id or len(statement_id) > 128:
                         raise IntegrityError("Databricks returned an invalid transfer identifier")
-                    checkpoint.update({"phase": "FETCHING", "statement_id": statement_id})
+                    checkpoint.update({"phase": "WAITING_FOR_RESULT", "statement_id": statement_id})
                     self._put_operation(plan, payload, "RUNNING", checkpoint)
                     response = submitted
                 else:
@@ -322,12 +331,26 @@ class MaterializationTransfer:
                                         code="MATERIALIZATION_LIMIT_REACHED")
                 total_rows = manifest.get("total_row_count")
                 total_bytes = manifest.get("total_byte_count")
-                if isinstance(total_rows, int) and total_rows > plan.max_rows:
+                if isinstance(total_rows, int) and plan.max_rows is not None and total_rows > plan.max_rows:
                     raise ConflictError("The result exceeded the configured row limit",
                                         code="MATERIALIZATION_LIMIT_REACHED")
-                if isinstance(total_bytes, int) and total_bytes > plan.max_bytes:
+                if isinstance(total_bytes, int) and plan.max_bytes is not None and total_bytes > plan.max_bytes:
                     raise ConflictError("The result exceeded the configured byte limit",
                                         code="MATERIALIZATION_LIMIT_REACHED")
+                if isinstance(total_bytes, int) and shutil.disk_usage(root).free < total_bytes:
+                    raise ConflictError("Not enough local disk space to safely create this local copy",
+                                        code="DISK_SPACE_INSUFFICIENT")
+                result_fingerprint = self.result_fingerprint(statement_id, manifest)
+                if (checkpoint.get("remote_result_fingerprint") and
+                        checkpoint["remote_result_fingerprint"] != result_fingerprint):
+                    raise ConflictError("The remote result changed; restart this local copy from a clean transfer",
+                                        code="REMOTE_RESULT_CHANGED")
+                checkpoint.update({"remote_result_fingerprint": result_fingerprint,
+                                   "planned_rows": total_rows if isinstance(total_rows, int) else None,
+                                   "estimated_total_bytes": total_bytes if isinstance(total_bytes, int) else None,
+                                   "total_chunks": manifest.get("total_chunk_count"),
+                                   "phase": "RESULT_READY", "resume_available": True})
+                self._put_operation(plan, payload, "RUNNING", checkpoint)
                 checkpoint["phase"] = "DOWNLOADING_ARROW"
                 self._put_operation(plan, payload, "RUNNING", checkpoint)
                 count = manifest.get("total_chunk_count", 0)
@@ -335,6 +358,7 @@ class MaterializationTransfer:
                     raise IntegrityError("Databricks returned an invalid result chunk count")
                 result = response.get("result") if isinstance(response.get("result"), dict) else {}
                 links = result.get("external_links") if isinstance(result.get("external_links"), list) else []
+                completed = self._verified_chunks(staging, checkpoint)
                 for index in range(count):
                     if cancel_requested and cancel_requested():
                         try:
@@ -346,7 +370,6 @@ class MaterializationTransfer:
                     if self.monotonic() >= deadline:
                         raise UnavailableError("Materialization timed out; downloaded chunk progress was preserved",
                                                code="MATERIALIZATION_TIMEOUT", retryable=True)
-                    completed = self._verified_chunks(staging, checkpoint)
                     if index in completed:
                         continue
                     link_record = self._find_link(links, index)
@@ -357,28 +380,23 @@ class MaterializationTransfer:
                     if link_record is None:
                         raise IntegrityError("Databricks did not return a signed URL for a result chunk")
                     expected_bytes = link_record.get("byte_count")
+                    if isinstance(expected_bytes, int) and shutil.disk_usage(root).free < expected_bytes * 2:
+                        raise ConflictError("Not enough local disk space to safely create this local copy",
+                                            code="DISK_SPACE_INSUFFICIENT")
                     arrow_path = staging / (f"chunk-{index:06d}.arrow")
                     try:
-                        try:
-                            downloaded_bytes, digest = self.downloader.download(
-                                link_record["external_link"], arrow_path, max_bytes=plan.max_bytes)
-                        except UnavailableError as first_error:
-                            if first_error.code != "TRANSFER_LINK_EXPIRED":
-                                raise
-                            fresh = self.provider.transfer_chunk(statement_id, index, warehouse_id,
-                                                                 profile=profile, timeout=60)
-                            renewed = self._find_link_from_response(fresh, index)
-                            if renewed is None:
-                                raise
-                            expected_bytes = renewed.get("byte_count", expected_bytes)
-                            downloaded_bytes, digest = self.downloader.download(
-                                renewed["external_link"], arrow_path, max_bytes=plan.max_bytes)
+                        downloaded_bytes, digest, expected_bytes = self._download_with_retry(
+                            statement_id, index, warehouse_id, profile, link_record,
+                            arrow_path, plan.max_bytes or MAX_CHUNK_BYTES, deadline)
                         if isinstance(expected_bytes, int) and downloaded_bytes != expected_bytes:
                             raise IntegrityError("A transferred Arrow chunk does not match its declared byte count")
                         existing_bytes = sum(item.get("bytes", 0) for item in checkpoint.get("chunks", []))
-                        if downloaded_bytes + existing_bytes > plan.max_bytes:
+                        if plan.max_bytes is not None and downloaded_bytes + existing_bytes > plan.max_bytes:
                             raise ConflictError("The transfer exceeded its configured byte limit",
                                                 code="MATERIALIZATION_LIMIT_REACHED")
+                        if shutil.disk_usage(root).free < max(downloaded_bytes, 16 * 1024 ** 2):
+                            raise ConflictError("Not enough local disk space to safely create this local copy",
+                                                code="DISK_SPACE_INSUFFICIENT")
                         parquet_path = staging / (f"chunk-{index:06d}.parquet.tmp")
                         checkpoint["phase"] = "WRITING_PARQUET"
                         self._put_operation(plan, payload, "RUNNING", checkpoint)
@@ -390,7 +408,7 @@ class MaterializationTransfer:
                         parquet_bytes = parquet_path.stat().st_size
                         if parquet_bytes <= 0:
                             raise IntegrityError("Arrow conversion produced an empty Parquet file")
-                        if parquet_bytes + sum(item.get("parquet_bytes", 0)
+                        if plan.max_bytes is not None and parquet_bytes + sum(item.get("parquet_bytes", 0)
                                                for item in checkpoint.get("chunks", [])) > plan.max_bytes:
                             raise ConflictError("The local Parquet snapshot exceeded its configured byte limit",
                                                 code="MATERIALIZATION_LIMIT_REACHED")
@@ -412,6 +430,9 @@ class MaterializationTransfer:
                         checkpoint["columns"] = list(stats.columns or expected_columns)
                         checkpoint["phase"] = "DOWNLOADING_ARROW"
                         self._put_operation(plan, payload, "RUNNING", checkpoint)
+                        _transfer_event("materialization_chunk_completed", operation_id=plan.operation_id,
+                                        chunk_index=index, rows=stats.row_count,
+                                        completed_chunks=len(checkpoint["chunks"]), total_chunks=count)
                         _unlink(arrow_path)
                         _unlink(parquet_path)
                         if progress:
@@ -439,6 +460,8 @@ class MaterializationTransfer:
                 self._put_operation(plan, payload, "RUNNING", checkpoint)
                 if cancel_requested and cancel_requested():
                     raise ConflictError("Materialization was canceled", code="CANCELLED_BY_USER")
+                checkpoint["phase"] = "ACTIVATING"
+                self._put_operation(plan, payload, "RUNNING", checkpoint)
                 committed = self._publish(plan, staging, root, checkpoint, manifest,
                                           principal=principal)
                 self._put_operation(plan, payload, "READY", {**checkpoint, "phase": "READY",
@@ -451,6 +474,8 @@ class MaterializationTransfer:
                                 snapshot_id=committed["snapshot_id"],
                                 rows=committed["row_count"],
                                 bytes=committed["parquet_bytes"])
+                _transfer_event("materialization_completed", operation_id=plan.operation_id,
+                                source_name=plan.source_name, rows=committed["row_count"])
                 return {"operation_id": plan.operation_id, "state": "READY",
                         "snapshot_id": committed["snapshot_id"], "rows": committed["row_count"],
                         "bytes": committed["byte_count"], "reused": False}
@@ -468,11 +493,18 @@ class MaterializationTransfer:
                           else "PARQUET_WRITE_ERROR" if "PARQUET" in safe_code or "ARROW" in safe_code
                           else "VALIDATION_FAILED" if isinstance(exc, IntegrityError)
                           else safe_code)
-                self._put_operation(plan, payload, state,
-                                    {**checkpoint, "phase": state, "failure_reason": reason,
-                                     "failed_at": _now_utc()}, safe_code)
-                if state in {"FAILED", "CANCELLED"}:
+                resumable = bool(state == "FAILED" and getattr(exc, "retryable", False) and
+                                 checkpoint.get("statement_id") and
+                                 checkpoint.get("remote_result_fingerprint"))
+                checkpoint.update({"phase": "RESUMABLE" if resumable else state,
+                                   "resume_available": resumable,
+                                   "failure_reason": reason, "failed_at": _now_utc()})
+                self._put_operation(plan, payload, state, checkpoint, safe_code)
+                if not resumable:
                     self._cleanup_staging(plan, root, staging)
+                if safe_code in {"REMOTE_RESULT_EXPIRED", "REMOTE_RESULT_CHANGED"}:
+                    _transfer_event("materialization_result_expired", operation_id=plan.operation_id,
+                                    reason_code=safe_code)
                 _transfer_event("materialization_cancelled" if state == "CANCELLED" else
                                 "materialization_failed", operation_id=plan.operation_id,
                                 source_name=plan.source_name, reason_code=reason)
@@ -503,7 +535,7 @@ class MaterializationTransfer:
                                        code="MATERIALIZATION_TIMEOUT", retryable=True)
             if progress and polls % 5 == 0:
                 progress({"operation_id": plan.operation_id, "state": state or "RUNNING",
-                          "phase": "REMOTE_QUERY"})
+                          "phase": "WAITING_FOR_RESULT"})
             self.sleep(min(2.0, max(0.0, deadline - self.monotonic())))
             response = self.provider.transfer_status(statement_id, warehouse_id, profile=profile,
                                                      timeout=min(120, max(5, int(deadline - self.monotonic()))))
@@ -531,6 +563,43 @@ class MaterializationTransfer:
         if result.get("chunk_index", index) == index and isinstance(result.get("external_link"), str):
             return result
         return None
+
+    @staticmethod
+    def result_fingerprint(statement_id: str, manifest: dict[str, Any]) -> str:
+        stable = {"statement_id": statement_id}
+        for key in ("format", "total_chunk_count", "total_row_count", "total_byte_count", "schema", "truncated"):
+            stable[key] = manifest.get(key)
+        return hashlib.sha256(json.dumps(stable, sort_keys=True,
+            separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+
+    def _download_with_retry(self, statement_id: str, index: int, warehouse_id: str,
+                             profile: str | None, link: dict[str, Any], destination: Path,
+                             max_bytes: int, deadline: float) -> tuple[int, str, Any]:
+        current = link
+        for attempt in range(CHUNK_RETRY_ATTEMPTS):
+            try:
+                size, digest = self.downloader.download(current["external_link"], destination,
+                                                        max_bytes=min(max_bytes, MAX_CHUNK_BYTES))
+                return size, digest, current.get("byte_count")
+            except UnavailableError as exc:
+                _unlink(destination)
+                if not exc.retryable or attempt + 1 >= CHUNK_RETRY_ATTEMPTS:
+                    raise
+                if exc.code == "TRANSFER_LINK_EXPIRED":
+                    renewed = self.provider.transfer_chunk(statement_id, index, warehouse_id,
+                                                           profile=profile, timeout=60)
+                    new_link = self._find_link_from_response(renewed, index)
+                    if new_link is None:
+                        raise UnavailableError("The Databricks result link could not be renewed",
+                                               code="REMOTE_RESULT_EXPIRED", retryable=False) from exc
+                    current = new_link
+                delay = min(4.0, 0.25 * (2 ** attempt) + random.uniform(0.0, 0.25))
+                _transfer_event("materialization_chunk_retry", chunk_index=index,
+                                attempt=attempt + 1, reason_code=exc.code)
+                if self.monotonic() + delay >= deadline:
+                    raise
+                self.sleep(delay)
+        raise AssertionError("unreachable retry state")
 
     def _verified_chunks(self, staging: Path, checkpoint: dict[str, Any]) -> set[int]:
         valid: set[int] = set()
@@ -583,7 +652,9 @@ class MaterializationTransfer:
                     "selected_columns": list(plan.intent_projection or plan.projection),
                     "all_columns": (plan.intent_projection or plan.projection) == ("*",),
                     "columns_mode": "ALL" if (plan.intent_projection or plan.projection) == ("*",) else "SELECTED",
-                    "rows_mode": "FILTERED" if plan.predicate else "FULL",
+                    "rows_mode": "LIMITED" if plan.max_rows is not None else
+                                 "FILTERED" if plan.predicate else "FULL",
+                    "row_limit": plan.max_rows,
                     "predicate": plan.predicate, "complete": True,
                     "row_count": rows, "bytes": total_bytes,
                     "parquet_bytes": parquet_bytes, "files": file_names,
@@ -648,7 +719,15 @@ class MaterializationTransfer:
                         previous = None
             stage_ids = old_state.get("staging") if isinstance(old_state.get("staging"), list) else []
             stage_ids = [item for item in stage_ids if item != plan.operation_id and isinstance(item, str)]
-            published = {"version": 1,
+            published = {**old_state, "version": 2, "schema_version": 2,
+                         "table_identity": source_key(plan.source_name, plan.workspace_identity),
+                         "coverage": {"columns_mode": manifest["columns_mode"],
+                                      "rows_mode": manifest["rows_mode"],
+                                      "predicate": plan.predicate},
+                         "source_schema": {"identity": manifest.get("source_schema_identity") or
+                                           manifest.get("schema_identity") or ""},
+                         "physical_schema": (old_state.get("physical_schema", {}) if old_pointer and
+                                             old_pointer.get("snapshot_id") == snapshot_id else {}),
                          "current": {"snapshot_id": snapshot_id,
                                      "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))},
                          "previous": previous, "staging": stage_ids[-100:]}

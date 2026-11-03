@@ -53,6 +53,27 @@ class SharedDatabricksCatalogClient:
     def __init__(self, page_call: Callable[..., dict[str, Any]] | None = None) -> None:
         self._page_call = page_call
 
+    def current_identity(self, *, profile: str) -> dict[str, str]:
+        """Use the selected Anvil profile's existing CLI/SDK auth capability."""
+        try:
+            response = _shared_module().json_from_cli(["current-user", "me"], profile=profile,
+                                                       timeout=15)
+        except Exception as exc:
+            raise ProviderError("Databricks identity is temporarily unavailable",
+                                code=str(getattr(exc, "category", "IDENTITY_UNAVAILABLE")),
+                                retryable=True) from exc
+        identity = response.get("identity") if isinstance(response, dict) and isinstance(response.get("identity"), dict) else response
+        if not isinstance(identity, dict):
+            raise ProviderError("Databricks returned an invalid identity", code="IDENTITY_INVALID")
+        principal = str(identity.get("userName") or identity.get("user_name") or
+                        identity.get("applicationId") or identity.get("id") or "")
+        if not principal:
+            raise ProviderError("Databricks returned an identity without a principal", code="IDENTITY_INVALID")
+        kind = ("service_principal" if identity.get("applicationId") or identity.get("servicePrincipalName")
+                else "user")
+        return {"display_name": str(identity.get("displayName") or identity.get("display_name") or principal),
+                "user_name": principal, "identity_type": kind}
+
     def page(self, operation: str, **parameters: Any) -> dict[str, Any]:
         try:
             call = self._page_call or _shared_module().unity_catalog_page
@@ -150,11 +171,13 @@ class SharedDatabricksCatalogClient:
                                                        "CLI_PROCESS_TIMEOUT", "SDK_PROCESS_TIMEOUT"}) from exc
 
     def transfer_submit(self, statement: str, warehouse_id: str, *, profile: str | None = None,
-                        max_rows: int = 100_000, max_bytes: int = 512 * 1024 * 1024,
-                        timeout: int = 120) -> dict[str, Any]:
+                        max_rows: int | None = None, max_bytes: int | None = None,
+                        timeout: int = 120,
+                        on_warehouse_ready: Any | None = None) -> dict[str, Any]:
         return self._transfer_call("start_sql_transfer", statement, warehouse_id,
                                    profile=profile, max_rows=max_rows,
-                                   max_bytes=max_bytes, timeout=timeout)
+                                   max_bytes=max_bytes, timeout=timeout,
+                                   on_warehouse_ready=on_warehouse_ready)
 
     def transfer_status(self, statement_id: str, warehouse_id: str, *,
                         profile: str | None = None, timeout: int = 120) -> dict[str, Any]:

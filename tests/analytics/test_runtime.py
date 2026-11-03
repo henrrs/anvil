@@ -431,6 +431,64 @@ class OpenCodeRuntimeTests(unittest.TestCase):
         finally:
             service.close()
 
+    def test_databricks_identity_survives_temporary_provider_failure(self):
+        calls = iter([{"display_name": "Henrique Engineer", "user_name": "henrique@example.com",
+                       "identity_type": "user"}, RuntimeError("provider down")])
+        service = AnalyticsService(paths=self.paths, store=self.store,
+                                   identity=lambda: next(calls), web_root=Path(self.temp.name))
+        try:
+            with patch.object(service, "_profile_selection", return_value={
+                "name": "anvil-prod", "host": "https://workspace.example"}):
+                self.assertEqual(service.me()["name"], "Henrique Engineer")
+                self.assertEqual(service.me()["name"], "Henrique Engineer")
+        finally:
+            service.close()
+
+    def test_service_principal_identity_is_not_os_user(self):
+        service = AnalyticsService(paths=self.paths, store=self.store,
+            identity=lambda: {"display_name": "Anvil Automation", "user_name": "spn-123",
+                              "identity_type": "service_principal"},
+            web_root=Path(self.temp.name))
+        try:
+            with patch.object(service, "_profile_selection", return_value={
+                "name": "anvil-prod", "host": "https://workspace.example"}):
+                identity = service.me()
+            self.assertEqual(identity["name"], "Anvil Automation")
+            self.assertEqual(identity["identity_type"], "service_principal")
+            self.assertEqual(identity["user_name"], "spn-123")
+        finally:
+            service.close()
+
+    def test_chat_history_rehydrates_and_clear_resets_canonical_thread(self):
+        adapter = ChatFakeOpenCode()
+        runtime = AnalyticsRuntimeManager(self.paths,
+            runtime={"supported": True, "generation": 1, "version": "1.19.0", "executable": "/fake/opencode"},
+            base_url=adapter.base_url, adapter=adapter)
+        sessions = AnalyticsSessionManager(runtime, self.store, paths=self.paths)
+        service = AnalyticsService(paths=self.paths, store=self.store, runtime=runtime,
+                                   sessions=sessions, web_root=Path(self.temp.name))
+        try:
+            service.ask_anvil("First question")
+            service.ask_anvil("Second question")
+            before = json.loads(self.paths.runtime.read_text(encoding="utf-8"))["canonical_session_id"]
+            self.assertEqual([item["role"] for item in service.chat_history()["items"]],
+                             ["user", "assistant", "user", "assistant"])
+            for index in range(101):
+                self.store.chat_message_add(before, "assistant", f"archived message {index}")
+            recent = service.chat_history(limit=100)
+            self.assertEqual(len(recent["items"]), 100)
+            self.assertIsNotNone(recent["next_before"])
+            older = service.chat_history(before=recent["next_before"], limit=100)
+            self.assertEqual(len(older["items"]), 5)
+            self.assertIsNone(older["next_before"])
+            service.clear_conversation()
+            after = json.loads(self.paths.runtime.read_text(encoding="utf-8"))["canonical_session_id"]
+            self.assertNotEqual(before, after)
+            self.assertEqual(service.chat_history()["items"], [])
+            self.assertEqual(self.store.knowledge_recent(limit=5), [])
+        finally:
+            service.close()
+
     def test_ask_anvil_surfaces_provider_discovery_failure_before_creating_or_prompting_session(self):
         class NoProviderCatalog(ChatFakeOpenCode):
             def providers(self):

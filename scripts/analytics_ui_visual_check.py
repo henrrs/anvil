@@ -25,8 +25,8 @@ from analytics_ui_mock import make_server
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "artifacts" / "analytics-active-tab-indicator" / "final"
-SPLITTER_OUTPUT = ROOT / "artifacts" / "analytics-production-hardening" / "ui" / "query-splitter"
+OUTPUT = ROOT / "artifacts" / "analytics-local-reliability" / "ui" / "final"
+SPLITTER_OUTPUT = OUTPUT / "query-splitter"
 SIZES = ((1366, 768), (1920, 1080), (2560, 1440), (3840, 2160))
 VIEWS = {
     "healthy": "home",
@@ -206,9 +206,6 @@ def certify_clear_conversation(browser: Browser, base: str) -> None:
       const messages = thread.querySelectorAll('.chat-message').length;
       const keys = ['anvil:analytics:recent-tables:v1', 'anvil:analytics:favorites:v1'];
       const stored = keys.map((key) => localStorage.getItem(key));
-      let requests = 0;
-      const nativeFetch = window.fetch.bind(window);
-      window.fetch = (...args) => { requests += 1; return nativeFetch(...args); };
       trigger.click();
       const opened = !panel.hidden && trigger.getAttribute('aria-expanded') === 'true'
         && thread.querySelectorAll('.chat-message').length === messages;
@@ -216,16 +213,20 @@ def certify_clear_conversation(browser: Browser, base: str) -> None:
       const cancelled = panel.hidden && thread.querySelectorAll('.chat-message').length === messages;
       trigger.click();
       document.querySelector('#confirm-clear-chat').click();
-      return {opened, cancelled, cleared: thread.querySelectorAll('.chat-message').length === 0
-          && thread.textContent.includes('canonical Analytics session remains available'),
+      return {opened, cancelled,
         stillContextual: document.querySelector('#context-card').textContent === context,
         persistentStatePreserved: keys.every((key, index) => localStorage.getItem(key) === stored[index]),
-        noRequest: requests === 0,
         icon: trigger.querySelector('svg path')?.getAttribute('d')?.startsWith('M4 7h16'),
         label: trigger.getAttribute('aria-label') === 'Clear conversation',
         tooltip: trigger.title === 'Clear conversation'};
     """)
     require(all(result.values()), f"clear conversation behavior regressed: {result}")
+    for _ in range(40):
+        cleared = browser.js("return document.querySelector('#chat-thread').textContent.includes('Start a new Ask Anvil conversation.') && document.querySelectorAll('#chat-thread .chat-message').length === 0;")
+        if cleared:
+            break
+        time.sleep(.05)
+    require(cleared, "clearing chat did not replace the visible canonical conversation")
     for width, height in ((1366, 768), (1920, 1080), (3840, 2160)):
         browser.load(f"{base}/dev/?scenario=ask-anvil", width, height)
         fits = browser.js("""
@@ -432,7 +433,7 @@ def certify_local_intelligence(browser: Browser, base: str) -> None:
         removal: removalMessage.includes('remote Databricks table will not be changed'),
         noTechnicalBounds: !document.querySelector('#materialize-rows') && !document.querySelector('#materialize-mib'),
         allRowsDefault: allRows.checked && filter.disabled,
-        confirmationRequired: !document.querySelector('#confirm-full-table-row').classList.contains('hidden'),
+        noRedundantConfirmation: !document.querySelector('#confirm-full-table-row'),
         noGenerationId: !document.querySelector('#table-section-content').textContent.includes('snapshot-'),
         dialog: dialog.open};
     """)
@@ -440,7 +441,6 @@ def certify_local_intelligence(browser: Browser, base: str) -> None:
     browser.screenshot("local-copy-acquisition-dialog-1920x1080.png")
 
     payload = browser.js("""
-      document.querySelector('#confirm-full-table').checked = true;
       const client = window.anvilAnalyticsApi;
       const request = client.request.bind(client);
       client.request = (path, options = {}) => {
@@ -458,10 +458,10 @@ def certify_local_intelligence(browser: Browser, base: str) -> None:
       document.querySelector('#confirm-materialize').click();
       return window.__capturedMaterialization;
     """)
-    require(payload and payload["columns"] == ["*"] and payload["full_table_confirmed"]
-            and payload["predicate"] == "" and payload["max_rows"] == 1_000_000
-            and payload["max_bytes"] == 1_073_741_824,
-            f"all-column/all-row acquisition request was not explicit or correctly bounded: {payload}")
+    require(payload and payload["columns"] == ["*"]
+            and payload["predicate"] == "" and "max_rows" not in payload
+            and "max_bytes" not in payload,
+            f"all-column/all-row acquisition request contains hidden limits: {payload}")
     for _ in range(20):
         progress = browser.js("return document.querySelector('#materialize-feedback').textContent;")
         if "Writing local Parquet files" in progress:
@@ -505,6 +505,70 @@ def certify_local_intelligence(browser: Browser, base: str) -> None:
             and "Executing query" in query_progress["message"] and not query_progress["hasTechnicalId"],
             f"query progress is not visible and user-readable in Results: {query_progress}")
     browser.screenshot("query-progress-1920x1080.png")
+
+
+def certify_home_reliability(browser: Browser, base: str) -> None:
+    scenarios = (
+        "healthy", "home-populated", "parallel-materializations", "half-progress",
+        "resumable-transfer", "local-needs-update", "legacy-migrating",
+        "many-local", "many-recent", "persistent-chat", "identity-degraded",
+    )
+    for width, height in ((1920, 1080), (3840, 2160)):
+        for scenario in scenarios:
+            browser.load(f"{base}/dev/?scenario={scenario}", width, height)
+            state = browser.js("""
+              const operation = document.querySelector('#home-operations');
+              const content = document.querySelector('#analytics-home').textContent;
+              return {overflow: document.documentElement.scrollWidth > innerWidth + 1,
+                operations: operation.querySelectorAll('.operation-row').length,
+                progress: [...operation.querySelectorAll('[role=progressbar]')].map(item =>
+                  item.getAttribute('aria-valuenow')),
+                hasLegacyStatus: content.includes('NEEDS_RECONCILIATION'),
+                local: document.querySelectorAll('#home-local-datasets .local-dataset-row').length,
+                chat: document.querySelectorAll('#chat-thread .chat-message').length,
+                header: document.querySelector('#user-name').textContent};
+            """)
+            require(not state["overflow"] and not state["hasLegacyStatus"],
+                    f"Home overflow or internal state leaked: {scenario} {width}: {state}")
+            if scenario == "parallel-materializations":
+                require(state["operations"] == 3 and "50" in state["progress"] and
+                        None in state["progress"], f"parallel progress absent: {state}")
+            if scenario == "half-progress":
+                require(state["operations"] == 1 and state["progress"] == ["50"],
+                        f"halfway percentage absent: {state}")
+            if scenario == "resumable-transfer":
+                require(state["operations"] == 1 and "13.4" in state["progress"] and
+                        browser.js("return document.querySelector('#home-operations').textContent.includes('Resume');"),
+                        f"resumable failure not actionable: {state}")
+            if scenario in {"legacy-migrating", "many-local"}:
+                require(state["local"] >= 2, f"legacy/local data not visible: {state}")
+            if scenario == "persistent-chat":
+                require(state["chat"] >= 4, f"chat was not rehydrated: {state}")
+            if scenario == "identity-degraded":
+                require("Henrique" in state["header"], f"cached Databricks identity absent: {state}")
+            browser.screenshot(f"home-{scenario}-{width}x{height}.png")
+            print(f"PASS Home reliability {scenario} {width}x{height}")
+
+
+def certify_chat_reload(browser: Browser, base: str) -> None:
+    url = f"{base}/dev/?scenario=persistent-chat"
+    browser.load(url, 1920, 1080)
+    require(browser.js("return document.querySelectorAll('#chat-thread .chat-message').length === 4;"),
+            "existing Ask Anvil conversation was not shown")
+    browser.load(url, 1920, 1080)
+    require(browser.js("return document.querySelectorAll('#chat-thread .chat-message').length === 4;"),
+            "Ask Anvil conversation disappeared after page reload")
+    browser.js("document.querySelector('#clear-chat').click(); document.querySelector('#confirm-clear-chat').click(); return true;")
+    for _ in range(40):
+        if browser.js("return document.querySelector('#chat-thread').textContent.includes('Start a new Ask Anvil conversation.');"):
+            break
+        time.sleep(.05)
+    else:
+        raise AssertionError("confirmed Clear conversation did not reset the visible thread")
+    browser.load(url, 1920, 1080)
+    require(browser.js("return document.querySelectorAll('#chat-thread .chat-message').length === 0;"),
+            "cleared Ask Anvil conversation reappeared after reload")
+    print("PASS Ask Anvil reload and confirmed clear persistence")
 
 
 def certify(browser: Browser, base: str) -> None:
@@ -594,6 +658,8 @@ def certify(browser: Browser, base: str) -> None:
     certify_tab_close(browser, base)
     certify_query_splitter(browser, base)
     certify_local_intelligence(browser, base)
+    certify_home_reliability(browser, base)
+    certify_chat_reload(browser, base)
     for width, height in ((1920, 1080), (3840, 2160)):
         browser.load(f"{base}/dev/?scenario=home-populated&tabs=many", width, height)
         require(browser.js("return document.querySelector('#workspace-tabs').scrollWidth >= document.querySelector('#workspace-tabs').clientWidth && document.querySelector('.workspace-tab.active .workspace-tab-label')?.textContent === 'Query 9';"),

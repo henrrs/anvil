@@ -100,13 +100,16 @@ class FakeTransferProvider:
         self.submit_count = 0
         self.chunk_requests = []
         self.cancel_count = 0
+        self.status_state = "SUCCEEDED"
 
     def transfer_submit(self, statement, warehouse_id, **kwargs):
         self.submit_count += 1
         return self.success_response(include_first_link=True)
 
     def transfer_status(self, statement_id, warehouse_id, **kwargs):
-        return self.success_response(include_first_link=True)
+        result = self.success_response(include_first_link=True)
+        result["status"]["state"] = self.status_state
+        return result
 
     def transfer_chunk(self, statement_id, chunk_index, warehouse_id, **kwargs):
         self.chunk_requests.append(chunk_index)
@@ -131,14 +134,15 @@ class FakeTransferProvider:
 
 
 class FakeDownloader:
-    def __init__(self, *, fail_url_once=""):
+    def __init__(self, *, fail_url_once="", fail_url_always=""):
         self.calls = []
         self.fail_url_once = fail_url_once
+        self.fail_url_always = fail_url_always
         self.failed = False
 
     def download(self, url, destination, *, max_bytes, timeout=120):
         self.calls.append(url)
-        if self.fail_url_once and url == self.fail_url_once and not self.failed:
+        if url == self.fail_url_always or (self.fail_url_once and url == self.fail_url_once and not self.failed):
             self.failed = True
             raise UnavailableError("transfer down", code="TRANSFER_NETWORK_FAILED", retryable=True)
         payload = b"chunk-0" if "chunk-0" in url else b"chunk-1"
@@ -266,6 +270,14 @@ class QueryCoverageTests(unittest.TestCase):
         local_rows = self.coverage.list_local_datasets("workspace-a")
         self.assertEqual(len(local_rows), 1)
         self.assertEqual(local_rows[0]["snapshot_id"], "f" * 64)
+
+    def test_legacy_dataset_state_is_normalized_to_current_schema_version(self):
+        from scripts.analytics.coverage import dataset_state
+        self.publish(workspace_identity="workspace-a")
+        root = self.coverage.dataset_root(self.source, "workspace-a")
+        old = dataset_state(root)
+        self.assertEqual(old["schema_version"], 2)
+        self.assertEqual(old["current_generation"], old["current"]["snapshot_id"])
 
     def test_selected_intent_survives_an_unrequested_new_remote_column(self):
         self.publish(columns=("order_id", "status"), workspace_identity="workspace-a")
@@ -407,6 +419,20 @@ class QueryCoverageTests(unittest.TestCase):
                  "files": [Path("/path/that/does/not/exist.parquet")]})
         self.assertEqual(raised.exception.code, "LOCAL_SCHEMA_UNVERIFIED")
 
+    def test_local_type_normalizer_executes_without_name_error(self):
+        from scripts.analytics.query import _local_type
+        self.assertEqual(_local_type("string"), "string")
+        self.assertEqual(_local_type("decimal(18, 2)"), "decimal(18,2)")
+
+    def test_internal_schema_verifier_failure_is_not_physical_corruption(self):
+        from unittest.mock import patch
+        with patch("scripts.analytics.query._local_type", side_effect=NameError("verifier bug")):
+            with self.assertRaises(CoverageError) as raised:
+                DuckDBLocalEngine.validate_snapshot_schema(
+                    _FakeDuckDBConnection(), {"manifest": {"columns": ["order_id", "status"]}},
+                    physical_columns=[("order_id", "string"), ("status", "string")])
+        self.assertEqual(raised.exception.code, "INTERNAL_SCHEMA_VALIDATION_ERROR")
+
     def test_auto_uses_local_for_covered_aggregate_without_remote_or_warehouse(self):
         self.publish(columns=("order_id", "status"), all_columns=False)
         local, remote = FakeLocalEngine(), FakeRemote()
@@ -520,10 +546,16 @@ class QueryCoverageTests(unittest.TestCase):
         self.assertIn("LIMIT 500", plan.statement())
         self.assertNotIn("SELECT *", plan.statement())
         self.assertEqual(plan.max_rows, 500)
-
         filtered = plan_materialization(workspace_identity="w", source_name=self.source,
             projection=["order_id"], predicate="status = 'failed'", source_version="v-10")
         self.assertEqual(filtered.projection, ("order_id", "status"))
+
+    def test_all_rows_plan_has_no_implicit_remote_or_sql_limit(self):
+        plan = plan_materialization(workspace_identity="workspace-hash", source_name=self.source,
+                                    projection=["*"], full_table_confirmed=True)
+        self.assertIsNone(plan.max_rows)
+        self.assertIsNone(plan.max_bytes)
+        self.assertNotIn(" LIMIT ", plan.statement().upper())
 
     def test_full_table_projection_needs_no_generic_confirmation_but_unsafe_plans_fail(self):
         with self.assertRaises(ValidationError):
@@ -538,8 +570,7 @@ class QueryCoverageTests(unittest.TestCase):
 
     def make_transfer_plan(self):
         return plan_materialization(workspace_identity="workspace-hash", source_name=self.source,
-            projection=["order_id", "status"], source_version="version-1", max_rows=10,
-            max_bytes=1_048_576)
+            projection=["order_id", "status"], source_version="version-1")
 
     def test_materialization_downloads_arrow_chunks_and_atomically_publishes_parquet(self):
         provider = FakeTransferProvider()
@@ -566,9 +597,9 @@ class QueryCoverageTests(unittest.TestCase):
         self.assertTrue(again["reused"])
         self.assertEqual(provider.submit_count, 1)
 
-    def test_failed_materialization_requires_a_new_operation_for_retry(self):
+    def test_failed_materialization_retains_checkpoint_and_resumes(self):
         provider = FakeTransferProvider()
-        downloader = FakeDownloader(fail_url_once="https://storage.example/chunk-1?sig=secret")
+        downloader = FakeDownloader(fail_url_always="https://storage.example/chunk-1?sig=secret")
         transfer = MaterializationTransfer(self.paths, self.store, provider,
                                            downloader=downloader, codec=FakeCodec(), sleep=lambda _: None)
         plan = self.make_transfer_plan()
@@ -580,23 +611,123 @@ class QueryCoverageTests(unittest.TestCase):
         self.assertEqual([item["index"] for item in failed.checkpoint["chunks"]], [0])
         staging = self.coverage.dataset_root(self.source, "workspace-hash") / "snapshots" / (
             "." + plan.operation_id + ".partial")
-        self.assertFalse(staging.exists())
+        self.assertTrue(staging.exists())
+        self.coverage.list_local_datasets("workspace-hash")
+        self.assertTrue(staging.exists(), "Home inventory must preserve resumable chunks")
         with self.assertRaisesRegex(ConflictError, "new materialization"):
             transfer.run(plan, "warehouse-1")
 
+        downloader.fail_url_always = ""
         service = MaterializationService(self.paths, self.store, provider, transfer=transfer)
+        result = service.retry(plan.operation_id)
+        self.assertEqual(result["state"], "READY")
+        self.assertEqual(result["operation_id"], plan.operation_id)
+        self.assertEqual(provider.submit_count, 1)
+        self.assertEqual(downloader.calls.count("https://storage.example/chunk-0?sig=secret"), 1)
+
+    def test_transient_chunk_failure_retries_only_the_failed_chunk(self):
+        provider = FakeTransferProvider()
+        downloader = FakeDownloader(fail_url_once="https://storage.example/chunk-1?sig=secret")
+        transfer = MaterializationTransfer(self.paths, self.store, provider,
+                                           downloader=downloader, codec=FakeCodec(), sleep=lambda _: None)
+        result = transfer.run(self.make_transfer_plan(), "warehouse-1")
+        self.assertEqual(result["state"], "READY")
+        self.assertEqual(downloader.calls.count("https://storage.example/chunk-0?sig=secret"), 1)
+        self.assertEqual(downloader.calls.count("https://storage.example/chunk-1?sig=secret"), 2)
+
+    def test_full_4_7m_row_result_and_network_reset_after_seven_chunks(self):
+        class LargeProvider(FakeTransferProvider):
+            @staticmethod
+            def success_response(*, include_first_link):
+                result = FakeTransferProvider.success_response(include_first_link=include_first_link)
+                result["manifest"].update({"total_chunk_count": 8,
+                                           "total_row_count": 4_714_788,
+                                           "total_byte_count": 56})
+                return result
+
+        class LargeCodec(FakeCodec):
+            def write_parquet(self, arrow_file, parquet_file):
+                parquet_file.write_bytes(b"parquet:" + arrow_file.read_bytes())
+                index = int(arrow_file.stem.split("-")[-1])
+                rows = 90_112 if index < 7 else 4_084_004
+                return ChunkStats(rows, ("order_id", "status"), "schema-v1")
+
+        provider = LargeProvider()
+        downloader = FakeDownloader(fail_url_once="https://storage.example/chunk-7?sig=secret")
+        transfer = MaterializationTransfer(self.paths, self.store, provider,
+                                           downloader=downloader, codec=LargeCodec(), sleep=lambda _: None)
+        plan = plan_materialization(workspace_identity="workspace-hash", source_name=self.source,
+                                    projection=["*"], source_version="version-1")
+        self.assertIsNone(plan.max_rows)
+        self.assertNotIn("LIMIT", plan.statement())
+        result = transfer.run(plan, "warehouse-1")
+        self.assertEqual(result["rows"], 4_714_788)
+        self.assertEqual(self.coverage.current(self.source, "workspace-hash")["manifest"]["rows_mode"], "FULL")
+        for index in range(7):
+            self.assertEqual(downloader.calls.count(f"https://storage.example/chunk-{index}?sig=secret"), 1)
+        self.assertEqual(downloader.calls.count("https://storage.example/chunk-7?sig=secret"), 2)
+
+    def test_expired_remote_result_starts_clean_generation(self):
+        provider = FakeTransferProvider()
+        downloader = FakeDownloader(fail_url_always="https://storage.example/chunk-1?sig=secret")
+        transfer = MaterializationTransfer(self.paths, self.store, provider,
+                                           downloader=downloader, codec=FakeCodec(), sleep=lambda _: None)
+        plan = self.make_transfer_plan()
+        with self.assertRaises(UnavailableError):
+            transfer.run(plan, "warehouse-1")
+        service = MaterializationService(self.paths, self.store, provider, transfer=transfer)
+        provider.status_state = "CLOSED"
+        downloader.fail_url_always = ""
         result = service.retry(plan.operation_id)
         self.assertEqual(result["state"], "READY")
         self.assertNotEqual(result["operation_id"], plan.operation_id)
         self.assertEqual(provider.submit_count, 2)
         self.assertEqual(downloader.calls.count("https://storage.example/chunk-0?sig=secret"), 2)
-        self.assertEqual(downloader.calls.count("https://storage.example/chunk-1?sig=secret"), 2)
+
+    def test_missing_remote_result_starts_clean_generation(self):
+        provider = FakeTransferProvider()
+        downloader = FakeDownloader(fail_url_always="https://storage.example/chunk-1?sig=secret")
+        transfer = MaterializationTransfer(self.paths, self.store, provider,
+                                           downloader=downloader, codec=FakeCodec(), sleep=lambda _: None)
+        plan = self.make_transfer_plan()
+        with self.assertRaises(UnavailableError):
+            transfer.run(plan, "warehouse-1")
+        provider.transfer_status = lambda *args, **kwargs: (_ for _ in ()).throw(
+            UnavailableError("remote result expired", code="REMOTE_RESULT_EXPIRED"))
+        downloader.fail_url_always = ""
+        service = MaterializationService(self.paths, self.store, provider, transfer=transfer)
+        retry_plan, _payload, _checkpoint = service.prepare_retry(plan.operation_id)
+        self.assertNotEqual(retry_plan.operation_id, plan.operation_id)
+        stage = self.coverage.dataset_root(self.source, "workspace-hash") / "snapshots" / (
+            "." + plan.operation_id + ".partial")
+        self.assertFalse(stage.exists())
+        self.assertFalse(service.status(plan.operation_id)["resume_available"])
+
+    def test_progress_uses_verified_rows_and_omits_unknown_percentage(self):
+        provider = FakeTransferProvider()
+        service = MaterializationService(self.paths, self.store, provider)
+        plan = self.make_transfer_plan()
+        chunks = [{"index": index, "rows": 90_112, "bytes": 21_314_285}
+                  for index in range(7)]
+        payload = {"plan": plan.as_dict(), "warehouse_id": "warehouse-1"}
+        self.store.operation_put(OperationRecord(plan.operation_id, "MATERIALIZATION",
+            MaterializationState.RUNNING, payload,
+            {"phase": "DOWNLOADING_ARROW", "chunks": chunks,
+             "planned_rows": 4_714_788, "total_chunks": 52}, ""))
+        status = service.status(plan.operation_id)
+        self.assertEqual(status["rows"], 630_784)
+        self.assertEqual(status["completed_chunks"], 7)
+        self.assertEqual(status["percent"], 13.4)
+        self.store.operation_checkpoint_update(plan.operation_id, {"planned_rows": None})
+        unknown = service.status(plan.operation_id)
+        self.assertIsNone(unknown["percent"])
+        self.assertEqual(unknown["rows"], 630_784)
 
     def test_failed_refresh_keeps_the_previous_current_snapshot(self):
         self.publish(workspace_identity="workspace-hash")
         before = self.coverage.current(self.source, "workspace-hash")["snapshot_id"]
         provider = FakeTransferProvider()
-        downloader = FakeDownloader(fail_url_once="https://storage.example/chunk-0?sig=secret")
+        downloader = FakeDownloader(fail_url_always="https://storage.example/chunk-0?sig=secret")
         service = MaterializationTransfer(self.paths, self.store, provider,
                                           downloader=downloader, codec=FakeCodec(), sleep=lambda _: None)
         plan = self.make_transfer_plan()

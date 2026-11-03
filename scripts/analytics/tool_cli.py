@@ -92,15 +92,17 @@ def _dispatch(tool: str, payload: dict) -> tuple[str, dict | None]:
         columns = payload.get("columns")
         if not isinstance(columns, list) or not 1 <= len(columns) <= 100 or any(not isinstance(item, str) for item in columns):
             raise ValueError("columns must be a list of 1 to 100 names")
-        return "/api/materializations", {
+        request = {
             "source_name": table, "columns": columns,
             "predicate": _string(payload.get("predicate", ""), "predicate", required=False, limit=16_000),
             "warehouse_id": _string(payload.get("warehouse_id"), "warehouse_id", limit=256),
-            "max_rows": int(payload.get("max_rows", 100_000)),
-            "max_bytes": int(payload.get("max_bytes", 536_870_912)),
             "full_table_confirmed": payload.get("full_table_confirmed") is True,
             "force_refresh": payload.get("force_refresh") is True,
         }
+        for bound in ("max_rows", "max_bytes"):
+            if payload.get(bound) is not None:
+                request[bound] = int(payload[bound])
+        return "/api/materializations", request
     raise ValueError("Unknown Analytics tool")
 
 

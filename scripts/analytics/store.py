@@ -14,12 +14,13 @@ from .models import (CatalogObject, KnowledgeItem, MaterializationState,
                      OperationRecord, QueryRecord)
 from .paths import AnalyticsPaths
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 MIGRATION_ROLLBACK_POLICIES = {
     1: "BACKWARD_COMPATIBLE",
     2: "BACKUP_RESTORE_REQUIRED",
     3: "BACKUP_RESTORE_REQUIRED",
     4: "BACKUP_RESTORE_REQUIRED",
+    5: "BACKUP_RESTORE_REQUIRED",
 }
 
 
@@ -123,6 +124,10 @@ class ContextStore:
                 if current < 4:
                     self._migration_4(db)
                     db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES(4, ?)", (_now(),))
+                    current = 4
+                if current < 5:
+                    self._migration_5(db)
+                    db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES(5, ?)", (_now(),))
                 db.execute("COMMIT")
             except Exception:
                 db.execute("ROLLBACK")
@@ -271,6 +276,55 @@ class ContextStore:
             )
         """)
         db.execute("CREATE INDEX local_datasets_updated ON local_datasets(updated_at DESC)")
+
+    @staticmethod
+    def _migration_5(db: sqlite3.Connection) -> None:
+        db.execute("""CREATE TABLE identity_cache (
+            workspace TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            user_name TEXT NOT NULL,
+            identity_type TEXT NOT NULL,
+            refreshed_at TEXT NOT NULL
+        )""")
+        db.execute("""CREATE TABLE chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )""")
+        db.execute("CREATE INDEX chat_messages_session ON chat_messages(session_id,id DESC)")
+
+    def identity_cache_get(self, workspace: str) -> dict[str, str] | None:
+        with self._connect() as db:
+            row = db.execute("SELECT * FROM identity_cache WHERE workspace=?", (workspace,)).fetchone()
+        return dict(row) if row else None
+
+    def identity_cache_put(self, value: dict[str, str]) -> None:
+        with self.transaction() as db:
+            db.execute("""INSERT INTO identity_cache(workspace,display_name,user_name,identity_type,refreshed_at)
+                VALUES(?,?,?,?,?) ON CONFLICT(workspace) DO UPDATE SET
+                display_name=excluded.display_name,user_name=excluded.user_name,
+                identity_type=excluded.identity_type,refreshed_at=excluded.refreshed_at""",
+                (value["workspace"][:500], value["display_name"][:160], value["user_name"][:320],
+                 value["identity_type"][:40], value["refreshed_at"][:40]))
+
+    def chat_message_add(self, session_id: str, role: str, content: str) -> int:
+        if role not in {"user", "assistant"} or not session_id or not content:
+            raise ValidationError("Chat projection message is invalid")
+        with self.transaction() as db:
+            cursor = db.execute("INSERT INTO chat_messages(session_id,role,content,created_at) VALUES(?,?,?,?)",
+                                (session_id[:256], role, content[:60_000], _now()))
+            return int(cursor.lastrowid)
+
+    def chat_messages(self, session_id: str, *, before: int | None = None,
+                      limit: int = 30) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 101:
+            raise ValidationError("Chat history page size must be between 1 and 101")
+        with self._connect() as db:
+            rows = db.execute("SELECT * FROM chat_messages WHERE session_id=? AND id<? ORDER BY id DESC LIMIT ?",
+                (session_id, before if before is not None else 2 ** 63 - 1, limit)).fetchall()
+        return [dict(row) for row in reversed(rows)]
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:

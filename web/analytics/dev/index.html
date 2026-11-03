@@ -74,24 +74,30 @@
             <button class="button secondary" id="home-refresh" type="button"><span aria-hidden="true">↻</span> Refresh workspace</button>
           </div>
           <div class="home-grid">
+            <section class="home-section hidden" id="home-operations-section">
+              <div class="home-card-heading"><h2>Active operations</h2><span class="card-count" id="home-operation-count">0</span></div>
+              <div class="home-list" id="home-operations"></div>
+            </section>
             <section class="home-section" id="home-continue-section">
               <div class="home-card-heading"><h2>Continue working</h2><button class="text-button" id="home-new-query" type="button">New query +</button></div>
-              <div class="home-work-group" id="home-recent-tables-group"><h3>Tables <span id="home-recent-count">0</span></h3><div class="home-list" id="home-recent-tables"></div></div>
-              <div class="home-work-group" id="home-recent-queries-group"><h3>Queries</h3><div class="home-list" id="home-recent-queries"></div></div>
-              <div class="home-work-group" id="home-investigations-group"><h3>Analysis <span id="home-investigation-count">0</span></h3><div class="home-list" id="home-investigations"></div></div>
+              <div class="home-continue-grid">
+                <div class="home-work-group" id="home-recent-tables-group"><h3>Tables <span id="home-recent-count">0</span></h3><div class="home-list" id="home-recent-tables"></div></div>
+                <div class="home-work-group" id="home-recent-queries-group"><h3>Queries</h3><div class="home-list" id="home-recent-queries"></div></div>
+              </div>
               <p class="home-empty hidden" id="home-continue-empty">Open a table or start a query to begin.</p>
+            </section>
+            <section class="home-section hidden" id="home-local-section">
+              <div class="home-card-heading"><h2>Local data</h2><span class="card-count"><span id="home-dataset-count">0</span> tables · <span id="home-dataset-size">0 B</span></span></div>
+              <div class="home-list" id="home-local-datasets"></div>
+            </section>
+            <section class="home-section hidden" id="home-activity-section">
+              <div class="home-card-heading"><h2>Recent activity</h2><span class="card-count" id="home-investigation-count">0</span></div>
+              <div class="home-work-group" id="home-investigations-group"><h3>Analysis</h3><div class="home-list" id="home-investigations"></div></div>
+              <div class="home-list" id="home-completed-operations"></div>
             </section>
             <section class="home-section hidden" id="home-pinned-section">
               <div class="home-card-heading"><h2>Pinned</h2><span class="card-count" id="home-favorite-count">0</span></div>
               <div class="home-list" id="home-favorites"></div>
-            </section>
-            <section class="home-section hidden" id="home-local-section">
-              <div class="home-card-heading"><h2>Local data</h2><span class="card-count" id="home-dataset-count">0</span></div>
-              <div class="home-list" id="home-local-datasets"></div>
-            </section>
-            <section class="home-section hidden" id="home-operations-section">
-              <div class="home-card-heading"><h2>Active operations</h2><span class="card-count" id="home-operation-count">0</span></div>
-              <div class="home-list" id="home-operations"></div>
             </section>
           </div>
         </section>
@@ -135,6 +141,7 @@
               <div class="result-heading"><div><span class="eyebrow">RESULTS</span><span class="route-badge" id="route-badge">AUTO</span><span id="query-message">Read-only SQL. Results are capped for safety.</span></div><span id="query-metrics" class="muted"></span></div>
               <div id="query-results" class="results-area" aria-live="polite"><div class="results-placeholder"><span>⌁</span><p>Run a query to inspect results</p></div></div>
             </div>
+          </div>
         </section>
       </section>
 
@@ -142,10 +149,10 @@
 
       <aside class="panel assistant-panel" id="assistant-panel" aria-label="Ask Anvil">
         <div class="panel-heading assistant-heading">
-          <div class="assistant-title"><span class="assistant-mark">✳</span><div><span class="eyebrow">ASSISTANT</span><h2>Ask Anvil</h2></div><span class="model-policy-badge" id="analytics-model-label" title="Logical model: anvil-analytics">GPT 6 Luna</span></div>
+          <div class="assistant-title"><span class="assistant-mark">✳</span><div><span class="eyebrow">ASSISTANT</span><h2>Ask Anvil</h2></div><span class="model-policy-badge" id="analytics-model-label" title="Logical model: anvil-analytics · model/provider validated before each request">Luna 6 · GitHub Copilot</span></div>
           <div class="heading-actions"><button class="icon-button" id="clear-chat" type="button" title="Clear conversation" aria-label="Clear conversation" aria-haspopup="true" aria-expanded="false" aria-controls="clear-chat-confirm"><span class="visually-hidden">Clear conversation</span></button>
             <div class="clear-chat-confirm" id="clear-chat-confirm" role="group" aria-labelledby="clear-chat-confirm-title" hidden>
-              <p id="clear-chat-confirm-title">Clear the visible conversation? The canonical Analytics session remains available.</p>
+              <p id="clear-chat-confirm-title">Clear conversation? This starts a new Ask Anvil conversation. Your saved Analytics context and local data remain available.</p>
               <div class="clear-chat-confirm-actions"><button class="button secondary" id="cancel-clear-chat" type="button">Cancel</button><button class="button primary" id="confirm-clear-chat" type="button">Clear</button></div>
             </div>
             <button class="icon-button collapse-button" id="collapse-assistant" type="button" title="Collapse Ask Anvil" aria-label="Collapse Ask Anvil" aria-expanded="true">›</button></div>
@@ -153,6 +160,7 @@
         <div class="context-heading"><span class="context-heading-label">Context</span></div>
         <div class="context-card" id="context-card"><div><strong>General question</strong><small>Select a table or query for context.</small></div></div>
         <div class="assistant-actions" id="assistant-actions" aria-label="Contextual actions"></div>
+        <button class="text-button chat-load-older" id="load-older-chat" type="button" hidden>Load older messages</button>
         <div class="chat-thread" id="chat-thread" aria-live="polite" aria-label="Conversation">
           <div class="welcome-message"><div class="assistant-mark small">✳</div><p>Ask a general question, or open a table or query to give Anvil context.</p>
             <button class="suggestion" data-prompt="How should I start exploring this workspace?" type="button">How should I start exploring?</button>
@@ -184,7 +192,6 @@
         <label class="choice-option"><input id="materialize-all-columns" name="materialize-column-mode" type="radio" value="all"><span>All columns</span></label>
         <label class="choice-option"><input id="materialize-selected-columns" name="materialize-column-mode" type="radio" value="selected" checked><span>Selected columns</span></label>
         <label class="field-label" id="materialize-selected-field">Columns <input id="materialize-columns" type="text" required placeholder="order_id, status, created_at"></label>
-        <label class="confirm-full-table hidden" id="confirm-full-table-row"><input id="confirm-full-table" type="checkbox"><span>I confirm keeping all columns locally</span></label>
       </fieldset>
       <fieldset class="choice-group"><legend>Rows</legend>
         <label class="choice-option"><input id="materialize-all-rows" name="materialize-row-mode" type="radio" value="all" checked><span>All rows</span></label>

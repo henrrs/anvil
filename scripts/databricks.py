@@ -13,7 +13,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote, urlencode, urlsplit
 
 SCRIPT_DIR = str(Path(__file__).resolve().parent)
@@ -688,19 +688,20 @@ def _validated_statement_id(value: str) -> str:
 
 
 def start_sql_transfer(statement: str, warehouse_id: str, *, profile: str | None = None,
-                       max_rows: int = 100_000, max_bytes: int = 512 * 1024 * 1024,
-                       timeout: int = 120, parameters: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Submit a bounded read-only Arrow transfer; signed links stay in this process."""
+                       max_rows: int | None = None, max_bytes: int | None = None,
+                       timeout: int = 120, parameters: list[dict[str, Any]] | None = None,
+                       on_warehouse_ready: Callable[[], None] | None = None) -> dict[str, Any]:
+    """Submit a read-only Arrow transfer with optional explicit result limits."""
     selected, _, _ = resolve_profile(profile)
     if len(statement.encode("utf-8")) > MAX_REMOTE_CODE_BYTES:
         raise DatabricksError("STATEMENT_TOO_LARGE", "SQL statement exceeds Anvil's 1 MB limit")
     normalized = statement.strip().rstrip(";").lstrip()
     if ";" in normalized or not re.match(r"(?is)^(SELECT|WITH)\b", normalized) or sql_may_mutate(normalized):
         raise DatabricksError("SQL_MUTATION_APPROVAL_REQUIRED", "materialization requires one read-only SELECT statement")
-    if not 1 <= max_rows <= 1_000_000:
-        raise DatabricksError("INVALID_INPUT", "transfer row bound must be between 1 and 1000000")
-    if not 1_048_576 <= max_bytes <= 1_073_741_824:
-        raise DatabricksError("INVALID_INPUT", "transfer byte bound must be between 1 MiB and 1 GiB")
+    if max_rows is not None and (type(max_rows) is not int or not 1 <= max_rows <= 10_000_000_000):
+        raise DatabricksError("INVALID_INPUT", "explicit transfer row bound is invalid")
+    if max_bytes is not None and (type(max_bytes) is not int or not 1_048_576 <= max_bytes <= 100 * 1024 ** 3):
+        raise DatabricksError("INVALID_INPUT", "explicit transfer byte bound is invalid")
     if not 5 <= timeout <= 600:
         raise DatabricksError("INVALID_INPUT", "transfer timeout must be between 5 and 600 seconds")
     found = discover_warehouses(selected)
@@ -711,9 +712,15 @@ def start_sql_transfer(statement: str, warehouse_id: str, *, profile: str | None
     # Materialization is an explicit user action, so this is the one Analytics
     # flow that may start a stopped warehouse without a separate manual step.
     warehouse = ensure_warehouse_running(warehouse, selected)
+    if on_warehouse_ready:
+        on_warehouse_ready()
     body: dict[str, Any] = {"statement": normalized, "warehouse_id": warehouse_id,
         "wait_timeout": "10s", "on_wait_timeout": "CONTINUE", "disposition": "EXTERNAL_LINKS",
-        "format": "ARROW_STREAM", "row_limit": max_rows, "byte_limit": max_bytes}
+        "format": "ARROW_STREAM"}
+    if max_rows is not None:
+        body["row_limit"] = max_rows
+    if max_bytes is not None:
+        body["byte_limit"] = max_bytes
     if parameters:
         body["parameters"] = parameters
     path = "/api/2.0/sql/statements"

@@ -11,7 +11,10 @@ from urllib.parse import quote
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web" / "analytics"
 SCENARIOS = ("healthy", "home-populated", "table-remote", "table-local", "query-results",
              "ask-anvil", "active-operation", "offline", "degraded", "materializing",
-             "large-catalog", "single-warehouse", "no-warehouses", "warehouse-disappeared")
+             "large-catalog", "single-warehouse", "no-warehouses", "warehouse-disappeared",
+             "legacy-migrating", "local-needs-update", "parallel-materializations",
+             "queued-materialization", "half-progress", "network-retry", "resumable-transfer",
+             "identity-degraded", "persistent-chat", "failed-operations", "many-local", "many-recent")
 
 
 class MockStaticHandler(SimpleHTTPRequestHandler):

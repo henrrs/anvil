@@ -45,7 +45,7 @@ class AnalyticsUIMockTests(unittest.TestCase):
         render = app.split("function renderTableWorkspace(workspace)", 1)[1].split("function renderTableOverview", 1)[0]
         self.assertIn('localAction.disabled = Boolean(workspace.activeOperation)', render)
         self.assertNotIn("tab.disabled", render)
-        self.assertIn('actionLabel: ["FAILED", "CANCELLED"].includes(item.state) ? "Retry"', app)
+        self.assertIn('operation.resume_available ? "Resume" : "Retry"', app)
 
     def test_ask_anvil_badge_shows_resolved_model_and_provider_without_scattered_model_ids(self):
         html = (ROOT / "web/analytics/index.html").read_text(encoding="utf-8")
@@ -85,7 +85,7 @@ class AnalyticsUIMockTests(unittest.TestCase):
         self.assertIn('aria-controls="clear-chat-confirm"', html)
         self.assertIn('id="cancel-clear-chat"', html)
         self.assertIn('id="confirm-clear-chat"', html)
-        self.assertIn("canonical Analytics session remains available", html)
+        self.assertIn("This starts a new Ask Anvil conversation", html)
         self.assertIn('class="context-heading-label"', html)
         self.assertNotIn('id="context-source"', html)
         self.assertNotIn('id="status-catalog-count"', html)
@@ -94,10 +94,9 @@ class AnalyticsUIMockTests(unittest.TestCase):
         self.assertIn('TRASH: "M4 7h16', app)
         self.assertIn('close.append(icon("CLOSE"))', app)
         self.assertIn('event?.stopPropagation()', app)
-        clear_action = app.split('$("confirm-clear-chat").addEventListener("click", () => {', 1)[1].split('});', 1)[0]
+        clear_action = app.split('$("confirm-clear-chat").addEventListener("click", async () => {', 1)[1].split('});', 1)[0]
+        self.assertIn('post("/api/anvil/chat/clear")', clear_action)
         self.assertIn('$("chat-thread").replaceChildren()', clear_action)
-        self.assertNotIn("apiClient", clear_action)
-        self.assertNotIn("fetch(", clear_action)
 
         self.assertIn(".workspace-tab.active .workspace-tab-content::after", css)
         self.assertIn(".table-tab.active .table-tab-content::after", css)

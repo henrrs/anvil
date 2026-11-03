@@ -28,7 +28,7 @@ from .transfer import MaterializationTransfer, TransferProvider
 _LOG = logging.getLogger(__name__)
 HEARTBEAT_INTERVAL_SECONDS = 10
 LEASE_TIMEOUT_SECONDS = 90
-NONTERMINAL_STATES = {"PLANNED", "RUNNING", "PAUSED", "VALIDATING"}
+NONTERMINAL_STATES = {"PLANNED", "QUEUED", "RUNNING", "PAUSED", "VALIDATING"}
 TERMINAL_STATES = {"READY", "FAILED", "CANCELLED"}
 
 
@@ -46,8 +46,8 @@ class MaterializationService:
 
     def plan(self, *, workspace_identity: str, source_name: str,
              projection: list[str] | tuple[str, ...], predicate: str = "",
-             source_version: str = "", max_rows: int = 100_000,
-             max_bytes: int = 512 * 1024 * 1024,
+             source_version: str = "", max_rows: int | None = None,
+             max_bytes: int | None = None,
              estimated_bytes: int | None = None,
              full_table_confirmed: bool = False,
              force_refresh: bool = False,
@@ -165,12 +165,17 @@ class MaterializationService:
                           "REMOTE_ERROR" if code.startswith("REMOTE") or "TIMEOUT" in code else
                           "TRANSFER_ERROR" if code.startswith("TRANSFER") else
                           "VALIDATION_FAILED" if isinstance(exc, IntegrityError) else code)
-                checkpoint = {**current.checkpoint, "phase": "FAILED", "failure_reason": reason,
-                              "failed_at": _now()}
+                resumable = bool(current.checkpoint.get("resume_available") and
+                                 getattr(exc, "retryable", False))
+                checkpoint = {**current.checkpoint,
+                              "phase": "RESUMABLE" if resumable else "FAILED",
+                              "resume_available": resumable,
+                              "failure_reason": reason, "failed_at": _now()}
                 self.store.operation_put(OperationRecord(current.operation_id, current.kind,
                                                          MaterializationState.FAILED,
                                                          current.payload, checkpoint, code))
-                self._cleanup_staging(current)
+                if not resumable:
+                    self._cleanup_staging(current)
                 _event("materialization_failed", operation_id=plan.operation_id,
                        source_name=plan.source_name, reason_code=reason)
             raise
@@ -211,14 +216,28 @@ class MaterializationService:
             expired = heartbeat is not None and time.time() - heartbeat > LEASE_TIMEOUT_SECONDS
             reason = ("LEASE_EXPIRED" if expired else "SERVICE_RESTARTED"
                       if checkpoint.get("worker_instance_id") else "WORKER_LOST")
-            failed_checkpoint = {**checkpoint, "phase": "FAILED", "failure_reason": reason,
+            resumable = bool(checkpoint.get("remote_result_fingerprint") and
+                             checkpoint.get("statement_id") and
+                             self._staging_exists(operation))
+            failed_checkpoint = {**checkpoint, "phase": "RESUMABLE" if resumable else "FAILED",
+                                 "resume_available": resumable, "failure_reason": reason,
                                  "failed_at": _now(), "heartbeat_at": _now()}
             self.store.operation_put(OperationRecord(operation.operation_id, operation.kind,
                                                      MaterializationState.FAILED,
                                                      operation.payload, failed_checkpoint, reason))
-            self._cleanup_staging(operation)
+            if not resumable:
+                self._cleanup_staging(operation)
             _event("materialization_reconciled", operation_id=operation.operation_id,
-                   state="FAILED", reason_code=reason)
+                   state="RESUMABLE" if resumable else "FAILED", reason_code=reason)
+
+    def _staging_exists(self, operation: OperationRecord) -> bool:
+        plan = operation.payload.get("plan") if isinstance(operation.payload, dict) else {}
+        if not isinstance(plan, dict):
+            return False
+        root = self.paths.datasets / source_key(str(plan.get("source_name") or ""),
+                                                str(plan.get("workspace_identity") or ""))
+        stage = root / "snapshots" / ("." + operation.operation_id + ".partial")
+        return not root.is_symlink() and not stage.is_symlink() and stage.is_dir()
 
     def _cleanup_staging(self, operation: OperationRecord) -> None:
         plan = operation.payload.get("plan") if isinstance(operation.payload, dict) else None
@@ -252,21 +271,22 @@ class MaterializationService:
                                     sort_keys=True, separators=(",", ":")))
 
     def retry(self, operation_id: str, *, progress: Any | None = None) -> dict[str, Any]:
-        plan, payload = self.prepare_retry(operation_id)
+        plan, payload, checkpoint = self.prepare_retry(operation_id)
         self.store.operation_put(OperationRecord(plan.operation_id, "MATERIALIZATION", MaterializationState.PLANNED,
-                                                 payload, {"phase": "QUEUED", "chunks": []}, ""))
+                                                 payload, checkpoint, ""))
         return self.run(plan, str(payload.get("warehouse_id") or ""),
                         profile=payload.get("profile") or None,
                         principal=str(payload.get("principal") or ""), progress=progress)
 
-    def prepare_retry(self, operation_id: str) -> tuple[AcquisitionPlan, dict[str, Any]]:
-        """Build a fresh retry plan without resuming any persisted worker state."""
+    def prepare_retry(self, operation_id: str) -> tuple[AcquisitionPlan, dict[str, Any], dict[str, Any]]:
+        """Resume a proven remote result; otherwise create a clean new generation."""
         operation = self.store.operation_get(operation_id)
         if operation is None or operation.kind != "MATERIALIZATION":
             raise ValidationError("Materialization operation was not found")
         if operation.state not in {MaterializationState.FAILED, MaterializationState.CANCELLED,
                                    MaterializationState.PAUSED}:
-            if operation.state in {MaterializationState.PLANNED, MaterializationState.RUNNING,
+            if operation.state in {MaterializationState.PLANNED, MaterializationState.QUEUED,
+                                   MaterializationState.RUNNING,
                                    MaterializationState.VALIDATING}:
                 return self.status(operation_id)
             raise ConflictError("Only failed or canceled materializations can be retried",
@@ -275,13 +295,45 @@ class MaterializationService:
         if not isinstance(plan_value, dict):
             raise ConflictError("Saved materialization plan is unavailable", code="OPERATION_STATE_INVALID")
         plan = _plan_from_dict(plan_value)
+        checkpoint = dict(operation.checkpoint)
+        if checkpoint.get("resume_available") and self._staging_exists(operation):
+            statement_id = str(checkpoint.get("statement_id") or "")
+            try:
+                response = self.provider.transfer_status(statement_id,
+                    str(operation.payload.get("warehouse_id") or ""),
+                    profile=operation.payload.get("profile") or None, timeout=15)
+            except Exception as exc:
+                code = str(getattr(exc, "code", ""))
+                if code not in {"REMOTE_RESULT_EXPIRED", "STATEMENT_NOT_FOUND",
+                                "TRANSFER_LINK_EXPIRED", "RESULT_NOT_FOUND"}:
+                    # A temporary provider outage is not evidence that the result expired.
+                    raise ConflictError("The remote result could not be checked yet; retry later",
+                                        code="REMOTE_RESULT_CHECK_FAILED", retryable=True) from exc
+                response = {}
+            status = response.get("status") if isinstance(response, dict) else {}
+            manifest = response.get("manifest") if isinstance(response, dict) else {}
+            valid = (isinstance(status, dict) and status.get("state") == "SUCCEEDED" and
+                     isinstance(manifest, dict) and
+                     checkpoint.get("remote_result_fingerprint") ==
+                     self.transfer.result_fingerprint(statement_id, manifest))
+            if valid:
+                _event("materialization_resumed", operation_id=operation_id,
+                       completed_chunks=len(checkpoint.get("chunks", [])))
+                return plan, operation.payload, {**checkpoint, "phase": "QUEUED",
+                                                "resume_available": True}
+            self._cleanup_staging(operation)
+            self.store.operation_checkpoint_update(operation_id, {
+                "resume_available": False, "phase": "RESULT_EXPIRED",
+                "failure_reason": "REMOTE_RESULT_EXPIRED"})
+            _event("materialization_result_expired", operation_id=operation_id,
+                   reason_code="REMOTE_RESULT_EXPIRED")
         fresh_id = uuid.uuid4().hex
         plan = AcquisitionPlan(fresh_id, plan.workspace_identity, plan.source_name, plan.source_version,
                                plan.projection, plan.predicate, plan.max_rows, plan.max_bytes,
                                plan.estimated_bytes, plan.force_refresh, plan.intent_projection,
                                plan.source_schema_identity, plan.selected_schema_identity)
         payload = {**operation.payload, "plan": plan.as_dict()}
-        return plan, payload
+        return plan, payload, {"phase": "QUEUED", "chunks": []}
 
     def cancel(self, operation_id: str) -> dict[str, Any]:
         operation = self.store.operation_get(operation_id)
@@ -332,6 +384,15 @@ class MaterializationService:
                 "last_activity_at": operation.checkpoint.get("heartbeat_at", ""),
                 "failure_reason": operation.checkpoint.get("failure_reason", ""),
                 "completed_chunks": len(chunks),
+                "total_chunks": operation.checkpoint.get("total_chunks"),
+                "planned_rows": operation.checkpoint.get("planned_rows"),
+                "estimated_total_bytes": operation.checkpoint.get("estimated_total_bytes"),
+                "percent": (round(min(100, 100 * sum(int(item.get("rows", 0)) for item in chunks if isinstance(item, dict)) /
+                                      operation.checkpoint["planned_rows"]), 1)
+                            if isinstance(operation.checkpoint.get("planned_rows"), int) and
+                               operation.checkpoint["planned_rows"] > 0 else None),
+                "resume_available": bool(operation.checkpoint.get("resume_available") and
+                                         operation.state == MaterializationState.FAILED),
                 "rows": sum(int(item.get("rows", 0)) for item in chunks if isinstance(item, dict)),
                 "bytes": sum(int(item.get("bytes", 0)) for item in chunks if isinstance(item, dict)),
                 "error_code": operation.error_code,
@@ -354,7 +415,9 @@ def _plan_from_dict(value: dict[str, Any]) -> AcquisitionPlan:
             str(value["operation_id"]), str(value["workspace_identity"]),
             str(value["source_name"]), str(value.get("source_version") or ""),
             tuple(value["projection"]), str(value.get("predicate") or ""),
-            int(value["max_rows"]), int(value["max_bytes"]), value.get("estimated_bytes"),
+            (int(value["max_rows"]) if value.get("max_rows") is not None else None),
+            (int(value["max_bytes"]) if value.get("max_bytes") is not None else None),
+            value.get("estimated_bytes"),
             bool(value.get("force_refresh")),
             tuple(value.get("intent_projection") or value["projection"]),
             str(value.get("source_schema_identity") or ""),

@@ -1,25 +1,25 @@
-# Anvil Analytics certification — 2.17.0
+# Anvil Analytics certification — 2.19.0
 
-Run time: 2026-11-01T23:04:23Z
+Run time: 2026-11-03T09:22:58Z
 
-Result: **PASS** — 93/93 offline checks passed.
+Result: **PASS** — 148/148 offline checks passed.
 
 | Suite | Result | Checks | Time | Coverage |
 |---|---:|---:|---:|---|
-| context_store | PASS | 8/8 | 0.039s | SQLite context, privacy, WAL, migration and search |
-| catalog | PASS | 14/14 | 1.838s | Shared Databricks capability, cached catalog and lazy hydration |
+| context_store | PASS | 10/10 | 0.058s | SQLite context, privacy, WAL, migration and search |
+| catalog | PASS | 15/15 | 2.025s | Shared Databricks capability, cached catalog and lazy hydration |
 | catalog_hydration | PASS | 2/2 | 0.000s | Cached tree convergence, progress, resume and metadata-only discovery |
-| query_materialization | PASS | 16/16 | 0.091s | Read-only routing, coverage, Parquet snapshots and resumable transfer |
-| runtime_sessions | PASS | 10/10 | 1.618s | OpenCode 1/2 adapters, runtime warmup, canonical and task sessions |
-| dependency_runtime | PASS | 4/4 | 0.075s | Release-pinned Analytics dependencies, drift repair and safe staging |
-| service_lifecycle | PASS | 6/6 | 0.137s | systemd ownership, MainPID, unit verification and service convergence |
-| warehouse_lifecycle | PASS | 4/4 | 0.005s | Stopped/start transitions, permission feedback and timeout |
-| http_ui | PASS | 7/7 | 3.536s | Loopback BFF, same-origin API, static UI and contextual SSE |
-| frontend_ui | PASS | 11/11 | 1.470s | Static UI contracts, accessible resizable SQL/results split and mock scenarios |
-| tools_service | PASS | 8/8 | 0.535s | OpenCode tool bridges, profile, lineage and route comparison |
-| lifecycle | PASS | 1/1 | 1.773s | Fresh install, 2.15→2.17 and 2.16→2.17 convergence, idempotency, dry-run, rollback and user data preservation |
-| frontend_syntax | PASS | 1/1 | 0.108s | Static frontend JavaScript syntax |
-| python_syntax | PASS | 1/1 | 0.112s | Compile Analytics modules |
+| query_materialization | PASS | 42/42 | 0.436s | Read-only routing, coverage, Parquet snapshots and resumable transfer |
+| runtime_sessions | PASS | 18/18 | 2.273s | OpenCode 1/2 adapters, runtime warmup, canonical and task sessions |
+| dependency_runtime | PASS | 13/13 | 3.717s | Release-pinned Analytics dependencies, drift repair and safe staging |
+| service_lifecycle | PASS | 11/11 | 0.288s | systemd ownership, MainPID, unit verification and service convergence |
+| warehouse_lifecycle | PASS | 4/4 | 0.002s | Stopped/start transitions, permission feedback and timeout |
+| http_ui | PASS | 8/8 | 4.034s | Loopback BFF, same-origin API, static UI and contextual SSE |
+| frontend_ui | PASS | 14/14 | 1.501s | Static UI contracts, accessible resizable SQL/results split and mock scenarios |
+| tools_service | PASS | 8/8 | 0.539s | OpenCode tool bridges, profile, lineage and route comparison |
+| lifecycle | PASS | 1/1 | 2.113s | Fresh install, 2.15→2.17 and 2.16→2.17 convergence, idempotency, dry-run, rollback and user data preservation |
+| frontend_syntax | PASS | 1/1 | 0.104s | Static frontend JavaScript syntax |
+| python_syntax | PASS | 1/1 | 0.142s | Compile Analytics modules |
 
 ## Scope and limits
 

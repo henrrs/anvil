@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import getpass
 import json
 import logging
 import os
@@ -20,7 +19,8 @@ from typing import Any, Callable
 
 from .catalog import CatalogService
 from .context import ContextResolver
-from .coverage import CoverageRegistry, dataset_identity, schema_identity
+from .coverage import (CoverageRegistry, atomic_dataset_state, dataset_identity,
+                       dataset_lock, dataset_state, schema_identity)
 from .databricks import ComputePort, SharedDatabricksCatalogClient, _shared_module
 from .errors import (AnalyticsError, ConflictError, CoverageError, ProviderError,
                      UnavailableError, ValidationError)
@@ -31,6 +31,8 @@ from .paths import AnalyticsPaths
 from .planner import QueryPlan, ensure_read_only, parse_local_query
 from .query import DuckDBLocalEngine, QueryRouter
 from .runtime import AnalyticsRuntimeManager
+from .scheduler import MaterializationScheduler
+from .schema import canonical_type
 from .sessions import AnalyticsSessionManager
 from .store import ContextStore
 
@@ -153,12 +155,20 @@ class AnalyticsService:
         self.materializations = materializations or MaterializationService(
             self.paths, self.store, self.databricks)
         self.identity = identity
+        self._identity_refreshed_at = 0.0
+        self._identity_cached: dict[str, str] | None = None
         self.host = host
         self.port = int(port)
         self.web_root = Path(web_root) if web_root else self._default_web_root()
-        self._executor = ThreadPoolExecutor(max_workers=max(1, min(max_workers, 4)),
-                                            thread_name_prefix="anvil-analytics")
+        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="anvil-catalog")
+        configured_workers = os.environ.get("ANVIL_ANALYTICS_MATERIALIZATION_WORKERS")
+        try:
+            worker_count = int(configured_workers) if configured_workers else max_workers
+        except ValueError:
+            worker_count = max_workers
+        self._materialization_scheduler = MaterializationScheduler(worker_count)
         self._jobs: dict[str, Future[Any]] = {}
+        self._job_leases: dict[str, Any] = {}
         self._job_guard = threading.Lock()
         self._chat_lock = threading.Lock()
         self._runtime_start_lock = threading.Lock()
@@ -175,7 +185,8 @@ class AnalyticsService:
         self._catalog_hydration_future: Future[Any] | None = None
         self._catalog_hydration_guard = threading.Lock()
         self._closed = threading.Event()
-        self._reconcile_local_datasets()
+        self._migrate_local_dataset_metadata()
+        self._reconciliation_future = self._executor.submit(self._reconcile_local_datasets)
 
     @staticmethod
     def _default_web_root() -> Path:
@@ -188,6 +199,7 @@ class AnalyticsService:
     def close(self) -> None:
         self._closed.set()
         self._executor.shutdown(wait=False, cancel_futures=False)
+        self._materialization_scheduler.shutdown()
 
     def initialize_runtime(self) -> dict[str, Any]:
         """Warm the dedicated runtime and canonical session without blocking UI startup."""
@@ -435,13 +447,49 @@ class AnalyticsService:
                 "refreshed_at": refreshed_at, "error": error}
 
     def me(self) -> dict[str, Any]:
-        current_identity = self.identity() if self.identity else {}
-        if not isinstance(current_identity, dict):
-            current_identity = {}
         profile = self._profile_selection()
-        username = (current_identity.get("display_name") or current_identity.get("user_name")
-                    or current_identity.get("userName") or getpass.getuser())
-        return {"name": str(username)[:160], "identity_source": "databricks" if current_identity else "os",
+        workspace = str(profile.get("host") or "").rstrip("/").casefold()
+        cached = self.store.identity_cache_get(workspace) if workspace else None
+        current_identity: dict[str, Any] = {}
+        source = "unavailable"
+        if profile.get("name") and (self.identity or hasattr(self.databricks, "current_identity")):
+            try:
+                if (self.identity or not self._identity_cached or
+                        self._identity_cached.get("workspace") != workspace or
+                        time.monotonic() - self._identity_refreshed_at > 300):
+                    resolved = (self.identity() if self.identity else
+                                self.databricks.current_identity(profile=str(profile["name"])))
+                    if isinstance(resolved, dict):
+                        current_identity = resolved
+                        display = str(resolved.get("display_name") or resolved.get("displayName") or
+                                      resolved.get("user_name") or resolved.get("userName") or "")
+                        principal = str(resolved.get("user_name") or resolved.get("userName") or display)
+                        if display and principal:
+                            self._identity_cached = {"display_name": display[:160],
+                                "user_name": principal[:320],
+                                "identity_type": str(resolved.get("identity_type") or "user")[:40],
+                                "workspace": workspace,
+                                "refreshed_at": datetime.now(timezone.utc).isoformat()}
+                            self._identity_refreshed_at = time.monotonic()
+                            self.store.identity_cache_put(self._identity_cached)
+                            _analytics_event(logging.INFO, "databricks_identity_resolved",
+                                             identity_type=self._identity_cached["identity_type"],
+                                             workspace=workspace)
+                if self._identity_cached and self._identity_cached.get("workspace") == workspace:
+                    source = "databricks"
+            except Exception as exc:
+                _analytics_event(logging.WARNING, "databricks_identity_unavailable",
+                                 reason_code=str(getattr(exc, "code", type(exc).__name__)))
+        selected = (self._identity_cached if self._identity_cached and
+                    self._identity_cached.get("workspace") == workspace else cached) or {}
+        if selected and source != "databricks":
+            source = "databricks_cache"
+        name = (str(selected.get("display_name") or selected.get("user_name") or "") or
+                ("Databricks identity unavailable" if profile.get("name") else "Databricks not connected"))
+        return {"name": name[:160], "identity_source": source,
+                "identity_type": str(selected.get("identity_type") or "unknown"),
+                "user_name": str(selected.get("user_name") or ""),
+                "refreshed_at": str(selected.get("refreshed_at") or ""),
                 "workspace": profile.get("host", ""), "profile": profile.get("name", ""),
                 "databricks_configured": bool(profile.get("name")),
                 "url": self.url, "status": self.status()}
@@ -544,6 +592,7 @@ class AnalyticsService:
             "local": {"duckdb": duckdb_status["status"],
                       "pyarrow": pyarrow_status["status"],
                       "storage_bytes": local_bytes},
+            "materialization_scheduler": self._materialization_scheduler.metrics(),
             "capabilities": {"catalog": "AVAILABLE" if catalog_cache else
                              ("READY" if profile.get("name") else "DEGRADED"),
                              "sql_remote": "READY" if databricks_workspace in {"READY", "EMPTY"} else "DEGRADED",
@@ -633,14 +682,27 @@ class AnalyticsService:
         for item in self.store.operation_recent(limit=max(1, min(limit, 100))):
             payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
             plan = payload.get("plan") if isinstance(payload.get("plan"), dict) else {}
+            checkpoint = item.get("checkpoint") if isinstance(item.get("checkpoint"), dict) else {}
+            chunks = checkpoint.get("chunks") if isinstance(checkpoint.get("chunks"), list) else []
+            rows = sum(int(chunk.get("rows", 0)) for chunk in chunks if isinstance(chunk, dict))
+            bytes_done = sum(int(chunk.get("bytes", 0)) for chunk in chunks if isinstance(chunk, dict))
+            planned_rows = checkpoint.get("planned_rows")
             items.append({"operation_id": str(item.get("operation_id") or "")[:256],
                           "kind": str(item.get("kind") or "")[:40],
                           "state": str(item.get("state") or "")[:40],
                           "source_name": str(plan.get("source_name") or "")[:768],
-                          "phase": str((item.get("checkpoint") or {}).get("phase") or "")[:64],
+                          "phase": str(checkpoint.get("phase") or "")[:64],
                           "started_at": str((item.get("checkpoint") or {}).get("started_at") or "")[:40],
                           "last_activity_at": str((item.get("checkpoint") or {}).get("heartbeat_at") or "")[:40],
-                          "failure_reason": str((item.get("checkpoint") or {}).get("failure_reason") or "")[:80],
+                          "failure_reason": str(checkpoint.get("failure_reason") or "")[:80],
+                          "completed_rows": rows, "completed_bytes": bytes_done,
+                          "completed_chunks": len(chunks), "total_chunks": checkpoint.get("total_chunks"),
+                          "planned_rows": planned_rows,
+                          "estimated_total_bytes": checkpoint.get("estimated_total_bytes"),
+                          "percent": (round(100 * rows / planned_rows, 1)
+                                      if isinstance(planned_rows, int) and planned_rows > 0 else None),
+                          "resume_available": bool(checkpoint.get("resume_available") and
+                                                   item.get("state") == "FAILED"),
                           "updated_at": str(item.get("updated_at") or "")[:40]})
         return items
 
@@ -735,7 +797,7 @@ class AnalyticsService:
                 return {"covered": False, "reason": str(invalid),
                         "snapshot_id": snapshot["snapshot_id"],
                         "state": ("INVALID" if invalid.code == "LOCAL_SCHEMA_MISMATCH" else
-                                  "NEEDS_RECONCILIATION"),
+                                  "UNAVAILABLE"),
                         "reasons": ["physical_schema_mismatch" if invalid.code == "LOCAL_SCHEMA_MISMATCH"
                                     else "physical_schema_unverified"]}
             remote_schema, source_version = self._table_coverage_metadata(full_name)
@@ -754,8 +816,9 @@ class AnalyticsService:
             manifest = snapshot["manifest"]
             return {"covered": False,
                     "state": ("INVALID" if invalid.code == "LOCAL_SCHEMA_MISMATCH" else
-                              "NEEDS_RECONCILIATION"), "freshness": "UNKNOWN",
-                    "reason": str(invalid),
+                              "UNAVAILABLE"), "freshness": "UNKNOWN",
+                    "reason": ("Local copy needs to be updated" if invalid.code == "LOCAL_SCHEMA_MISMATCH" else
+                               "Local copy is being checked"),
                     "reasons": ["physical_schema_mismatch" if invalid.code == "LOCAL_SCHEMA_MISMATCH"
                                 else "physical_schema_unverified"],
                     "snapshot_id": snapshot["snapshot_id"],
@@ -986,9 +1049,10 @@ class AnalyticsService:
         source_version = str(metadata.get("source_updated_at") or metadata.get("updated_at") or "")
         workspace_identity = self._workspace_identity()
         predicate = str(body.get("predicate") or "")
-        max_rows = self._integer(body.get("max_rows", 100_000), "row bound", 1, 1_000_000)
-        max_bytes = self._integer(body.get("max_bytes", 512 * 1024 * 1024), "byte bound",
-                                  1024 * 1024, 1024 * 1024 * 1024)
+        max_rows = (self._integer(body["max_rows"], "row bound", 1, 10_000_000_000)
+                    if body.get("max_rows") is not None else None)
+        max_bytes = (self._integer(body["max_bytes"], "byte bound", 1024 * 1024, 100 * 1024 ** 3)
+                     if body.get("max_bytes") is not None else None)
         force_refresh = body.get("force_refresh") is True
         remote_schema = metadata.get("columns") if isinstance(metadata.get("columns"), list) else None
         typed_schema = (remote_schema if remote_schema and all(
@@ -1015,7 +1079,8 @@ class AnalyticsService:
             workspace_identity=workspace_identity, source_name=table_name,
             projection=plan.intent_projection or plan.projection, predicate=plan.predicate,
             source_version=source_version, remote_schema=remote_schema,
-            rows_mode="FILTERED" if predicate.strip() else "FULL")
+            rows_mode="LIMITED" if max_rows is not None else
+                      "FILTERED" if predicate.strip() else "FULL")
         if not force_refresh and not coverage_plan.remote_transfer_required:
             _analytics_event(logging.INFO, "local_dataset_reused", source_name=table_name,
                              action=coverage_plan.action, workspace_identity=workspace_identity)
@@ -1028,7 +1093,8 @@ class AnalyticsService:
         with self._job_guard:
             existing = self.store.operation_get(plan.operation_id)
             if existing and existing.state in {MaterializationState.READY, MaterializationState.RUNNING,
-                                               MaterializationState.PLANNED, MaterializationState.VALIDATING}:
+                                               MaterializationState.PLANNED, MaterializationState.QUEUED,
+                                               MaterializationState.VALIDATING}:
                 return self.materializations.status(plan.operation_id)
         lease = self.materializations.claim_table(plan)
         if lease is None:
@@ -1036,7 +1102,7 @@ class AnalyticsService:
                 payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
                 saved_plan = payload.get("plan") if isinstance(payload.get("plan"), dict) else {}
                 if (item.get("kind") == "MATERIALIZATION" and item.get("state") in
-                        {"PLANNED", "RUNNING", "PAUSED", "VALIDATING"} and
+                        {"PLANNED", "QUEUED", "RUNNING", "PAUSED", "VALIDATING"} and
                         str(saved_plan.get("source_name") or "").casefold() == table_name.casefold() and
                         str(saved_plan.get("workspace_identity") or "") == workspace_identity):
                     return self.materializations.status(str(item["operation_id"]))
@@ -1063,13 +1129,14 @@ class AnalyticsService:
                 operation_payload = {"plan": plan.as_dict(), "warehouse_id": warehouse_id,
                                      "profile": profile or "", "principal": principal}
                 self.store.operation_put(OperationRecord(plan.operation_id, "MATERIALIZATION",
-                                                          MaterializationState.PLANNED,
+                                                          MaterializationState.QUEUED,
                                                           operation_payload,
                                                           {"chunks": [], "phase": "QUEUED"}))
                 future = self._jobs.get(plan.operation_id)
                 if future and not future.done():
                     return self.materializations.status(plan.operation_id)
-                self._jobs[plan.operation_id] = self._executor.submit(
+                self._job_leases[plan.operation_id] = lease
+                self._jobs[plan.operation_id] = self._materialization_scheduler.submit(
                     self._run_materialization_job, plan, warehouse_id, profile, principal, lease)
                 lease = None
         finally:
@@ -1077,12 +1144,20 @@ class AnalyticsService:
         _analytics_event(logging.INFO, "local_dataset_rematerialization_started",
                          source_name=table_name, action=coverage_plan.action,
                          workspace_identity=workspace_identity)
+        _analytics_event(logging.INFO, "materialization_queued", operation_id=plan.operation_id,
+                         source_name=table_name)
         return self.materializations.status(plan.operation_id)
 
     def _run_materialization_job(self, plan: Any, warehouse_id: str, profile: str,
                                  principal: str, lease: Any) -> dict[str, Any]:
-        return self.materializations.run(plan, warehouse_id, profile=profile,
-                                         principal=principal, lease=lease)
+        try:
+            _analytics_event(logging.INFO, "materialization_started", operation_id=plan.operation_id,
+                             source_name=plan.source_name)
+            return self.materializations.run(plan, warehouse_id, profile=profile,
+                                             principal=principal, lease=lease)
+        finally:
+            with self._job_guard:
+                self._job_leases.pop(plan.operation_id, None)
 
     def materialization(self, operation_id: str) -> dict[str, Any]:
         return self.materializations.status(operation_id)
@@ -1091,6 +1166,16 @@ class AnalyticsService:
         return self.materializations.recent(limit=limit)
 
     def cancel_materialization(self, operation_id: str) -> dict[str, Any]:
+        with self._job_guard:
+            future = self._jobs.get(operation_id)
+            if future and future.cancel():
+                self.materializations.release_table(self._job_leases.pop(operation_id, None))
+                operation = self.store.operation_get(operation_id)
+                if operation:
+                    self.store.operation_put(OperationRecord(operation.operation_id, operation.kind,
+                        MaterializationState.CANCELLED, operation.payload,
+                        {**operation.checkpoint, "phase": "CANCELLED"}, ""))
+                return self.materializations.status(operation_id)
         return self.materializations.cancel(operation_id)
 
     def resume_materialization(self, operation_id: str) -> dict[str, Any]:
@@ -1104,19 +1189,22 @@ class AnalyticsService:
             if current and not current.done():
                 raise ConflictError("The materialization is still active and cannot be retried yet",
                                     code="OPERATION_ALREADY_RUNNING")
-            plan, payload = self.materializations.prepare_retry(operation_id)
+            plan, payload, checkpoint = self.materializations.prepare_retry(operation_id)
             lease = self.materializations.claim_table(plan)
             if lease is None:
                 raise ConflictError("A local materialization is already active for this table",
                                     code="ALREADY_IN_PROGRESS", retryable=True)
             self.store.operation_put(OperationRecord(plan.operation_id, "MATERIALIZATION",
-                                                     MaterializationState.PLANNED, payload,
-                                                     {"phase": "QUEUED", "chunks": []}, ""))
-            future = self._executor.submit(self._run_materialization_job, plan,
+                                                     MaterializationState.QUEUED, payload,
+                                                     checkpoint, ""))
+            self._job_leases[plan.operation_id] = lease
+            future = self._materialization_scheduler.submit(self._run_materialization_job, plan,
                                            str(payload.get("warehouse_id") or ""),
                                            str(payload.get("profile") or ""),
                                            str(payload.get("principal") or ""), lease)
             self._jobs[plan.operation_id] = future
+            _analytics_event(logging.INFO, "materialization_queued", operation_id=plan.operation_id,
+                             source_name=plan.source_name)
         return self.materializations.status(plan.operation_id)
 
     def ask_anvil(self, prompt: str, *, context: dict[str, Any] | None = None,
@@ -1169,6 +1257,8 @@ class AnalyticsService:
             if task_id:
                 self.sessions.finish_task_session(task_id, summary=answer[:6000])
                 adapter.add_context(canonical_id, "Completed Analytics investigation summary:\n" + answer[:6000])
+            self.store.chat_message_add(canonical_id, "user", question)
+            self.store.chat_message_add(canonical_id, "assistant", answer)
             if event:
                 event("result", {"text": answer, "session": "canonical" if not task_id else "investigation"})
                 event("done", {"state": "completed"})
@@ -1178,6 +1268,65 @@ class AnalyticsService:
         except Exception as exc:
             raise UnavailableError("Anvil could not complete the Analytics chat request",
                                    code="ASK_ANVIL_FAILED", retryable=True) from exc
+        finally:
+            self._chat_lock.release()
+
+    def chat_history(self, *, before: int | None = None, limit: int = 30) -> dict[str, Any]:
+        """Page the UI projection for the current canonical cognitive thread."""
+        if not 1 <= limit <= 100 or (before is not None and before < 1):
+            raise ValidationError("Chat history cursor or page size is invalid")
+        session_id = ""
+        try:
+            if self.paths.runtime.is_file() and not self.paths.runtime.is_symlink():
+                session_id = str(json.loads(self.paths.runtime.read_text(encoding="utf-8")).get(
+                    "canonical_session_id") or "")
+        except (OSError, ValueError):
+            pass
+        if not session_id:
+            return {"items": [], "next_before": None}
+        rows = self.store.chat_messages(session_id, before=before, limit=limit + 1)
+        if not rows and before is None:
+            self._project_canonical_history(session_id)
+            rows = self.store.chat_messages(session_id, limit=limit + 1)
+        has_older = len(rows) > limit
+        visible = rows[-limit:]
+        _analytics_event(logging.INFO, "ask_anvil_history_rehydrated", session_id=session_id,
+                         visible_messages=len(visible), has_older=has_older)
+        return {"items": visible, "next_before": visible[0]["id"] if has_older and visible else None}
+
+    def _project_canonical_history(self, session_id: str) -> None:
+        """Recover presentation when SQLite projection is absent; OpenCode remains cognitive authority."""
+        try:
+            adapter = self.runtime.adapter
+            if not hasattr(adapter, "list_messages"):
+                return
+            messages = adapter.list_messages(session_id, limit=100)
+            for message in reversed(messages):
+                info = message.get("info") if isinstance(message.get("info"), dict) else message
+                role = str(info.get("role") or "").casefold()
+                if role not in {"user", "assistant"}:
+                    continue
+                content = self._assistant_text(message)
+                if role == "user":
+                    marker = "User question:\n"
+                    if marker not in content:
+                        continue  # skip synthetic/context messages
+                    content = content.rsplit(marker, 1)[-1].strip()
+                if content:
+                    self.store.chat_message_add(session_id, role, content)
+        except (AnalyticsError, OSError, ValueError) as exc:
+            _analytics_event(logging.WARNING, "ask_anvil_history_projection_failed",
+                             reason_code=str(getattr(exc, "code", type(exc).__name__)))
+
+    def clear_conversation(self) -> dict[str, Any]:
+        if not self._chat_lock.acquire(blocking=False):
+            raise ConflictError("Anvil is finishing another Analytics chat response", code="SESSION_BUSY")
+        try:
+            result = self.sessions.clear_conversation()
+            _analytics_event(logging.INFO, "ask_anvil_conversation_cleared",
+                             session_id=result["session_id"],
+                             conversation_generation=result["conversation_generation"])
+            return {"cleared": True, "session_id": result["session_id"]}
         finally:
             self._chat_lock.release()
 
@@ -1196,8 +1345,45 @@ class AnalyticsService:
         import hashlib
         return hashlib.sha256(host.encode("utf-8")).hexdigest()
 
+    def _migrate_local_dataset_metadata(self) -> None:
+        """Upgrade small pointer metadata before UI startup; defer physical scans."""
+        if not self.paths.datasets.exists() or self.paths.datasets.is_symlink():
+            return
+        for root in self.paths.datasets.iterdir():
+            if root.is_symlink() or not root.is_dir() or not re.fullmatch(r"[a-f0-9]{64}", root.name):
+                continue
+            pointer = root / "dataset-state.json"
+            try:
+                if pointer.is_symlink():
+                    continue
+                raw = json.loads(pointer.read_text(encoding="utf-8")) if pointer.is_file() else {}
+                if raw.get("schema_version") == 2:
+                    continue
+                _analytics_event(logging.INFO, "local_dataset_migration_started", dataset_id=root.name,
+                                 source_version=raw.get("schema_version", raw.get("version", 1)))
+                with dataset_lock(root, exclusive=True):
+                    state = dataset_state(root)
+                    current = state.get("current") if isinstance(state.get("current"), dict) else {}
+                    snapshot_id = str(current.get("snapshot_id") or "")
+                    if re.fullmatch(r"[a-f0-9]{64}", snapshot_id):
+                        manifest_path = root / "snapshots" / snapshot_id / "manifest.json"
+                        if manifest_path.is_file() and not manifest_path.is_symlink():
+                            manifest = self.coverage._read_json(manifest_path, maximum_bytes=2 * 1024 * 1024)
+                            state["coverage"] = {"columns_mode": manifest.get("columns_mode"),
+                                                 "rows_mode": manifest.get("rows_mode"),
+                                                 "predicate": manifest.get("predicate", "")}
+                            state["source_schema"] = {"identity": manifest.get("source_schema_identity") or
+                                                      manifest.get("schema_identity") or ""}
+                            state["created_at"] = manifest.get("created_at") or state["created_at"]
+                    atomic_dataset_state(root, state)
+                _analytics_event(logging.INFO, "local_dataset_migration_completed", dataset_id=root.name,
+                                 schema_version=2)
+            except Exception as exc:
+                _analytics_event(logging.WARNING, "local_dataset_reconciliation_failed", dataset_id=root.name,
+                                 reason_code=str(getattr(exc, "code", type(exc).__name__)))
+
     def _reconcile_local_datasets(self) -> None:
-        """Validate persisted CURRENT schemas at service startup when DuckDB is usable."""
+        """Validate persisted schemas in the background; local queries validate on demand."""
         workspace_identity = self._workspace_identity()
         if not workspace_identity:
             return
@@ -1206,7 +1392,7 @@ class AnalyticsService:
             return
         try:
             datasets = self.coverage.list_local_datasets(workspace_identity, limit=500)
-        except (AnalyticsError, OSError, ValueError) as exc:
+        except Exception as exc:
             _analytics_event(logging.WARNING, "local_dataset_reconciliation_failed",
                              reason_code=str(getattr(exc, "code", type(exc).__name__)))
             return
@@ -1220,6 +1406,23 @@ class AnalyticsService:
                 if current is None:
                     continue
                 engine.inspect_snapshot_schema(current)
+                # Persist a canonical physical inventory only after independent
+                # Parquet and DuckDB verification. A newer CURRENT may have been
+                # published while this background inspection was running.
+                import pyarrow.parquet as parquet
+                physical = [{"name": field.name, "type": canonical_type(field.type),
+                             "nullable": field.nullable} for field in
+                            parquet.ParquetFile(str(current["files"][0])).schema_arrow]
+                root = current["dataset_root"]
+                with dataset_lock(root, exclusive=True):
+                    state = dataset_state(root)
+                    pointer = state.get("current") or {}
+                    if pointer.get("snapshot_id") != current["snapshot_id"]:
+                        continue
+                    if state.get("physical_schema") != {"columns": physical,
+                                                         "snapshot_id": current["snapshot_id"]}:
+                        atomic_dataset_state(root, {**state, "physical_schema": {
+                            "columns": physical, "snapshot_id": current["snapshot_id"]}})
                 self.coverage.publish_dataset_record(current)
                 _analytics_event(logging.INFO, "local_dataset_reconciled",
                                  source_name=source_name,
@@ -1231,8 +1434,8 @@ class AnalyticsService:
                                  source_name=source_name,
                                  snapshot_id=(current.get("snapshot_id") if current else ""),
                                  state=("INVALID" if exc.code == "LOCAL_SCHEMA_MISMATCH" else
-                                        "NEEDS_RECONCILIATION"), reason_code=exc.code)
-            except (OSError, ValueError, AnalyticsError) as exc:
+                                        "CHECKING"), reason_code=exc.code)
+            except Exception as exc:
                 _analytics_event(logging.WARNING, "local_dataset_reconciliation_failed",
                                  source_name=source_name,
                                  reason_code=str(getattr(exc, "code", type(exc).__name__)))

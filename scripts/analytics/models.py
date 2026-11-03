@@ -15,6 +15,7 @@ class QueryRoute(str, Enum):
 
 class MaterializationState(str, Enum):
     PLANNED = "PLANNED"
+    QUEUED = "QUEUED"
     RUNNING = "RUNNING"
     PAUSED = "PAUSED"
     VALIDATING = "VALIDATING"

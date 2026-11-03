@@ -286,18 +286,25 @@ class AnalyticsCatalogTests(unittest.TestCase):
                 return {**warehouse, "state": "RUNNING"}
 
             shared.ensure_warehouse_running = ensure
-            shared._call_provider = lambda *_args, **_kwargs: {
-                "value": {"statement_id": "statement-stopped"}, "provider": "sdk"}
+            def submit(*_args, **kwargs):
+                calls.append(("submit", kwargs["cli_body"]))
+                return {"value": {"statement_id": "statement-stopped"}, "provider": "sdk"}
+            shared._call_provider = submit
             shared._record_runtime_outcome = lambda *_args, **_kwargs: None
             result = shared.start_sql_transfer("SELECT order_id FROM main.silver.orders", "wh-stopped",
-                                               profile="anvil-test")
+                                               profile="anvil-test",
+                                               on_warehouse_ready=lambda: calls.append(("ready",)))
         finally:
             shared.resolve_profile = old_resolve
             shared.discover_warehouses = old_warehouses
             shared.ensure_warehouse_running = old_ensure
             shared._call_provider = old_call
             shared._record_runtime_outcome = old_record
-        self.assertEqual(calls, [("ensure", "STOPPED", "anvil-test")])
+        self.assertEqual(calls[0], ("ensure", "STOPPED", "anvil-test"))
+        self.assertEqual(calls[1], ("ready",))
+        self.assertEqual(calls[2][0], "submit")
+        self.assertNotIn("row_limit", calls[2][1])
+        self.assertNotIn("byte_limit", calls[2][1])
         self.assertEqual(result["statement_id"], "statement-stopped")
 
     def test_sdk_worker_submits_external_arrow_with_existing_workspace_client(self):

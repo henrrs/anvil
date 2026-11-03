@@ -61,7 +61,8 @@ class LifecycleRecoveryTests(unittest.TestCase):
         self.assertTrue(migration_rollback_policy(2, 3)["restore_required"])
         self.assertEqual(migration_rollback_policy(3, 4)["policy"], "BACKUP_RESTORE_REQUIRED")
         self.assertTrue(migration_rollback_policy(3, 4)["restore_required"])
-        self.assertEqual(migration_rollback_policy(4, 5)["status"], "BLOCKED")
+        self.assertEqual(migration_rollback_policy(4, 5)["policy"], "BACKUP_RESTORE_REQUIRED")
+        self.assertEqual(migration_rollback_policy(5, 6)["status"], "BLOCKED")
 
     def test_recovery_journal_transitions_are_retryable_and_durable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -18,6 +18,7 @@ from .models import QueryRecord, QueryRoute
 from .planner import (QueryPlan, ensure_read_only, parse_local_query,
                       rewrite_expression_identifiers)
 from .store import ContextStore
+from .schema import canonical_type
 
 MAX_QUERY_ROWS = 100
 MAX_QUERY_BYTES = 1_000_000
@@ -37,6 +38,7 @@ class RemoteQueryPort(Protocol):
 class DuckDBLocalEngine:
     def __init__(self) -> None:
         self._duckdb: Any = None
+        self._verified_schema_keys: set[tuple[str, str]] = set()
         self.failure_code = "LOCAL_ENGINE_MISSING"
         try:
             import duckdb
@@ -60,7 +62,12 @@ class DuckDBLocalEngine:
         connection = self._duckdb.connect(database=":memory:")
         try:
             connection.read_parquet(files).create_view("_anvil_coverage_snapshot", replace=True)
-            self.validate_snapshot_schema(connection, snapshot)
+            key = (str(snapshot.get("snapshot_id") or ""),
+                   str(snapshot.get("verification_fingerprint") or ""))
+            if not key[0] or not key[1] or key not in self._verified_schema_keys:
+                self.validate_snapshot_schema(connection, snapshot)
+                if key[0] and key[1]:
+                    self._verified_schema_keys.add(key)
             start, end = plan.source_span
             if not (0 <= start < end <= len(plan.sql)):
                 raise CoverageError("The local query source could not be resolved safely")
@@ -103,15 +110,25 @@ class DuckDBLocalEngine:
         if not files:
             raise CoverageError("The current local snapshot has no readable Parquet files",
                                 code="LOCAL_SCHEMA_MISMATCH")
+        key = (str(snapshot.get("snapshot_id") or ""),
+               str(snapshot.get("verification_fingerprint") or ""))
+        if key[0] and key[1] and key in self._verified_schema_keys:
+            return
         try:
             connection = self._duckdb.connect(database=":memory:")
             try:
                 connection.read_parquet(files).create_view("_anvil_coverage_snapshot", replace=True)
                 self.validate_snapshot_schema(connection, snapshot)
+                if key[0] and key[1]:
+                    self._verified_schema_keys.add(key)
             finally:
                 connection.close()
         except CoverageError:
             raise
+        except (NameError, AttributeError, KeyError, TypeError) as exc:
+            _query_event("local_schema_validation_internal_error", reason_code=type(exc).__name__)
+            raise CoverageError("Anvil could not complete its local schema verification",
+                                code="INTERNAL_SCHEMA_VALIDATION_ERROR") from exc
         except Exception as exc:
             raise CoverageError("DuckDB could not validate the CURRENT local schema",
                                 code="LOCAL_SCHEMA_MISMATCH") from exc
@@ -133,16 +150,20 @@ class DuckDBLocalEngine:
                 files = snapshot.get("files") if isinstance(snapshot.get("files"), (list, tuple)) else []
                 if not files:
                     raise ValueError("Parquet file list is empty")
-                schemas = [[(field.name, str(field.type)) for field in
+                schemas = [[(field.name, field.type, field.nullable) for field in
                             parquet.ParquetFile(str(path)).schema_arrow] for path in files]
                 if any([item[0] for item in schema] != [item[0] for item in schemas[0]] or
-                       [_local_type(item[1]) for item in schema] !=
-                       [_local_type(item[1]) for item in schemas[0]] for schema in schemas[1:]):
+                       [(_local_type(item[1]), item[2]) for item in schema] !=
+                       [(_local_type(item[1]), item[2]) for item in schemas[0]] for schema in schemas[1:]):
                     raise CoverageError("CURRENT Parquet files have inconsistent physical schemas",
                                         code="LOCAL_SCHEMA_MISMATCH")
                 physical_columns = list(schemas[0])
             except CoverageError:
                 raise
+            except (NameError, AttributeError, KeyError, TypeError) as exc:
+                _query_event("local_schema_validation_internal_error", reason_code=type(exc).__name__)
+                raise CoverageError("Anvil could not complete its local schema verification",
+                                    code="INTERNAL_SCHEMA_VALIDATION_ERROR") from exc
             except Exception as exc:
                 raise CoverageError("The physical Parquet schema could not be verified independently",
                                     code="LOCAL_SCHEMA_UNVERIFIED") from exc
@@ -154,15 +175,20 @@ class DuckDBLocalEngine:
                                 code="LOCAL_SCHEMA_MISMATCH") from exc
         visible = [(str(row[0]), str(row[1]) if len(row) > 1 else "")
                    for row in description if isinstance(row, (list, tuple)) and row]
-        physical_schema = [((str(item[0]), str(item[1])) if isinstance(item, (tuple, list)) and len(item) > 1
+        physical_schema = [((str(item[0]), item[1]) if isinstance(item, (tuple, list)) and len(item) > 1
                             else (str(item), "")) for item in physical_columns]
         declared_names = [name.casefold() for name in declared]
         physical_names = [name.casefold() for name, _type in physical_schema]
         visible_names = [name.casefold() for name, _type in visible]
-        type_mismatch = any(_local_type(physical_type) != _local_type(duck_type)
-                            for (_physical_name, physical_type), (_duck_name, duck_type)
-                            in zip(physical_schema, visible)
-                            if physical_type and duck_type)
+        try:
+            type_mismatch = any(_local_type(physical_type) != _local_type(duck_type)
+                                for (_physical_name, physical_type), (_duck_name, duck_type)
+                                in zip(physical_schema, visible)
+                                if physical_type and duck_type)
+        except (NameError, AttributeError, KeyError, TypeError) as exc:
+            _query_event("local_schema_validation_internal_error", reason_code=type(exc).__name__)
+            raise CoverageError("Anvil could not complete its local schema verification",
+                                code="INTERNAL_SCHEMA_VALIDATION_ERROR") from exc
         if (declared_names != physical_names or physical_names != visible_names or type_mismatch):
             _query_event("local_coverage_inconsistency_detected",
                          declared_columns=len(declared), physical_columns=len(physical_schema),
@@ -300,30 +326,7 @@ class CoverageDecisionFallback:
 
 
 def _local_type(value: str) -> str:
-    normalized = re.sub(r"\s+", "", str(value).casefold())
-    for prefix, canonical in (
-        ("string", "string"), ("large_string", "string"), ("varchar", "string"),
-        ("text", "string"), ("utf8", "string"), ("bool", "boolean"),
-        ("boolean", "boolean"), ("int8", "tinyint"), ("int16", "smallint"),
-        ("int32", "integer"), ("int64", "bigint"), ("uint8", "utinyint"),
-        ("uint16", "usmallint"), ("uint32", "uinteger"), ("uint64", "ubigint"),
-        ("tinyint", "tinyint"), ("smallint", "smallint"), ("integer", "integer"),
-        ("int", "integer"), ("bigint", "bigint"), ("float32", "float"),
-        ("float", "float"), ("float64", "double"), ("double", "double"),
-        ("date32", "date"), ("date64", "date"), ("date", "date"),
-    ):
-        if normalized == prefix or normalized.startswith(prefix + "[") or normalized.startswith(prefix + "("):
-            return canonical
-    if normalized.startswith("timestamp"):
-        return "timestamp"
-    if normalized.startswith("decimal"):
-        match = re.search(r"\((\d+)\s*,\s*(\d+)\)", normalized)
-        return "decimal" + (match.group(0) if match else "")
-    if normalized.startswith("list") or normalized.endswith("[]"):
-        return "list"
-    if normalized.startswith("struct"):
-        return "struct"
-    return normalized
+    return canonical_type(value)
 
 
 def _bound_remote_result(result: dict[str, Any]) -> dict[str, Any]:

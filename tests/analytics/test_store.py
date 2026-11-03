@@ -46,7 +46,7 @@ class AnalyticsContextStoreTests(unittest.TestCase):
             self.store.catalog_hydration_set("tree", "", "LOADING", progress_current=10,
                                               progress_total=9)
 
-    def test_v2_catalog_hydration_schema_migrates_to_v4_and_preserves_rows(self) -> None:
+    def test_v2_catalog_hydration_schema_migrates_to_v5_and_preserves_rows(self) -> None:
         legacy_paths = AnalyticsPaths.from_root(Path(self.temp.name) / "legacy-anvil", create=True)
         with sqlite3.connect(legacy_paths.database) as db:
             db.execute("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
@@ -54,7 +54,7 @@ class AnalyticsContextStoreTests(unittest.TestCase):
             db.execute("CREATE TABLE catalog_hydration(scope TEXT NOT NULL,parent_name TEXT NOT NULL DEFAULT '',state TEXT NOT NULL,error_code TEXT NOT NULL DEFAULT '',error_message TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,object_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,PRIMARY KEY(scope,parent_name))")
         migrated = ContextStore(paths=legacy_paths)
         with migrated._connect() as db:
-            self.assertEqual(db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 4)
+            self.assertEqual(db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 5)
             columns = {row[1] for row in db.execute("PRAGMA table_info(catalog_hydration)")}
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertTrue({"phase", "progress_current", "progress_total"} <= columns)
