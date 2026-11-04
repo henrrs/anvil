@@ -6,6 +6,15 @@ let state = loadState();
 let pendingConnection = null;
 let simulationTimers = new Map();
 let toastTimer = 0;
+let contextOverlayOpen = false;
+
+const isNarrowLayout = () => window.innerWidth <= 1240;
+const isContextCollapsed = () => isNarrowLayout() ? !contextOverlayOpen : Boolean(state.contextCollapsed);
+
+function openContextPanel() {
+  if (isNarrowLayout()) contextOverlayOpen = true;
+  else state.contextCollapsed = false;
+}
 
 function mergeState(base, saved) {
   if (!saved || typeof saved !== "object") return structuredClone(base);
@@ -88,11 +97,12 @@ function render({ focusSelector = "" } = {}) {
   const active = document.activeElement;
   const activeSelector = focusSelector || (active?.id ? `#${CSS.escape(active.id)}` : "");
   const caret = active && typeof active.selectionStart === "number" ? active.selectionStart : null;
+  const layoutState = { ...state, contextCollapsed: isContextCollapsed() };
   byId("primary-rail").innerHTML = renderPrimaryNav(state);
   byId("explorer").innerHTML = renderExplorer(state);
-  byId("workspace-toolbar").innerHTML = renderWorkspaceToolbar(state);
+  byId("workspace-toolbar").innerHTML = renderWorkspaceToolbar(layoutState);
   byId("view-root").innerHTML = renderScreen(state);
-  byId("context-panel").innerHTML = renderContext(state);
+  byId("context-panel").innerHTML = renderContext(layoutState);
   byId("statusbar").innerHTML = renderStatusbar(state);
   byId("tab-strip").innerHTML = renderTabs(state);
   byId("operation-count").textContent = String(state.operations.filter(op => !["Completed", "Failed", "Cancelled"].includes(op.state)).length);
@@ -118,7 +128,7 @@ function render({ focusSelector = "" } = {}) {
 function applyLayout() {
   const layout = byId("main-layout");
   layout.classList.toggle("explorer-collapsed", Boolean(state.explorerCollapsed));
-  layout.classList.toggle("context-collapsed", Boolean(state.contextCollapsed));
+  layout.classList.toggle("context-collapsed", isContextCollapsed());
   const width = window.innerWidth;
   const split = 5;
   if (width <= 980) {
@@ -153,9 +163,9 @@ let currentResponsiveBand = responsiveBand(window.innerWidth);
 window.addEventListener("resize", () => {
   const nextBand = responsiveBand(window.innerWidth);
   if (nextBand === currentResponsiveBand) return;
+  if (isNarrowLayout() && !["narrow", "mobile", "mobile-small"].includes(currentResponsiveBand)) contextOverlayOpen = false;
   currentResponsiveBand = nextBand;
-  applyLayout();
-  if (state.screen === "pipeline-studio") render();
+  render();
 });
 
 function renderModal() {
@@ -426,7 +436,7 @@ function attachCurrentContext() {
   else if (state.screen === "execution-console") id = state.operations.find(op => op.id === state.selectedOperation)?.target || "latest execution logs";
   if (!state.chatContext.includes(id)) state.chatContext.push(id);
   state.contextTab = "assistant";
-  state.contextCollapsed = false;
+  openContextPanel();
   render();
   showToast("Context attached", id, "success");
 }
@@ -448,9 +458,9 @@ function action(actionName, element) {
     case "clear-chat": state.modal = { type: "clear-chat" }; render(); return true;
     case "confirm-clear-chat": state.chat = []; state.modal = null; render(); showToast("Conversation cleared", "Workspace data and assets were preserved."); return true;
     case "confirm-reset": state.modal = { type: "reset-demo" }; render(); return true;
-    case "reset-demo": for (const timer of simulationTimers.values()) clearTimeout(timer); simulationTimers.clear(); localStorage.removeItem(STORAGE_KEY); state = freshState(); hydrateDemoState(); pendingConnection = null; render(); resumeActiveOperations(); showToast("Demo reset", "Dexter has returned to its seeded state."); return true;
+    case "reset-demo": for (const timer of simulationTimers.values()) clearTimeout(timer); simulationTimers.clear(); localStorage.removeItem(STORAGE_KEY); state = freshState(); contextOverlayOpen = false; hydrateDemoState(); pendingConnection = null; render(); resumeActiveOperations(); showToast("Demo reset", "Dexter has returned to its seeded state."); return true;
     case "toggle-explorer": case "collapse-explorer": state.explorerCollapsed = !state.explorerCollapsed; render(); return true;
-    case "toggle-context": state.contextCollapsed = !state.contextCollapsed; render(); return true;
+    case "toggle-context": if (isNarrowLayout()) contextOverlayOpen = !contextOverlayOpen; else state.contextCollapsed = !state.contextCollapsed; render(); return true;
     case "context-tab": state.contextTab = value; render(); return true;
     case "attach-current-context": attachCurrentContext(); return true;
     case "remove-chat-context": state.chatContext.splice(Number(element.dataset.index),1); render(); return true;
@@ -652,7 +662,7 @@ function action(actionName, element) {
     case "lineage-node": state.lineageSelected=Number(element.dataset.index);state.contextTab="properties";render();return true;
     case "lineage-depth": state.lineageDepth=value;render();return true;
     case "select-repository": state.selectedRepository=id;render();return true;
-    case "ask-diagnose": attachContextWithoutRender(state.operations.find(op=>op.id===state.selectedOperation)?.target||"customer_incremental_ingest failure logs");state.contextTab="assistant";state.contextCollapsed=false;sendChat("Diagnose the failed pipeline run");return true;
+    case "ask-diagnose": attachContextWithoutRender(state.operations.find(op=>op.id===state.selectedOperation)?.target||"customer_incremental_ingest failure logs");state.contextTab="assistant";openContextPanel();sendChat("Diagnose the failed pipeline run");return true;
     case "associate-repository": { const repo=getRepository(state); if(repo.access==="Restricted"){showToast("Repository is restricted","Request access from the owning team.","error");return true;}getWorkspace(state).repository=repo.path;render();showToast("Repository associated",`${repo.path} is linked to ${getWorkspace(state).name}.`);return true; }
     case "connect-repository": state.modal={type:"info",title:"Connect repository · simulated"};render();return true;
     case "browse-branches": state.modal={type:"info",title:`Branches · ${getRepository(state).path}`};render();return true;
@@ -876,6 +886,7 @@ document.addEventListener("pointerdown",resizeStart);
 document.addEventListener("keydown",event=>{
   if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==="k"){event.preventDefault();openCommandPalette();return;}
   if(event.key==="Escape"&&state.modal){state.modal=null;render();return;}
+  if(event.key==="Escape"&&isNarrowLayout()&&contextOverlayOpen){contextOverlayOpen=false;render();return;}
   if((event.metaKey||event.ctrlKey)&&event.key==="Enter"&&state.screen==="sql-workspace"){event.preventDefault();runSql();}
   if(event.key==="Enter"&&event.target.id==="global-search"){
     const query=event.target.value.toLowerCase();const item=screens.find(screen=>screen.title.toLowerCase().includes(query));const asset=state.assets.find(candidate=>candidate.fullName.toLowerCase().includes(query)||candidate.name.toLowerCase().includes(query));

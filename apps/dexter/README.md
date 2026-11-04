@@ -46,7 +46,7 @@ Then run the check from this directory in another terminal:
 python3 tests/browser_smoke.py
 ```
 
-The browser check exercises the main cross-module journeys, runs at 1920×1080 and 3840×2160, checks page-level horizontal overflow, and saves screenshots under `/tmp/dexter-smoke/`.
+The browser check exercises the main cross-module journeys and shell layouts at 500, 768, 1024, 1366, 1920, and 3840 pixels. It checks open and closed sidebars, the Ask Dexter drawer, page-level horizontal overflow, and saves screenshots under `/tmp/dexter-smoke/`.
 
 ## Extending the prototype
 

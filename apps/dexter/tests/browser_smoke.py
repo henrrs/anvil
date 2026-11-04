@@ -299,7 +299,97 @@ def main():
             assert all(path["x"] >= 0 and path["x"] + path["width"] <= geometry["coordinateWidth"] + 1 for path in geometry["paths"]), f"Pipeline edge escapes its SVG coordinate bounds at {width}px: {geometry}"
             client.screenshot(f"pipeline-{width}x{height}.png")
 
-        print(f"PASS Firefox browser journeys at 1920×1080 and 3840×2160; screenshots: {ARTIFACTS}")
+        def shell_geometry():
+            return client.script("""
+              const box = selector => {
+                const node = document.querySelector(selector);
+                const rect = node.getBoundingClientRect();
+                return { x: rect.x, right: rect.right, width: rect.width,
+                  display: getComputedStyle(node).display };
+              };
+              return { viewport: innerWidth, scroll: document.documentElement.scrollWidth,
+                layout: box('#main-layout'), rail: box('#primary-rail'),
+                workspace: box('#workspace'), context: box('#context-panel'),
+                contextButton: box('#workspace-toolbar [data-action="toggle-context"]'),
+                backdrop: box('.context-backdrop'),
+                contextText: document.querySelector('#context-panel').innerText,
+                buttonExpanded: document.querySelector('#workspace-toolbar [data-action="toggle-context"]').getAttribute('aria-expanded'),
+                collapsed: document.querySelector('#main-layout').classList.contains('context-collapsed') };
+            """)
+
+        def assert_shell(width, context_open):
+            geometry = shell_geometry()
+            viewport = geometry["viewport"]
+            assert abs(viewport - width) <= 40, f"Unexpected viewport at {width}px: {geometry}"
+            assert geometry["layout"]["display"] == "grid", f"Shell lost its grid at {width}px: {geometry}"
+            assert abs(geometry["layout"]["x"]) <= 1, f"Shell is shifted at {width}px: {geometry}"
+            assert abs(geometry["layout"]["right"] - viewport) <= 2, f"Shell does not fill the viewport at {width}px: {geometry}"
+            assert geometry["scroll"] <= viewport + 2, f"Page overflows horizontally at {width}px: {geometry}"
+            assert geometry["rail"]["x"] <= 1, f"Navigation rail is displaced at {width}px: {geometry}"
+            assert geometry["workspace"]["width"] > 250, f"Workspace is unusably narrow at {width}px: {geometry}"
+            assert geometry["contextButton"]["width"] > 0, f"Ask Dexter control is missing at {width}px: {geometry}"
+            assert geometry["buttonExpanded"] == str(context_open).lower(), f"Ask Dexter control reports the wrong state at {width}px: {geometry}"
+            assert geometry["collapsed"] is not context_open, f"Ask Dexter state is wrong at {width}px: {geometry}"
+            if context_open:
+                assert "Ask Dexter" in geometry["contextText"], f"Ask Dexter content is missing at {width}px: {geometry}"
+            if width > 1240:
+                assert abs(geometry["context"]["right"] - viewport) <= 2, f"Ask Dexter is not at the right edge at {width}px: {geometry}"
+                assert geometry["context"]["width"] >= (250 if context_open else 40), f"Ask Dexter has the wrong width at {width}px: {geometry}"
+            else:
+                expected = "flex" if context_open else "none"
+                assert geometry["context"]["display"] == expected, f"Mobile Ask Dexter visibility is wrong at {width}px: {geometry}"
+                assert geometry["backdrop"]["display"] == ("block" if context_open else "none"), f"Mobile backdrop state is wrong at {width}px: {geometry}"
+                if context_open:
+                    assert abs(geometry["context"]["right"] - viewport) <= 2, f"Mobile Ask Dexter is offscreen at {width}px: {geometry}"
+            return geometry
+
+        # Exercise the shell states that previously centered the entire app and hid Ask Dexter.
+        for width, height in ((1366, 900), (1920, 1080), (3840, 2160)):
+            client.command("POST", "/window/rect", {"x": 0, "y": 0, "width": width, "height": height})
+            client.navigate("home")
+            assert_shell(width, True)
+            client.click('#workspace-toolbar [data-action="toggle-explorer"]')
+            client.click('#workspace-toolbar [data-action="toggle-context"]')
+            assert_shell(width, False)
+            client.screenshot(f"home-{width}-sidebars-closed.png")
+            client.click('#workspace-toolbar [data-action="toggle-context"]')
+            assert_shell(width, True)
+            client.click('#workspace-toolbar [data-action="toggle-explorer"]')
+
+        # Narrow and mobile widths use an on-demand drawer instead of covering the first view.
+        for width, height in ((1024, 768), (768, 900), (500, 900)):
+            client.command("POST", "/window/rect", {"x": 0, "y": 0, "width": width, "height": height})
+            client.command("POST", "/url", {"url": f"http://127.0.0.1:{server_port}/"})
+            client.wait_for("document.querySelector('#view-root h1')")
+            client.navigate("home")
+            assert_shell(width, False)
+            client.click('#workspace-toolbar [data-action="toggle-context"]')
+            assert_shell(width, True)
+            client.screenshot(f"home-{width}-ask-dexter-open.png")
+            client.click('.context-backdrop')
+            assert_shell(width, False)
+            client.click('#workspace-toolbar [data-action="toggle-context"]')
+            client.script("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));")
+            assert_shell(width, False)
+            client.screenshot(f"home-{width}-ask-dexter-closed.png")
+
+        client.command("POST", "/url", {"url": f"http://127.0.0.1:{server_port}/"})
+        client.wait_for("document.querySelector('#view-root h1')")
+        assert_shell(500, False)
+
+        compact_screens = (
+            "home", "workspace-overview", "notebook-studio", "execution-console",
+            "test-center", "product-builder", "contracts", "artifact-preview", "artifact-review",
+        )
+        for width, height in ((500, 900), (768, 900), (1024, 768), (1366, 900)):
+            client.command("POST", "/window/rect", {"x": 0, "y": 0, "width": width, "height": height})
+            for screen in compact_screens:
+                client.navigate(screen)
+                metrics = client.script("const view=document.querySelector('#view-scroll'),content=document.querySelector('#view-root');return {viewport:innerWidth,page:document.documentElement.scrollWidth,available:view.clientWidth,content:content.scrollWidth};")
+                assert metrics["page"] <= metrics["viewport"] + 2, f"Page overflow in {screen} at {width}px: {metrics}"
+                assert metrics["content"] <= metrics["available"] + 2, f"Clipped content in {screen} at {width}px: {metrics}"
+
+        print(f"PASS Firefox browser journeys, sidebar states, and compact screens from 500px to 4K; screenshots: {ARTIFACTS}")
     finally:
         if client:
             try:

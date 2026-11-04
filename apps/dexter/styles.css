@@ -191,8 +191,10 @@ a { color: inherit; text-decoration: none; }
 .chat-compose-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
 .chat-footnote { padding: 0 10px 8px; color: #777871; font-size: 8px; }
 .send-button { display: grid; width: 25px; height: 25px; place-items: center; border: 1px solid #a2782f; border-radius: 6px; color: #20180b; background: var(--amber); font-size: 15px; }
-.context-collapsed { display: flex; align-items: flex-start; justify-content: center; padding: 9px 3px; }
+.main-layout.context-collapsed .context-panel { align-items: center; padding: 9px 3px; }
+.main-layout.context-collapsed .context-head { width: 100%; justify-content: center; padding: 0; border-bottom: 0; }
 .context-collapsed .context-tabs, .context-collapsed .context-body, .context-collapsed .context-head h2 { display: none; }
+.context-backdrop { display: none; }
 
 /* Reusable controls and content primitives */
 .button { display: inline-flex; min-height: 29px; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; border: 1px solid var(--border); border-radius: 5px; background: #17191a; color: var(--text-2); font-size: 10px; font-weight: 550; white-space: nowrap; }
@@ -210,10 +212,11 @@ a { color: inherit; text-decoration: none; }
 .mono { font-family: var(--font-code); font-size: 10px; }
 .tiny { color: var(--muted); font-size: 9px; }
 .page { min-height: 100%; padding: 17px 19px 26px; }
-.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 15px; }
+.page-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 15px; }
+.page-head > * { min-width: 0; }
 .page-head h1 { margin: 2px 0 0; font-size: 20px; font-weight: 600; letter-spacing: -.045em; }
 .page-head p { max-width: 700px; margin: 5px 0 0; color: var(--muted); font-size: 10px; }
-.page-actions { display: flex; align-items: center; gap: 6px; }
+.page-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 17px 0 9px; }
 .section-heading h2 { margin: 0; font-size: 12px; font-weight: 600; }
 .section-heading p { margin: 2px 0 0; color: var(--muted); font-size: 9px; }
@@ -440,6 +443,7 @@ table.data-table { width: 100%; border-collapse: collapse; font-size: 10px; whit
 .split-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, .72fr); gap: 10px; }
 .three-layout { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .two-layout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.home-grid > *, .split-layout > *, .two-layout > *, .three-layout > *, .card-grid > *, .form-grid > * { min-width: 0; }
 .pill-row { display: flex; flex-wrap: wrap; gap: 5px; }
 .pill-select { position: relative; display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 5px; color: var(--text-2); background: #151819; font-size: 8px; cursor: pointer; }
 .pill-select input { accent-color: var(--amber); }
@@ -507,6 +511,7 @@ table.data-table { width: 100%; border-collapse: collapse; font-size: 10px; whit
   :root { --context-width: 46px; }
   .main-layout { position: relative; grid-template-columns: 58px minmax(190px, 220px) 5px minmax(0, 1fr) 0 0; }
   .assistant-splitter { display: none; }
+  .main-layout:not(.context-collapsed) .context-backdrop { position: absolute; z-index: 29; inset: 0; display: block; background: #0008; }
   .context-panel { position: absolute; z-index: 30; top: 0; right: 0; bottom: 0; display: none; width: min(360px, calc(100vw - 70px)); border: 1px solid var(--border); box-shadow: -14px 0 40px #0009; }
   .main-layout:not(.context-collapsed) .context-panel { display: flex; }
   .topbar-context { gap: 5px; }
@@ -531,12 +536,13 @@ table.data-table { width: 100%; border-collapse: collapse; font-size: 10px; whit
   .rail-item { width: 44px; min-height: 43px; }
   .explorer, .rail-splitter, .assistant-splitter { display: none; }
   .main-layout .context-panel { display: none; }
+  .main-layout:not(.context-collapsed) .context-backdrop { position: fixed; top: var(--topbar-height); bottom: 0; }
   .main-layout:not(.context-collapsed) .context-panel { position: fixed; top: var(--topbar-height); right: 0; bottom: 25px; width: min(360px, calc(100vw - 52px)); }
   .workspace { min-height: calc(100vh - var(--topbar-height)); overflow: visible; }
   .view-scroll { overflow: visible; }
   .statusbar { position: sticky; bottom: 0; }
   .page { padding: 14px 12px 25px; }
-  .home-grid { grid-template-columns: 1fr; }
+  .home-grid { grid-template-columns: minmax(0, 1fr); }
   .home-grid .wide { grid-column: auto; }
   .canvas-layout { grid-template-columns: 116px minmax(260px, 1fr); }
   .canvas-inspector { display: none; }
@@ -546,12 +552,15 @@ table.data-table { width: 100%; border-collapse: collapse; font-size: 10px; whit
 }
 @media (max-width: 620px) {
   .main-layout { grid-template-columns: 46px minmax(0, 1fr); }
+  .statusbar { gap: 6px; padding: 0 8px; white-space: nowrap; }
+  .statusbar > :nth-child(3), .statusbar > :nth-child(4), .statusbar > :nth-child(7), .statusbar > :nth-child(8), .statusbar > :nth-child(9), .statusbar > :nth-child(10) { display: none; }
+  .panel-card-head { flex-wrap: wrap; }
   .top-icon:nth-child(2) { display: none; }
   .workspace-toolbar { align-items: flex-start; flex-direction: column; }
   .toolbar-actions { max-width: 100%; flex-wrap: wrap; }
   .page-head, .asset-header { flex-direction: column; }
   .page-actions { flex-wrap: wrap; }
-  .card-grid, .card-grid.two, .card-grid.four, .two-layout, .three-layout, .split-layout, .form-grid, .form-grid.three, .diff-view { grid-template-columns: 1fr; }
+  .card-grid, .card-grid.two, .card-grid.four, .two-layout, .three-layout, .split-layout, .form-grid, .form-grid.three, .diff-view { grid-template-columns: minmax(0, 1fr); }
   .diff-pane + .diff-pane { border-top: 1px solid var(--border); border-left: 0; }
   .wizard-steps { align-items: flex-start; flex-direction: column; gap: 5px; }
   .wizard-step:not(:last-child)::after { display: none; }
