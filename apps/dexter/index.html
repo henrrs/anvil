@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b0c0d" />
+    <meta name="description" content="Dexter is a local-first data engineering platform prototype." />
+    <title>Dexter — Data Engineering Workspace</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell" id="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#" data-screen="home" aria-label="Dexter home">
+          <span class="brand-mark">D</span>
+          <span class="brand-name">dexter</span>
+          <span class="brand-tag">ENGINEERING PLATFORM</span>
+        </a>
+        <div class="topbar-context">
+          <label class="top-select workspace-select"><span class="sr-only">Workspace</span><select id="workspace-select" aria-label="Current workspace"></select><span class="chevron">⌄</span></label>
+          <span class="top-divider"></span>
+          <label class="top-select environment-select"><span class="env-dot"></span><span class="sr-only">Default data environment</span><select id="environment-select" aria-label="Default data environment"><option>LOCAL</option><option>DEV</option><option>PROD</option></select><span class="chevron">⌄</span></label>
+          <span class="runtime-label"><span class="runtime-led"></span><span id="runtime-label">DuckDB Local</span></span>
+        </div>
+        <div class="global-search-wrap">
+          <span class="search-glyph" aria-hidden="true">⌕</span>
+          <input id="global-search" type="search" placeholder="Search assets, workspaces, actions…" aria-label="Search Dexter" />
+          <kbd>⌘ K</kbd>
+        </div>
+        <div class="topbar-actions">
+          <button class="top-icon" type="button" data-action="open-operations" aria-label="Active operations" title="Active operations"><span>◷</span><i class="operation-count" id="operation-count">2</i></button>
+          <button class="top-icon" type="button" data-action="open-notifications" aria-label="Notifications" title="Notifications"><span>♧</span><i class="notification-dot"></i></button>
+          <button class="user-menu" type="button" data-action="user-menu"><span class="avatar">HS</span><span class="user-copy"><strong>Henrique Silva</strong><small>Data Engineer</small></span><span class="chevron">⌄</span></button>
+        </div>
+      </header>
+
+      <div class="main-layout" id="main-layout">
+        <nav class="primary-rail" aria-label="Primary navigation" id="primary-rail"></nav>
+        <aside class="explorer" id="explorer" aria-label="Workspace explorer"></aside>
+        <div class="splitter rail-splitter" data-split="explorer" role="separator" aria-label="Resize explorer" aria-orientation="vertical" tabindex="0"></div>
+        <main class="workspace" id="workspace">
+          <div class="tab-strip" id="tab-strip" role="tablist" aria-label="Open workspaces"></div>
+          <div class="workspace-toolbar" id="workspace-toolbar"></div>
+          <div class="view-scroll" id="view-scroll"><div id="view-root"></div></div>
+          <div class="bottom-panel" id="bottom-panel" hidden>
+            <div class="bottom-panel-head"><div class="bottom-panel-tabs" id="bottom-panel-tabs"></div><button class="icon-button" type="button" data-action="close-bottom" aria-label="Close bottom panel">×</button></div>
+            <div class="bottom-panel-content" id="bottom-panel-content"></div>
+          </div>
+          <footer class="statusbar" id="statusbar"></footer>
+        </main>
+        <div class="splitter assistant-splitter" data-split="assistant" role="separator" aria-label="Resize contextual panel" aria-orientation="vertical" tabindex="0"></div>
+        <aside class="context-panel" id="context-panel" aria-label="Contextual workspace panel"></aside>
+      </div>
+    </div>
+    <dialog id="modal" class="modal"><div class="modal-frame"><div class="modal-header"><div><span class="eyebrow" id="modal-eyebrow">DEXTER</span><h2 id="modal-title">Dialog</h2></div><button class="icon-button" data-action="close-modal" aria-label="Close dialog">×</button></div><div class="modal-content" id="modal-content"></div></div></dialog>
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
