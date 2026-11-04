@@ -343,6 +343,7 @@ export function renderWorkspaceToolbar(state) {
 }
 
 export function renderExplorer(state) {
+  if(state.explorerCollapsed) return `<div class="explorer-collapsed-rail"><button class="icon-button" data-action="toggle-explorer" aria-label="Expand explorer" title="Expand explorer">›</button></div>`;
   const module=modules.find(item=>item.id===state.activeModule) || modules[0];
   const views=module.screens.map(id=>{const item=screenInfo(id);return `<button class="explorer-link ${state.screen===id?"active":""}" data-screen="${id}"><span class="link-icon">${icon(item.module==="Discover"?"table":item.module==="Build"?"build":item.module==="Deliver"?"git":item.module==="Operate"?"operate":"file",12)}</span><span>${escapeHtml(item.title)}</span>${id==="operations"?`<span class="link-count">${state.operations.filter(o=>!['Completed','Failed','Cancelled'].includes(o.state)).length}</span>`:""}</button>`;}).join("");
   let extra="";

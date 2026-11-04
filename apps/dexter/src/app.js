@@ -131,12 +131,12 @@ function applyLayout() {
   const mediumDesktop = width < 1511 && width > 1240;
   const rail = compactDesktop ? 56 : narrowDesktop ? 58 : 62;
   const explorerDefault = compactDesktop ? 220 : narrowDesktop ? 210 : mediumDesktop ? 232 : 254;
-  const contextDefault = compactDesktop ? 276 : narrowDesktop ? 46 : mediumDesktop ? 292 : 330;
+  const contextDefault = compactDesktop ? 276 : narrowDesktop ? 0 : mediumDesktop ? 292 : 330;
   const explorerLimit = compactDesktop ? 300 : narrowDesktop ? 260 : 390;
   const contextLimit = compactDesktop ? 380 : mediumDesktop ? 360 : 440;
   const explorer = state.explorerCollapsed ? 42 : state.explorerWidthUserSet ? Math.min(Math.max(190, Number(state.explorerWidth) || explorerDefault), explorerLimit) : explorerDefault;
-  const context = state.contextCollapsed ? 44 : narrowDesktop ? 46 : state.contextWidthUserSet ? Math.min(Math.max(250, Number(state.contextWidth) || contextDefault), contextLimit) : contextDefault;
-  layout.style.gridTemplateColumns = `${rail}px ${explorer}px ${split}px minmax(0,1fr) ${split}px ${context}px`;
+  const context = narrowDesktop ? 0 : state.contextCollapsed ? 44 : state.contextWidthUserSet ? Math.min(Math.max(250, Number(state.contextWidth) || contextDefault), contextLimit) : contextDefault;
+  layout.style.gridTemplateColumns = `${rail}px ${explorer}px ${split}px minmax(0,1fr) ${narrowDesktop ? 0 : split}px ${context}px`;
   byId("explorer").hidden = false;
 }
 
