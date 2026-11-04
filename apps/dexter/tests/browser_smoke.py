@@ -344,7 +344,7 @@ def main():
             return geometry
 
         # Exercise the shell states that previously centered the entire app and hid Ask Dexter.
-        for width, height in ((1366, 900), (1920, 1080), (3840, 2160)):
+        for width, height in ((1241, 900), (1366, 900), (1510, 900), (1511, 900), (1920, 1080), (2299, 1200), (2300, 1200), (3840, 2160)):
             client.command("POST", "/window/rect", {"x": 0, "y": 0, "width": width, "height": height})
             client.navigate("home")
             assert_shell(width, True)
@@ -357,7 +357,7 @@ def main():
             client.click('#workspace-toolbar [data-action="toggle-explorer"]')
 
         # Narrow and mobile widths use an on-demand drawer instead of covering the first view.
-        for width, height in ((1024, 768), (768, 900), (500, 900)):
+        for width, height in ((620, 900), (621, 900), (768, 900), (980, 900), (981, 768), (1024, 768), (1240, 900), (500, 900)):
             client.command("POST", "/window/rect", {"x": 0, "y": 0, "width": width, "height": height})
             client.command("POST", "/url", {"url": f"http://127.0.0.1:{server_port}/"})
             client.wait_for("document.querySelector('#view-root h1')")
@@ -389,7 +389,7 @@ def main():
                 assert metrics["page"] <= metrics["viewport"] + 2, f"Page overflow in {screen} at {width}px: {metrics}"
                 assert metrics["content"] <= metrics["available"] + 2, f"Clipped content in {screen} at {width}px: {metrics}"
 
-        print(f"PASS Firefox browser journeys, sidebar states, and compact screens from 500px to 4K; screenshots: {ARTIFACTS}")
+        print(f"PASS Firefox journeys, sidebar states, breakpoint edges, and compact screens from 500px to 4K; screenshots: {ARTIFACTS}")
     finally:
         if client:
             try:
