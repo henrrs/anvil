@@ -74,6 +74,20 @@ for folder in (root/"scripts",root/"tests"):
 PY
 pass 'Shell and Python syntax'
 
+python3 - "$ROOT/scripts/version_docs.py" <<'PY' || fail 'release documentation requirement map'
+import ast,sys
+tree=ast.parse(open(sys.argv[1],encoding="utf-8").read())
+assignment=next(
+    node for node in ast.walk(tree)
+    if isinstance(node,ast.Assign)
+    and any(isinstance(target,ast.Name) and target.id=="required" for target in node.targets)
+    and isinstance(node.value,ast.Dict)
+)
+keys=[key.value for key in assignment.value.keys if isinstance(key,ast.Constant) and isinstance(key.value,str)]
+assert len(keys)==len(set(keys)), "scripts/version_docs.py contains duplicate requirement paths"
+PY
+pass 'Release documentation requirements cannot silently overwrite one another'
+
 python3 - "$ROOT" <<'PY' || fail 'runtime independence boundary or repository identifier hygiene'
 import re,subprocess,sys
 from pathlib import Path
@@ -204,7 +218,8 @@ assert "pptx" in data["communication"]["outputs"]["unavailable"]
 assert data["analysis"]["status"] == "AVAILABLE"
 assert data["analysis"]["dependencies"] == {"required": [], "network": False, "persistent_state": False}
 assert data["analysis"]["depths"]["FAST"]["max_operations"] == 4
-assert data["databricks"]["cli_installed"] is False
+assert data["databricks"]["overall"] == "NOT_CONFIGURED"
+assert data["databricks"]["profile_configured"] is False
 PY
 pass 'make capabilities emits one combined machine-readable JSON document'
 python3 - "$ROOT" <<'PY' || fail 'V1/V2 baseline, model neutrality, plugin scope, or secret scan'
@@ -223,6 +238,9 @@ assert {p.stem for p in (root/"config/commands").glob("*.md")}=={"remember","rec
 assert {p.name for p in (root/"config/skills").iterdir()}=={"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion","anvil-communication","anvil-engineering","anvil-system-design"}
 plugin=(root/"config/plugins/anvil-core/index.ts").read_text(encoding="utf-8")
 assert "anvil_memory_search" in plugin and "ctx.tool.transform" in plugin
+assert plugin.count('ctx.session.hook("compaction"') == 1
+assert '"compaction-context"' in plugin and "engineering.py" in plugin
+assert "ctx.session.hook(" not in (root/"config/plugins-v1/anvil-core.ts").read_text(encoding="utf-8")
 for forbidden in ("chat.message", "session.created", "tool.execute", "provider.transform", "system.prompt", "session.compacting"):
     assert forbidden not in plugin, f"unexpected hook/routing behavior {forbidden}"
 for path in root.rglob("*"):

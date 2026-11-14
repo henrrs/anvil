@@ -18,6 +18,16 @@ Anvil 2.17.0 adds release-pinned Analytics dependencies, lifecycle/service/OpenC
 
 Anvil 2.18.0 makes Analytics routing coverage-first, hardens materialization recovery and service TLS trust, and resolves Ask Anvil against the active provider catalog. Both OpenCode 1 and OpenCode 2 use the same validated logical model policy; no runtime-major migration is required.
 
+Anvil 2.20.0 adds optional native OpenCode 2 compaction continuity for an active Anvil engineering task, lazy engineering-quality guidance, and deterministic plus opt-in model evaluation. OpenCode 1 recovery remains explicit; no runtime migration or task-state schema change is introduced. Live compaction and model quality remain unverified. See [release notes](v2.20.0.md), [migration](../migrations/v2.19.0-to-v2.20.0.md), and the [engineering harness report](../engineering-harness-report-v2.20.0.md).
+
+| Anvil 2.20 engineering capability | OpenCode 1 | OpenCode 2 |
+|---|---|---|
+| Existing task-local Requirements / Architecture / Work models | Shared helper and XDG store | Shared helper and XDG store |
+| Recovery after context loss | Explicit `engineering.py resume` | Native compaction hook adds bounded task packet when supported |
+| General quality guidance | Lazy engineering skill reference | Lazy engineering skill reference |
+| Deterministic engineering acceptance evaluation | `make eval-engineering` | `make eval-engineering` |
+| Live model quality / compaction outcome measured in offline suite | No | No |
+
 Anvil 2.19.0 migrates legacy local datasets, removes hidden All rows limits, resumes verified transfer chunks, schedules different tables concurrently, and persists Databricks identity and Ask Anvil history. Both OpenCode 1 and OpenCode 2 retain the same Analytics contract. See [release notes](v2.19.0.md), [migration](../migrations/v2.18.0-to-v2.19.0.md), and [engineering report](../analytics-local-reliability-report.md).
 
 Anvil 2.17.1 hardens real installed-state convergence: candidate systemd validation, staged-interpreter identity, stale runtime recovery, dependency rollback ordering, verified journal recovery and SQLite schema rollback. It preserves the same OpenCode 1/2 and Analytics contracts.

@@ -32,12 +32,12 @@ def parser() -> argparse.ArgumentParser:
     assess.add_argument("--signals", type=Path)
     analyze = commands.add_parser("analyze", help="Inventory one specification before semantic normalization")
     analyze.add_argument("--spec", type=Path, required=True)
-    for action in ("init", "status", "resume", "start", "implement", "check", "review", "checkpoint", "revalidate", "reconcile", "replan", "complete", "archive", "recover", "list"):
+    for action in ("init", "status", "resume", "start", "implement", "check", "review", "checkpoint", "revalidate", "reconcile", "replan", "complete", "archive", "recover", "list", "compaction-context"):
         cmd = commands.add_parser(action)
         cmd.add_argument("--repository", type=Path, default=Path.cwd())
-        if action != "list":
+        if action not in {"list", "compaction-context"}:
             cmd.add_argument("--id", required=True, help="Explicit project-scoped engineering task ID")
-        if action not in {"init", "status", "resume", "list"}:
+        if action not in {"init", "status", "resume", "list", "compaction-context"}:
             cmd.add_argument("--revision", type=int, required=True, help="Expected revision; stale writes are rejected")
         if action in {"init", "replan"}:
             cmd.add_argument("--models", type=Path, required=True)
@@ -104,7 +104,25 @@ def execute(args: argparse.Namespace) -> tuple[dict, int]:
         return specification.assess(args.request.read_text(encoding="utf-8"), read_json(args.signals) if args.signals else None), 0
     if action == "analyze":
         return specification.analyze(args.spec), 0
+    if action == "compaction-context":
+        no_symlinks(args.repository)
     repository = args.repository.resolve(strict=True)
+    if action == "compaction-context":
+        from .repository import identity
+        directory = store.state_root() / identity(repository)["id"]
+        no_symlinks(directory)
+        if not directory.is_dir():
+            return {"status": "NONE"}, 0
+        active = []
+        for path in sorted(directory.glob("*/state.json")):
+            state = store.load(path)
+            if state["status"] == "ACTIVE":
+                active.append(state)
+        if not active:
+            return {"status": "NONE"}, 0
+        if len(active) != 1:
+            return {"status": "AMBIGUOUS", "active_task_count": len(active)}, 0
+        return context.compaction_context(active[0], repository), 0
     if action == "list":
         from .repository import identity
         directory = store.state_root() / identity(repository)["id"]

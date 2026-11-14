@@ -21,6 +21,7 @@ Anvil uses Semantic Versioning. Anvil 2.0 was the runtime/configuration migratio
 8. If a release claim requires live OpenCode or Databricks compatibility, run and record a separate authorized smoke check; never describe fixture validation as a live service test.
 9. Verify that the implementation, tests, compatibility document, changelog, version history, and capability matrix agree.
 10. Verify that public command text and JSON output remain separate, setup authentication choices are topology-aware, and `make upgrade DRY_RUN=1` does not signal or write live state.
+11. For Anvil 2.20 engineering changes, run `make eval-engineering` and record the report. Treat native V2 compaction and live model evaluation as **NOT EXECUTED** unless an actual supported OpenCode 2 process and explicitly selected provider/model were used; source fixtures do not certify either behavior.
 
 The `make test` suite includes deterministic provider, install-double, PATH, SDK fallback, VS Code discovery, state-security, dry-run, version-documentation, harness, query-recipe, FinOps, runtime-independence, credential-boundary, and repository-hygiene checks. It denies external socket connections during local lifecycle tests while allowing loopback for isolated runtime fixtures. It rejects a `VERSION` without matching changelog, version, capability, compatibility, and migration documentation. It does not resolve external runtime releases or contact a Databricks workspace.
 

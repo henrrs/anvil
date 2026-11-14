@@ -303,14 +303,19 @@ def test_anvil_config_ownership_and_reset(temp: Path) -> None:
 def test_cli_minimum_and_missing(temp: Path) -> None:
     env = {
         "XDG_CONFIG_HOME": str(temp / "cli-config"),
+        "XDG_DATA_HOME": str(temp / "cli-data"),
         "ANVIL_DATABRICKS_CLI": str(FIXTURE_BIN / "databricks"),
         "ANVIL_DATABRICKS_CLI_VERSION": "0.205.0",
         "ANVIL_DATABRICKS_SCENARIO": "valid",
     }
-    with mock.patch.dict(os.environ, env, clear=False):
+    # Keep the unsupported-version case hermetic even when a system-wide CLI
+    # exists in a known location outside the test PATH (for example /usr/local/bin).
+    with mock.patch.dict(os.environ, env, clear=False), \
+            mock.patch.object(dbx.discovery.platform, "system", return_value="FixtureOS"):
         value = dbx.status()
         check(value["cli_installed"] and not value["cli_supported"], "outdated CLI was accepted")
-    with mock.patch.dict(os.environ, {**env, "ANVIL_DATABRICKS_CLI": "/nonexistent/databricks"}, clear=False):
+    with mock.patch.dict(os.environ, {**env, "ANVIL_DATABRICKS_CLI": "/nonexistent/databricks"}, clear=False), \
+            mock.patch.object(dbx.discovery.platform, "system", return_value="FixtureOS"):
         value = dbx.status()
         check(not value["cli_installed"] and value["overall"] == "NOT_CONFIGURED",
               "missing optional CLI status incorrectly inferred workspace readiness")
@@ -325,7 +330,8 @@ def test_cli_install_failure_survives_unsupported_binary(temp: Path) -> None:
            "XDG_DATA_HOME": str(temp / "unsupported-cli-data"),
            "ANVIL_DATABRICKS_CLI": str(binary),
            "DATABRICKS_CONFIG_FILE": str(temp / "unsupported-cli-no-config")}
-    with mock.patch.dict(os.environ, env, clear=False):
+    with mock.patch.dict(os.environ, env, clear=False), \
+            mock.patch.object(dbx.discovery.platform, "system", return_value="FixtureOS"):
         dbx.provider_state.save_state({"providers": {"cli": {"status": "BLOCKED", "failure": "policy-blocked",
                                                                   "installed": True, "executable": str(binary)}}})
         value = dbx.status()

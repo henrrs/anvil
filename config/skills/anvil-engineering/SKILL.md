@@ -23,7 +23,7 @@ During work, choose one coherent ready unit and inspect only its named evidence.
 
 Prefer the smallest checks that can falsify the implementation. Low-risk local changes use focused verification; broader integration, architecture and resume checks are for shared interfaces, material blast radius, state/migration semantics, milestone gates or unexpected evidence. A passing test proves only its declared scope. Never report a check that was not run.
 
-Read [execution.md](references/execution.md) for stateful transitions and completion gates. Use `anvil-system-design` only when responsibility, dependency, durable-state, contract or failure ownership is at issue. Load only relevant Spark/Databricks references when the task needs their domain evidence. These skills add domain knowledge; they do not by themselves require long-horizon process.
+Read [execution.md](references/execution.md) for stateful transitions and completion gates. Read [quality.md](references/quality.md) only for debugging, refactoring, test design, review, performance, security, or dependency/API work. Use `anvil-system-design` only when responsibility, dependency, durable-state, contract or failure ownership is at issue. Load only relevant Spark/Databricks references when the task needs their domain evidence. These references add task-specific guidance; they do not by themselves require long-horizon process.
 
 ## Interruption and completion
 

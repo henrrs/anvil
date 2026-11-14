@@ -8,7 +8,7 @@
   "managed_artifacts": {
     "files": {
       "AGENTS.md": "0b9f9df58dd4425194dcf347a843003bcf89236a8e1f3d469682ae0789752ad5",
-      "VERSION": "566544d255dd6a4929a440484ac10b4198eff0309059f18714ac481e43020690",
+      "VERSION": "f9390af682526565a4ea8d3299bd45f738940035311ee197eb2eeede78178119",
       "commands/distill.md": "5a481d161c347fcef2f24085edc3e7739a9cd9abcd9c22e4d4a2847c4330d55d",
       "commands/recall.md": "53031bd6648d8f12da60b810f3d1de473c9d66bff8bef42de4ff8cb8545b96da",
       "commands/remember.md": "7b9dae0f9513882e15bbb4348a7b9c1a419fc61110c7d34caaf514905f7baeab",
@@ -16,7 +16,7 @@
       "config/runtime-policy.json": "9fe061c5016aa1cd0ef8d1b661621ee937a728afee688ff4a43670d0868eaad2",
       "opencode.jsonc": null,
       "plugins/anvil-core-v1.ts": "a9bca532799bf11634e4f1cae5d45e15f33970886ef1b8ae31f33a1e67979abd",
-      "plugins/anvil-core/index.ts": "416bc46d2dff510c86994e3a4abe22e482cd5da7a9602512318ff6b4e5ce8d7e",
+      "plugins/anvil-core/index.ts": "d3ce463c084f6fd7df992895c4d326a014fa997e21b6e5262b70c03b36388e72",
       "runtime/analytics-requirements.lock": "772746bf940e9e2b09e1eea33c04c41d22f1ada2d08a97b0af94a6eb301c4091",
       "scripts/analysis/__init__.py": "cadaaf2c9c5caad914e24dbc150fbd0845a207e5165d0384036f871345a16feb",
       "scripts/analysis/contracts.py": "e8a6954e7622ad428bf5f64917fea548aa044611e9a6cc4456875a60678f1d50",
@@ -86,8 +86,8 @@
       "scripts/databricks_providers/topology.py": "b081a77f616efdb8b7dd8e6c73a80cfb46083d4f930a6b6dff9b335858334213",
       "scripts/engineering.py": "0c8cca7a1249cb144e0fbfa122940f1720f512fc33308366b2cf40a673b5b5bd",
       "scripts/engineering/__init__.py": "749cb8755e121261b56f16637978ebec176cae43601c11b6dea7d6b8fa35fa04",
-      "scripts/engineering/cli.py": "88e1741b9d86266a37038f423b270f5de371107d353e6098e2bf6485c9336ffa",
-      "scripts/engineering/context.py": "97f1faa28536386926ff52459c7b4f2d78e2a1996743da1a215fdf7f7e632e83",
+      "scripts/engineering/cli.py": "ac0e4b51e78608c063ff357bc9527932be48a49493746f12337105ecb33c91b9",
+      "scripts/engineering/context.py": "b716c4350de060cdea28795e74ccc7705b15e1951adbdd10ef24f128de036e4a",
       "scripts/engineering/contracts.py": "0b75bb6a5f9bf761f549d46749281b178133e15d5fe216e4d4095f68ffd1c50c",
       "scripts/engineering/engine.py": "e0492caca9b1541bbab05d9250ce76b1505bbb45b240349670717345c922f726",
       "scripts/engineering/errors.py": "841539b8613446838ec8b9e9ce512a1391e066543be0cb0d814ed6335d5551a7",
@@ -125,7 +125,7 @@
       "skills/anvil-databricks/references/system-tables/query.md": "af071508596ccf81e174a18dcc58f72a3164efdd7a58a58056f6bc7771d7abe5",
       "skills/anvil-databricks/references/system-tables/warehouses.md": "03a56bc5e5fe25f615bf772e1d54a68196f598fcba8c2d8b12d19db014cdd01b",
       "skills/anvil-delta-lake/SKILL.md": "c57f68381a880ad32198dfea4ce1508608ac64d3b879825a9b4c034fec9ea7ca",
-      "skills/anvil-engineering/SKILL.md": "bdcd4c6cd9e04b699d8bf9f26e8590ecc023a8491356ac5527c9571a31fe0653",
+      "skills/anvil-engineering/SKILL.md": "d15bfe220e2041fc2a3f8d831a541704f69835c9c772ed973452934ad1181fb2",
       "skills/anvil-engineering/references/execution.md": "1a3374ff35ea6fb8eac58a1f1f8e3c7845a46e943551e0034e1e4476fb4336d1",
       "skills/anvil-engineering/references/models.md": "6eb917fdf6fd78a702917c762522845d42eb944dd720836420084f72ca584a71",
       "skills/anvil-engineering/references/resume.md": "ddbd1fad10c83a7860bc9356e1078cf73ab9e0c568c5a6fe2aae97bb2423a10b",
@@ -151,9 +151,10 @@
       "web/analytics/api.js": "b669b2d3a5de8dc8c00d051116e0adaa10897cb6d6b27d90e43ce2123b18f989",
       "web/analytics/app.js": "3b322254f0c1c947e97440ce11ac8f2d1759188ee4d40df7993c6a4b637d2537",
       "web/analytics/index.html": "0291a6fc200ea08ea598b340c9cb7309952861c0c03e18f4cff4471450d1b5bc",
-      "web/analytics/styles.css": "8781dcd37526a12fe1c09fdfe838682759f55115d4d39a505b5b5014e5cede29"
+      "web/analytics/styles.css": "8781dcd37526a12fe1c09fdfe838682759f55115d4d39a505b5b5014e5cede29",
+      "skills/anvil-engineering/references/quality.md": "ce031262d040c19bbcbd7ace91a85bc6ca29757aa59f4a6b359a34884dd7f322"
     },
-    "release": "2.19.0"
+    "release": "2.20.0"
   },
   "schema_version": 1,
   "skills": {

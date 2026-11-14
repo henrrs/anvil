@@ -69,7 +69,13 @@ def communication_state() -> dict:
     }
 
 
-def engineering_state() -> dict:
+def engineering_state(runtime_major: int | None = None) -> dict:
+    if runtime_major == 2:
+        compaction = {"mode": "optional_v2_native_hook", "fail_soft": True}
+    elif runtime_major == 1:
+        compaction = {"mode": "native_summary_plus_manual_read_only_resume", "fail_soft": True}
+    else:
+        compaction = {"mode": "runtime_not_detected; use manual read-only resume", "fail_soft": True}
     return {"status": "DISABLED" if os.environ.get("ANVIL_ENGINEERING") == "off" else "AVAILABLE",
             "activation": "progressive; short tasks use the direct workflow without state",
             "interface": "anvil-engineering / anvil-system-design skills and local engineering.py helper",
@@ -77,6 +83,7 @@ def engineering_state() -> dict:
             "capabilities": ["atomic_task_state", "requirements_coverage", "dependency_checks", "bounded_resume",
                              "repository_drift", "replanning", "architecture_invariants", "explicit_semantic_reviews",
                              "failure_aware_checks", "progressive_spark_references"],
+            "compaction_context": compaction,
             "state": "XDG_STATE_HOME/anvil/engineering; separate from durable memory; created explicitly",
             "runtime_independent": True, "model_independent": True, "required_dependencies": [],
             "limitations": ["Semantic extraction/design/review require agent judgment.",
@@ -161,7 +168,8 @@ def main() -> int:
     databricks_capabilities = adapter.capabilities(databricks_state)
     communication = communication_state()
     analysis = analysis_state()
-    engineering = engineering_state()
+    runtime_major = runtime_state.get("runtime", {}).get("major")
+    engineering = engineering_state(runtime_major if isinstance(runtime_major, int) else None)
     analytics = analytics_state(observed.analytics)
     if args.format == "json":
         print(json.dumps({
@@ -213,6 +221,7 @@ def main() -> int:
     print("  Activation             Complex tasks; direct fast path for small edits")
     print("  Models                 Requirements, architecture, work (separate from memory)")
     print("  Resume                 Bounded, stale-aware; no automatic execution")
+    print("  Compaction             " + engineering["compaction_context"]["mode"])
     print()
     print("Analytics Workspace")
     print(f"  Status                 {analytics['status']}")

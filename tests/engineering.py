@@ -134,6 +134,43 @@ class EngineeringTests(unittest.TestCase):
         self.assertEqual(engine.coverage(state)["counts"]["VERIFIED"], 7)
         self.assertEqual(state["status"], "COMPLETE")
 
+    def test_native_compaction_packet_is_bounded_read_only_and_stale_aware(self):
+        project = prepare(self.base)
+        state = engine.create("compact", project, project / "specification.md", models())
+        path = store.task_path(project, "compact")
+        store.save(path, state, None)
+        original = path.read_bytes()
+
+        packet = context.compaction_context(store.load(path), project)
+        encoded = json.dumps(packet, ensure_ascii=False).encode()
+        self.assertLessEqual(len(encoded), context.COMPACTION_PACKET_BYTES)
+        self.assertEqual(packet["status"], "ACTIVE")
+        self.assertEqual(packet["task_id"], "compact")
+        self.assertEqual(packet["revision"], 1)
+        self.assertIn("objective", packet)
+        self.assertIn("current_task", packet)
+        self.assertFalse(packet["transcript_included"])
+        self.assertEqual(path.read_bytes(), original, "compaction inspection wrote durable task state")
+
+        (project / "contracts.py").write_text("# external file created after task initialization\n")
+        stale = context.compaction_context(store.load(path), project)
+        self.assertEqual(stale["status"], "WORK_STATE_STALE")
+        self.assertTrue(stale["stale"])
+        self.assertIn("contracts.py", stale["changed_files"])
+        self.assertEqual(path.read_bytes(), original, "stale compaction inspection persisted an implicit replan")
+
+    def test_compaction_cli_skips_missing_or_ambiguous_state(self):
+        project = prepare(self.base)
+        command = [sys.executable, str(ROOT / "scripts/engineering.py"), "compaction-context",
+                   "--repository", str(project), "--format", "json"]
+        empty = subprocess.run(command, capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(empty.stdout), {"status": "NONE"})
+        for task_id in ("first", "second"):
+            state = engine.create(task_id, project, project / "specification.md", models())
+            store.save(store.task_path(project, task_id), state, None)
+        ambiguous = subprocess.run(command, capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(ambiguous.stdout), {"status": "AMBIGUOUS", "active_task_count": 2})
+
     def test_stale_file_invalidates_dependents_only_and_resume_is_read_only(self):
         state, project, path = replay(self.base, interrupt=False)
         before = path.read_bytes()

@@ -23,6 +23,12 @@ python3 "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/scripts/engineering.py" resu
 
 Resume reconstructs a bounded packet and executes no work. An active unit may have partial effects; inspect them before reconciliation. A changed branch/HEAD, named source, or specification triggers stale-evidence review rather than automatic replay. Recovery from corruption is explicit and invalidates previous verification.
 
+### Native compaction continuity
+
+On OpenCode 2 builds that expose the documented session `compaction` hook, Anvil resolves the session's repository and adds a compact packet only when there is exactly one active task in that repository. The packet is reconstructed from the task store, capped at 8 KiB before serialization, excludes the conversation transcript, and carries stale-evidence markers and the next recovery action. It does not run work or write state. Missing/ambiguous state, helper errors, timeouts, or unsupported hook APIs are non-fatal. OpenCode 1 continues to use explicit `resume` after compaction. See the [2.20 engineering harness report](engineering-harness-report-v2.20.0.md) for the API boundary and verification status.
+
+General engineering guidance is a separate lazy reference at [`anvil-engineering/references/quality.md`](../config/skills/anvil-engineering/references/quality.md). It is task-local guidance, not a mandatory checklist for every edit. `make eval-engineering` runs deterministic protocol and independent behavior acceptance fixtures; `make eval-engineering-model MODEL=... OPENCODE=...` is explicit and may contact the selected model provider.
+
 ## Scoped verification and architecture
 
 Prefer the smallest check that can falsify the implementation. Use focused tests for local behavior; broaden checks for shared contracts, material blast radius, unexpected failures, state/migration semantics, milestone gates or a release requirement. Never claim a check that did not run. A cheap failing test is evidence to inspect, not an automatic reason to run the full suite.
@@ -40,4 +46,4 @@ The first command exercises ingestion and unrelated scheduler continuity without
 
 ## Upgrade and runtime
 
-Use `make capabilities` for supported features. No runtime upgrade, new MCP, extra agent, model routing, or Python package is required. `make upgrade DRY_RUN=1`, then `make upgrade` installs Anvil 2.10.0 while preserving the exact validated OpenCode runtime. Read [the 2.9-to-2.10 migration guide](migrations/v2.9.0-to-v2.10.0.md). The supported migration window retains the Anvil 2.6 source line.
+Use `make capabilities` for supported features. No runtime upgrade, new MCP, extra agent, model routing, or Python package is required. `make upgrade DRY_RUN=1`, then `make upgrade` installs Anvil 2.20.0 while preserving the exact validated OpenCode runtime. Read [the 2.19-to-2.20 migration guide](migrations/v2.19.0-to-v2.20.0.md). The supported migration window retains Anvil 2.6.x.

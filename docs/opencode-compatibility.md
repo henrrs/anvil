@@ -1,7 +1,7 @@
 # OpenCode compatibility
 
-**checked_at:** 2026-10-27
-**Anvil version:** `2.16.0`
+**checked_at:** 2026-11-13
+**Anvil version:** `2.20.0`
 **Supported runtime majors:** OpenCode 1.x and 2.x
 **Default major for a first installation:** OpenCode 1.x
 **Automatic major upgrade:** disabled.
@@ -12,6 +12,7 @@ Anvil version and OpenCode runtime major are independent. Compatibility limits a
 
 - OpenCode 1 uses singular `agent`, `permission`, and `plugin` config keys and its `@opencode-ai/plugin` API. Anvil packages `config/plugins-v1/anvil-core.ts`, which exposes the same Analytics tool bridge through the V1 `tool` map. Its native stats command emits terminal text; memory search and knowledge use file-based helpers/reads.
 - OpenCode 2 uses plural `agents` and `plugins`, ordered permissions, native local plugins, References, native compaction/output settings, and structured `stats --json`. Anvil's V2 `anvil-core` plugin exposes bounded Analytics tools and read-only Markdown search; it does not route models or rewrite prompts.
+- OpenCode 2 documents `ctx.session.hook("compaction", ...)` for modifying the native compaction context. Anvil 2.20 uses that optional hook to append a bounded active engineering checkpoint. Its source contract is tested, but live plugin loading/compaction was not executed here; plugin registration and lookup fail soft on unsupported builds. See [OpenCode's plugin server documentation](https://opencode.ai/docs/build/plugins/server/) and [compaction documentation](https://opencode.ai/docs/compaction/).
 - Commands and skills are Markdown files shared between profiles. OpenCode 1 and 2 discover the same global `commands/` and `skills/` trees.
 - The Anvil Databricks capability uses shared provider scripts, CLI/SDK integrations, and a per-capability resolver. It does not depend on OpenCode plugins, MCP, or V2-specific permissions.
 - OpenCode owns authentication, session/database schemas, and runtime state. Anvil copies these paths opaquely during rehearsal and backup, and never edits undocumented database tables.

@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.20.0] - 2026-11-13 (candidate; live model evaluation remains unexecuted)
+
+- Added a bounded, read-only engineering continuity packet to the documented OpenCode 2 compaction hook. It is reconstructed from Anvil's existing checksummed task state, labels stale evidence, excludes transcripts, and fails soft; OpenCode 1 keeps its existing manual resume path.
+- Added focused engineering-quality guidance for codebase understanding, root-cause debugging, behavior-preserving refactoring, independent regression tests, risk-based verification, and evidence-based review without loading it for unrelated requests.
+- Added a deterministic retry-policy fixture with independent acceptance checks and an engineering replay target, plus an opt-in live-model target that requires an explicitly selected model and records only bounded metrics.
+- Extended the same-major migration source window by one minor release so installations on Anvil 2.6.x remain supported and upgradeable through 2.20.0.
+- Made the Databricks minimum-version test independent of host-installed CLIs; production provider discovery behavior is unchanged.
+- Added research, architecture, compatibility, and evaluation documentation. No new runtime, service, Python package, model route, or persistent task-state schema is introduced. Native compaction, model quality, tokens, cost, and live end-to-end recovery remain environment-specific and unverified.
+
 ## [2.19.0] - 2026-11-03 (candidate; live workspace certification remains environment-specific)
 
 - Migrated legacy LocalDataset pointers automatically and verified persisted Parquet against canonical Arrow and DuckDB schemas; internal validator faults no longer misclassify valid data as corrupt.

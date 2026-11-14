@@ -181,7 +181,7 @@ def live_run(args, name: str, number: int) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("replay", "live"), default="replay")
-    parser.add_argument("--fixture", choices=("ingestion", "scheduler", "all"), default="all")
+    parser.add_argument("--fixture", choices=("ingestion", "scheduler", "retry-policy", "all"), default="all")
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--output", type=pathlib.Path, required=True)
     parser.add_argument("--profile", choices=tuple(PROFILES), default="full")
@@ -195,7 +195,7 @@ def main() -> int:
         parser.error("--repeats must be 1–20")
     if args.mode == "live" and (not args.opencode or not args.model):
         parser.error("live evaluations require an explicitly selected --opencode and --model")
-    fixtures = ["ingestion", "scheduler"] if args.fixture == "all" else [args.fixture]
+    fixtures = ["ingestion", "scheduler", "retry-policy"] if args.fixture == "all" else [args.fixture]
     results = ([replay_run(name, args.repeats) for name in fixtures] if args.mode == "replay" else
                [live_run(args, name, n) for name in fixtures for n in range(1, args.repeats + 1)])
     report = {"schema_version": 1, "mode": args.mode, "results": results,

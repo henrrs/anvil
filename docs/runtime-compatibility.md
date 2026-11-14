@@ -1,7 +1,7 @@
 # Anvil runtime compatibility
 
-**Official runtime release metadata last checked:** 2026-10-27
-**Anvil release:** `2.18.0`
+**Official runtime/plugin documentation last checked:** 2026-11-13
+**Anvil release:** `2.20.0`
 **Policy:** OpenCode 1.x and 2.x supported; default major `1`; automatic major upgrade disabled.
 
 | Anvil | OpenCode runtime | Minimum | Offline profile fixture | Adapter | Support |
@@ -10,14 +10,22 @@
 | 2.17.x | 2.x | 2.0.0 | 2.0.0 | `opencode-v2` | Supported |
 | 2.18.x | 1.x | 1.18.18 | 1.18.18 | `opencode-v1` | Supported |
 | 2.18.x | 2.x | 2.0.0 | 2.0.0 | `opencode-v2` | Supported |
+| 2.19.x | 1.x | 1.18.18 | 1.18.18 | `opencode-v1` | Supported |
+| 2.19.x | 2.x | 2.0.0 | 2.0.0 | `opencode-v2` | Supported |
+| 2.20.x | 1.x | 1.18.18 | 1.18.18 | `opencode-v1` | Supported |
+| 2.20.x | 2.x | 2.0.0 | 2.0.0 | `opencode-v2` | Supported; compaction hook optional |
 
 The 2.18.0 mandatory suite uses offline OpenCode 1/2 profile fixtures and isolated lifecycle, memory, Databricks, communication, engineering and Analytics regressions. The runtime compatibility floors and adapters are unchanged. Provider/model discovery is validated against the running runtime catalog; this repository's offline suite does not establish that a live GitHub Copilot account exposes Luna 6. Analytics V1/V2 plugin contracts are source-tested, but live plugin loading and runtime chat remain separate environment checks.
+
+Anvil 2.20.0 retains the same V1/V2 runtime floors. The V2 plugin optionally registers OpenCode's documented session `compaction` hook at the installed API boundary; if registration or the bounded local state lookup is unavailable, compaction proceeds without Anvil's checkpoint. The repository's local OpenCode is V1 1.19.5; the V2 hook has source-contract coverage only and was not live-loaded in this environment. Do not interpret support for the V2 runtime adapter as proof that every V2 patch exposes the optional hook.
 
 ## Common and runtime-specific capabilities
 
 Both profiles provide the single Anvil agent, Markdown commands and skills, file memory, `/remember`, `/recall`, `/distill`, `/review`, source registry, explicit reconciliation, Databricks provider capability, Anvil's model-independent communication/artifact workflow, and Analytics tools through their generation-specific plugins. The Analytics tools use the same bounded local BFF actions; V1 uses the official V1 tool API and V2 uses its native plugin API. Databricks access does not require MCP or a V2-only provider API.
 
 OpenCode 1 uses its singular `agent`/`permission` config shape and Anvil's `anvil-core-v1` custom tool plugin. It has no Anvil native memory-search tool or native Knowledge Reference, so shared Python file search and named-file reads are used. Its native stats command produces terminal text. OpenCode 2 uses plural `agents`/`plugins`, ordered permissions, the local `anvil-core` search and Analytics tools, `anvil-knowledge` Reference, and structured stats JSON. Shared commands, skills, memory, Databricks integration and Analytics service remain the same.
+
+The native continuity hook is additive on V2 only; V1 preserves explicit `engineering.py resume` recovery. The V2 hook consumes the session directory and task-local XDG state, without a model call, network request, persistent write, or transcript archive.
 
 Runtime behavior is exposed through `scripts/runtime.py`. `make capabilities` combines runtime capability data with the current non-secret Databricks CLI/profile/compute state and Anvil communication/artifact support. `FORMAT=json make capabilities` emits one JSON object with `runtime`, `databricks`, `databricks_capabilities`, and `communication` keys.
 

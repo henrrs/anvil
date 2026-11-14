@@ -1,0 +1,37 @@
+{
+  "requirements": {
+    "objective": "Repair HTTP Retry-After handling while preserving a pure retry policy and one scheduling owner",
+    "items": [
+      {"id": "R1", "statement": "Use valid delta-seconds or future HTTP dates, including zero, with a 30-second cap", "type": "functional", "priority": "required", "source": {"document": "specification.md", "section": "Required behavior"}},
+      {"id": "R2", "statement": "Invalid, negative, non-finite, and past hints use capped exponential fallback", "type": "functional", "priority": "required", "source": {"document": "specification.md", "section": "Required behavior"}},
+      {"id": "R3", "statement": "Retry only transient statuses and honor case-insensitive header names", "type": "functional", "priority": "required", "source": {"document": "specification.md", "section": "Required behavior"}},
+      {"id": "R4", "statement": "Policy remains pure and worker owns retry scheduling", "type": "architecture", "priority": "required", "source": {"document": "specification.md", "section": "Required behavior"}}
+    ],
+    "constraints": ["Python standard library only", "No network or external service"],
+    "risks": ["Retrying non-transient responses can amplify load", "Malformed headers must not create negative or unbounded waits"],
+    "deferred_scope": ["Provider-specific retry policy", "Network integration and production traffic"]
+  },
+  "architecture": {
+    "principles": ["Policy calculation is pure; the worker owns scheduling effects"],
+    "boundaries": [
+      {"id": "policy", "owns": ["delay parsing", "backoff calculation"], "must_not_know": ["HTTP worker", "sleep", "network client"]},
+      {"id": "worker", "owns": ["transient status decision", "single retry scheduling effect"], "must_not_know": ["duplicate delay parsing"]}
+    ],
+    "decisions": [],
+    "invariants": [
+      {"id": "A1", "statement": "Retry policy stays independent of worker and network execution", "kind": "forbidden_imports", "paths": ["retry_policy.py"], "forbidden": ["worker", "requests", "httpx", "time"]}
+    ],
+    "unknowns": []
+  },
+  "work": {
+    "milestones": [
+      {"id": "M1", "title": "Retry policy parsing and bounds", "depends_on": [], "invariant_ids": ["A1"], "done_when": [{"statement": "Pure policy handles valid and invalid hints", "check_ids": ["C1"]}]},
+      {"id": "M2", "title": "Worker scheduling and regression checks", "depends_on": ["M1"], "invariant_ids": ["A1"], "done_when": [{"statement": "Transient status handling and single scheduling effect pass", "check_ids": ["C2"]}]}
+    ],
+    "tasks": [
+      {"id": "T1", "title": "Fix Retry-After parsing and exponential fallback", "milestone": "M1", "requirement_ids": ["R1", "R2"], "decision_ids": [], "depends_on": [], "paths": ["retry_policy.py"], "checks": [{"id": "C1", "kind": "command", "argv": ["python3", "acceptance.py", "policy"], "timeout": 30}], "done_when": [{"statement": "Fixed-clock policy cases pass", "check_ids": ["C1"]}]},
+      {"id": "T2", "title": "Integrate policy at the single retry boundary", "milestone": "M2", "requirement_ids": ["R3", "R4"], "decision_ids": [], "depends_on": ["T1"], "paths": ["worker.py"], "checks": [{"id": "C2", "kind": "command", "argv": ["python3", "acceptance.py", "worker"], "timeout": 30}, {"id": "C3", "kind": "command", "argv": ["python3", "acceptance.py", "all"], "timeout": 30}], "done_when": [{"statement": "Worker cases pass without changing policy ownership", "check_ids": ["C2", "C3"]}]}
+    ],
+    "done_when": [{"statement": "All acceptance and architecture checks pass", "check_ids": ["C1", "C2", "C3"]}]
+  }
+}
