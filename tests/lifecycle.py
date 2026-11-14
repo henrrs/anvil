@@ -2292,9 +2292,9 @@ def upgrade_preserves_v2_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None
     check(file_hash(paths["binary"]) == original_binary, "Anvil-only upgrade changed the OpenCode 2 executable bytes")
     check("Anvil post-activation verification" in proc.stdout and "Status: HEALTHY" in proc.stdout,
           "OpenCode 2 Anvil upgrade verification did not pass")
-    for section in ("Capabilities", "Stats", "Memory", "Knowledge", "Project overrides", "Version documentation"):
-        check(section in proc.stdout, f"OpenCode 2 doctor omitted the {section} category")
-    check("/distill               YES" in proc.stdout and "native-tool+file-fallback" in proc.stdout, "OpenCode 2 doctor omitted core command or native search capability status")
+    for probe in ("managed_artifacts", "runtime_profile", "opencode_runtime", "memory"):
+        check(f"{probe:24} PASS" in proc.stdout,
+              f"OpenCode 2 structured post-activation verification did not pass {probe}")
     assert_no_external_network(temp)
     print("PASS make upgrade advances Anvil on OpenCode 2 without changing the runtime major")
 
