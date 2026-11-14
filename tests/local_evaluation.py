@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "evals/engineering"))
@@ -47,6 +48,34 @@ class LocalEvaluationTests(unittest.TestCase):
             self.assertEqual(edit[".git/**"], "deny")
             self.assertEqual(edit[str(readable_skill.resolve()) + "/**"], "deny")
             self.assertEqual(edit[str(state_root.resolve()) + "/**"], "allow")
+
+    def test_metadata_probes_isolate_user_data_and_drop_credential_environment(self):
+        with tempfile.TemporaryDirectory(prefix="anvil-eval-metadata-") as temporary:
+            root = pathlib.Path(temporary)
+            environment = {
+                "HOME": str(root / "home"),
+                "PATH": "/usr/bin:/bin",
+                "XDG_CONFIG_HOME": str(root / "user-config"),
+                "XDG_DATA_HOME": str(root / "user-data"),
+                "XDG_STATE_HOME": str(root / "user-state"),
+                "OPENAI_API_KEY": "must-not-be-forwarded",
+                "DATABRICKS_TOKEN": "must-not-be-forwarded",
+            }
+            with mock.patch.dict(local_runner.os.environ, environment, clear=True):
+                with mock.patch.object(local_runner.subprocess, "run",
+                                       return_value=subprocess.CompletedProcess([], 0, "[]", "")) as run:
+                    code, output = local_runner.invoke_metadata(pathlib.Path("/fake/opencode"),
+                                                               ["debug", "skill"], root)
+                child = run.call_args.kwargs["env"]
+
+            self.assertEqual((code, output), (0, "[]"))
+            self.assertEqual(child["HOME"], environment["HOME"])
+            self.assertEqual(child["XDG_CONFIG_HOME"], environment["XDG_CONFIG_HOME"])
+            self.assertNotEqual(child["XDG_DATA_HOME"], environment["XDG_DATA_HOME"])
+            self.assertNotEqual(child["XDG_STATE_HOME"], environment["XDG_STATE_HOME"])
+            self.assertNotIn("OPENAI_API_KEY", child)
+            self.assertNotIn("DATABRICKS_TOKEN", child)
+            self.assertTrue(pathlib.Path(child["XDG_DATA_HOME"]).is_relative_to(pathlib.Path(tempfile.gettempdir())))
 
     def test_treatment_task_prompt_is_neutral(self):
         prompt = local_runner.challenge_prompt()

@@ -6,6 +6,7 @@
 - Added a live evaluation report for OpenCode 1.19.5 with Luna 6 High, including independent acceptance outcomes, token and latency measurements, and the limitations of one run per treatment.
 - Preserved the existing task-state format, runtime selection, provider configuration, and OpenCode executable; no runtime installation or data migration is required.
 - Isolated the Anvil-only upgrade rehearsal from user databases, provider credentials, OpenCode state, and private Anvil memory; native stats now runs against empty temporary XDG directories.
+- Isolated live-evaluation metadata probes from user data/state and credential environment variables while keeping the actual model smoke and challenges on the existing local OpenCode profile and authentication.
 
 ## [2.20.0] - 2026-11-13 (candidate; live model evaluation remains unexecuted)
 

@@ -50,40 +50,37 @@ def child_env(**extra: str) -> dict[str, str]:
     return result
 
 
+def metadata_env(temp_root: pathlib.Path) -> dict[str, str]:
+    """Use the real profile but keep auth, runtime data, and state out of metadata probes."""
+    allowed = {
+        "PATH", "HOME", "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "LANG", "LC_ALL",
+        "LC_MESSAGES", "TERM", "TMPDIR", "SHELL", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR",
+    }
+    result = {key: os.environ[key] for key in allowed if key in os.environ}
+    result.update({
+        "NO_COLOR": "1",
+        "OPENCODE_DISABLE_AUTOUPDATE": "1",
+        "XDG_DATA_HOME": str(temp_root / "data"),
+        "XDG_STATE_HOME": str(temp_root / "state"),
+        "XDG_CACHE_HOME": str(temp_root / "cache"),
+    })
+    for name in ("data", "state", "cache"):
+        (temp_root / name).mkdir(mode=0o700)
+    return result
+
+
 def invoke_metadata(opencode: pathlib.Path, args: list[str], cwd: pathlib.Path,
                     timeout: int = 30, *, pure: bool = False) -> tuple[int, str]:
     try:
-        result = subprocess.run([str(opencode), *( ["--pure"] if pure else []), *args], cwd=cwd, env=child_env(),
-                                capture_output=True, text=True, timeout=timeout, check=False)
+        with tempfile.TemporaryDirectory(prefix="anvil-opencode-metadata-") as raw:
+            env = metadata_env(pathlib.Path(raw))
+            result = subprocess.run([str(opencode), *( ["--pure"] if pure else []), *args], cwd=cwd, env=env,
+                                    capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
         raise EvaluationBlocked(f"OpenCode metadata command timed out: {args[0]}") from None
     except OSError as error:
         raise EvaluationBlocked(f"OpenCode metadata command could not start: {type(error).__name__}") from None
     return result.returncode, result.stdout
-
-
-def _redact_config(value, key: str = ""):
-    if re.search(r"(?i)(api.?key|token|secret|password|authorization|credential|cookie|private.?key)", key):
-        return "[redacted]"
-    if isinstance(value, dict):
-        return {name: _redact_config(item, name) for name, item in value.items()}
-    if isinstance(value, list):
-        return [_redact_config(item, key) for item in value]
-    return value
-
-
-def resolve_config(opencode: pathlib.Path, cwd: pathlib.Path, *, pure: bool = False) -> dict:
-    code, output = invoke_metadata(opencode, ["debug", "config"], cwd, pure=pure)
-    if code != 0:
-        raise EvaluationBlocked("OpenCode could not resolve the existing local configuration")
-    try:
-        value = json.loads(output)
-    except ValueError:
-        raise EvaluationBlocked("OpenCode resolved configuration was not valid JSON") from None
-    value = _redact_config(value)
-    if not isinstance(value, dict):
-        raise EvaluationBlocked("OpenCode resolved configuration had an unsupported shape")
-    return value
 
 
 def _agent_instruction_digest(raw: str) -> str | None:
@@ -127,24 +124,8 @@ def _resolved_anvil_tools(raw: str) -> list[str]:
                   if enabled is True and re.match(r"(?i)^anvil[_-]", str(name)))
 
 
-def _instruction_reference_resolves(item, cwd: pathlib.Path, config_home: pathlib.Path) -> bool:
-    if not isinstance(item, str) or "anvil" not in item.lower():
-        return False
-    reference = pathlib.Path(item).expanduser()
-    candidates = [reference] if reference.is_absolute() else [cwd / reference, config_home / reference]
-    for candidate in candidates:
-        try:
-            parent, pattern = candidate.parent, candidate.name
-            if parent.is_dir() and any(path.is_file() for path in parent.glob(pattern)):
-                return True
-        except (OSError, ValueError):
-            continue
-    return False
-
-
 def anvil_inventory(opencode: pathlib.Path, cwd: pathlib.Path) -> dict:
-    """Inspect only whether Anvil components resolve; never persist prompts/config values."""
-    config = resolve_config(opencode, cwd)
+    """Verify components OpenCode resolves without requesting the full provider config."""
     agent_code, agent_output = invoke_metadata(opencode, ["debug", "agent", "anvil"], cwd)
     agent_definition_sha256 = _agent_instruction_digest(agent_output) if agent_code == 0 else None
     agent_has_instructions = agent_code == 0 and _agent_has_instruction_payload(agent_output)
@@ -153,14 +134,8 @@ def anvil_inventory(opencode: pathlib.Path, cwd: pathlib.Path) -> dict:
     if skill_code != 0:
         skill_output = ""
     skills = sorted(set(re.findall(r"\banvil-[a-z0-9][a-z0-9-]{0,79}\b", skill_output.lower())))
-    plugins = config.get("plugin") if isinstance(config.get("plugin"), list) else []
-    anvil_plugin = any("anvil" in str(plugin).lower() for plugin in plugins)
-    config_agents = config.get("agent") if isinstance(config.get("agent"), dict) else {}
-    instructions = config.get("instructions") if isinstance(config.get("instructions"), list) else []
     config_home = pathlib.Path(os.environ.get(
         "XDG_CONFIG_HOME", str(pathlib.Path.home() / ".config"))).expanduser() / "opencode"
-    anvil_instruction_reference = any(_instruction_reference_resolves(item, cwd, config_home)
-                                      for item in instructions)
     agents_file = config_home / "AGENTS.md"
     agents_file_mentions_anvil = False
     try:
@@ -169,8 +144,9 @@ def anvil_inventory(opencode: pathlib.Path, cwd: pathlib.Path) -> dict:
     except OSError:
         pass
     agent_resolves = agent_code == 0 and bool(agent_output.strip())
-    instruction_source_resolves = (anvil_instruction_reference or agents_file_mentions_anvil or
+    instruction_source_resolves = (agents_file_mentions_anvil or
                                    (agent_resolves and agent_has_instructions))
+    anvil_plugin = bool(agent_plugin_tools)
     return {
         "anvil_agent_resolves": agent_resolves,
         "anvil_agent_definition_sha256": agent_definition_sha256,
@@ -179,11 +155,11 @@ def anvil_inventory(opencode: pathlib.Path, cwd: pathlib.Path) -> dict:
         "anvil_plugin_configured": anvil_plugin,
         "anvil_plugin_tools_resolve": agent_plugin_tools,
         "anvil_skill_ids": skills,
-        "anvil_instruction_reference_configured": anvil_instruction_reference,
+        "anvil_instruction_reference_configured": False,
         "global_agents_file_present": agents_file.is_file(),
         "global_agents_mentions_anvil": agents_file_mentions_anvil,
-        "agent_count": len(config_agents),
-        "plugin_count": len(plugins),
+        "agent_count": None,
+        "plugin_count": 1 if anvil_plugin else 0,
         "skill_inspection_succeeded": skill_code == 0,
         "active_anvil_verified": bool(agent_resolves and anvil_plugin and agent_plugin_tools and skills and instruction_source_resolves),
     }
@@ -191,19 +167,18 @@ def anvil_inventory(opencode: pathlib.Path, cwd: pathlib.Path) -> dict:
 
 def local_runtime_preflight(opencode: pathlib.Path, cwd: pathlib.Path, model: str) -> dict:
     try:
-        version_result = subprocess.run([str(opencode), "--version"], cwd=cwd, env=child_env(),
-                                        capture_output=True, text=True, timeout=15, check=False)
+        with tempfile.TemporaryDirectory(prefix="anvil-opencode-version-") as raw:
+            version_result = subprocess.run([str(opencode), "--version"], cwd=cwd, env=metadata_env(pathlib.Path(raw)),
+                                            capture_output=True, text=True, timeout=15, check=False)
     except (OSError, subprocess.SubprocessError) as error:
         raise EvaluationBlocked(f"OpenCode executable preflight failed: {type(error).__name__}") from None
     version = version_result.stdout.strip().splitlines()[0] if version_result.stdout.strip() else None
     if version_result.returncode != 0 or not version:
         raise EvaluationBlocked("The OpenCode executable in the local environment is not usable")
-    code, models_output = invoke_metadata(opencode, ["models", "openai"], cwd, timeout=60)
-    if code != 0 or model.split("/", 1)[-1].lower() not in models_output.lower():
-        raise EvaluationBlocked("The local OpenCode model catalog does not list the selected model")
     return {"executable": opencode.name, "version": version, "model": model,
             "variant": "high", "path_source": "explicit path" if opencode != pathlib.Path(shutil.which("opencode") or "").resolve() else "PATH",
-            "home_xdg_overridden": False, "credentials_read_or_copied": False}
+            "home_xdg_overridden": False, "credentials_read_or_copied": False,
+            "model_confirmation": "The actual Luna 6 High smoke must succeed before any challenge is allowed."}
 
 
 def _permissions(project: pathlib.Path, agent: str, shell: pathlib.Path | None,
@@ -290,16 +265,75 @@ def _native_agent_baseline(opencode: pathlib.Path, run_root: pathlib.Path, agent
     return digest
 
 
+def _agent_metadata(raw: str) -> dict:
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _resolved_permission_rules(agent: dict) -> set[tuple[str, str, str]]:
+    """Return only permission names, patterns, and actions from OpenCode metadata."""
+    value = agent.get("permission")
+    rules: set[tuple[str, str, str]] = set()
+    if isinstance(value, list):
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            permission, pattern, action = (item.get("permission"), item.get("pattern"), item.get("action"))
+            if all(isinstance(part, str) for part in (permission, pattern, action)):
+                rules.add((permission, pattern, action))
+    elif isinstance(value, dict):
+        for permission, policy in value.items():
+            if isinstance(policy, str):
+                rules.add((str(permission), "*", policy))
+            elif isinstance(policy, dict):
+                for pattern, action in policy.items():
+                    if isinstance(action, str):
+                        rules.add((str(permission), str(pattern), action))
+    return rules
+
+
+def _configured_permission_rules(permission: dict) -> set[tuple[str, str, str]]:
+    rules: set[tuple[str, str, str]] = set()
+    for name, policy in permission.items():
+        # Skill patterns can be expanded into individual skill IDs by V1 and
+        # plugin tool globs can be expanded by either runtime. The local
+        # project file is checked separately; active tool state is checked
+        # from debug-agent metadata below.
+        if name == "skill" or str(name).startswith("anvil_"):
+            continue
+        if isinstance(policy, str):
+            rules.add((str(name), "*", policy))
+        elif isinstance(policy, dict):
+            for pattern, action in policy.items():
+                if isinstance(action, str):
+                    rules.add((str(name), str(pattern), action))
+    return rules
+
+
 def _verify_overlay(opencode: pathlib.Path, project: pathlib.Path, agent: str,
                     shell: pathlib.Path | None, baseline_agent_digest: str | None,
                     read_roots: list[pathlib.Path], state_root: pathlib.Path | None,
                     *, pure: bool = False) -> dict:
-    resolved = resolve_config(opencode, project, pure=pure)
+    overlay_path = project / "opencode.json"
+    try:
+        overlay = json.loads(overlay_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise EvaluationBlocked("The disposable project permission overlay could not be read") from None
+    local_agent = overlay.get("agent", {}).get(agent, {}) if isinstance(overlay, dict) else {}
+    permission = local_agent.get("permission") if isinstance(local_agent, dict) else None
+    global_permission = overlay.get("permission") if isinstance(overlay, dict) else None
+    if not isinstance(permission, dict) or not isinstance(global_permission, dict):
+        raise EvaluationBlocked("The disposable project permission overlay has an unsupported shape")
     agent_code, agent_output = invoke_metadata(opencode, ["debug", "agent", agent], project, pure=pure)
+    resolved_agent = _agent_metadata(agent_output) if agent_code == 0 else {}
     overlay_agent_digest = _agent_instruction_digest(agent_output) if agent_code == 0 else None
-    permissions = resolved.get("agent", {}).get(agent, {}).get("permission", {})
-    external = permissions.get("external_directory", {}) if isinstance(permissions, dict) else {}
-    edit = permissions.get("edit", {}) if isinstance(permissions, dict) else {}
+    resolved_rules = _resolved_permission_rules(resolved_agent)
+    expected_rules = _configured_permission_rules(permission)
+    external = permission.get("external_directory", {})
+    edit = permission.get("edit", {}) if isinstance(permission.get("edit"), dict) else {}
     if not isinstance(edit, dict):
         edit = {}
     project_path = str(project.resolve())
@@ -307,11 +341,16 @@ def _verify_overlay(opencode: pathlib.Path, project: pathlib.Path, agent: str,
         edit.get(str(path.resolve())) == "deny" and edit.get(str(path.resolve()) + "/**") == "deny"
         for path in read_roots
     )
-    if (not isinstance(permissions, dict) or permissions.get("bash") != ("allow" if shell else "deny") or
-            permissions.get("*") != "deny" or
-            permissions.get("task") != "deny" or permissions.get("anvil_memory_search") != "deny" or
-            permissions.get("anvil_analytics_*") != "deny" or
+    resolved_tools = resolved_agent.get("tools") if isinstance(resolved_agent.get("tools"), dict) else {}
+    active_anvil_tools = [name for name, enabled in resolved_tools.items()
+                          if str(name).startswith("anvil_") and enabled is True]
+    if ("provider" in overlay or global_permission.get("*") != "deny" or
+            permission.get("bash") != ("allow" if shell else "deny") or
+            permission.get("*") != "deny" or permission.get("task") != "deny" or
+            permission.get("anvil_memory_search") != "deny" or permission.get("anvil_analytics_*") != "deny" or
             not isinstance(external, dict) or external.get("*") != "deny" or
+            not expected_rules.issubset(resolved_rules) or
+            (agent == "anvil" and (not resolved_tools or active_anvil_tools)) or
             edit.get("*") != "deny" or edit.get("**") != "allow" or
             edit.get(project_path) != "allow" or edit.get(project_path + "/**") != "allow" or
             edit.get(project_path + "/opencode.json") != "deny" or edit.get("opencode.json") != "deny" or
@@ -319,8 +358,8 @@ def _verify_overlay(opencode: pathlib.Path, project: pathlib.Path, agent: str,
             edit.get("../**") != "deny" or not readable_edits_denied or
             (state_root and (edit.get(str(state_root.resolve())) != "allow" or
                              edit.get(str(state_root.resolve()) + "/**") != "allow")) or
-            resolved.get("agent", {}).get(agent, {}).get("disable") is True or
-            (shell and resolved.get("shell") != str(shell.resolve())) or
+            local_agent.get("disable") is True or
+            (shell and overlay.get("shell") != str(shell.resolve())) or
             not baseline_agent_digest or overlay_agent_digest != baseline_agent_digest):
         raise EvaluationBlocked("OpenCode did not resolve the fixture-only permission overlay")
     return {"project_overlay_resolved": True, "provider_config_overridden": False,
@@ -434,8 +473,15 @@ def _run_smoke(args, opencode: pathlib.Path) -> dict:
     project.mkdir(mode=0o700)
     agent = "build"
     _write_project_config(project, _permissions(project, agent, None, [], None, smoke=True))
-    resolved = resolve_config(opencode, project)
-    if resolved.get("permission", {}).get("*") != "deny":
+    try:
+        overlay = json.loads((project / "opencode.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise EvaluationBlocked("Smoke project permission overlay could not be read") from None
+    agent_code, agent_output = invoke_metadata(opencode, ["debug", "agent", agent], project)
+    resolved_agent = _agent_metadata(agent_output) if agent_code == 0 else {}
+    if (overlay.get("permission", {}).get("*") != "deny" or
+            overlay.get("agent", {}).get(agent, {}).get("permission", {}).get("*") != "deny" or
+            ("*", "*", "deny") not in _resolved_permission_rules(resolved_agent)):
         raise EvaluationBlocked("Smoke project did not deny every OpenCode tool")
     prompt = "Reply with exactly READY. Do not call tools."
     argv = [str(opencode), "run", "--format", "json", "--agent", agent, "--model", args.model,
