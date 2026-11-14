@@ -4,7 +4,8 @@
 
 - Clarified when to load the lazy `anvil-engineering` skill: explicit dependent phases such as validation, dependency resolution, filesystem activation/rollback, and CLI integration now qualify even in a small, single-repository task.
 - Added a live evaluation report for OpenCode 1.19.5 with Luna 6 High, including independent acceptance outcomes, token and latency measurements, and the limitations of one run per treatment.
-- Preserved the existing task-state format, runtime selection, provider configuration, and OpenCode executable. This patch changes lazy instruction guidance only.
+- Preserved the existing task-state format, runtime selection, provider configuration, and OpenCode executable; no runtime installation or data migration is required.
+- Isolated the Anvil-only upgrade rehearsal from user databases, provider credentials, OpenCode state, and private Anvil memory; native stats now runs against empty temporary XDG directories.
 
 ## [2.20.0] - 2026-11-13 (candidate; live model evaluation remains unexecuted)
 

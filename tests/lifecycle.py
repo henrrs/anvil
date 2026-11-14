@@ -1788,7 +1788,8 @@ def local_environment_preservation_test(temp: pathlib.Path, wrapper: pathlib.Pat
     print("PASS upgrade, rollback, and reforge preserve shared/user configuration and leave machine-local settings intact")
 
 
-def rehearsal_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
+def rehearsal_test(temp: pathlib.Path, wrapper: pathlib.Path, target_major: int,
+                   anvil_only: bool = False) -> None:
     paths = fixture(temp)
     before = {
         "config": tree_hash(paths["config"]),
@@ -1797,7 +1798,19 @@ def rehearsal_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
         "memory": tree_hash(paths["memory"]),
         "binary": file_hash(paths["binary"]),
     }
-    run(["bash", str(ROOT / "scripts" / "rehearse-upgrade.sh"), str(wrapper), VERSION_V2, "1", "2"], env_for(paths))
+    version = VERSION_V1 if target_major == 1 else VERSION_V2
+    command = ["bash", str(ROOT / "scripts" / "rehearse-upgrade.sh"), str(wrapper), version,
+               "1", str(target_major)]
+    if anvil_only:
+        prepared_config = temp / "prepared-config"
+        run(["bash", "-c", "source \"$ANVIL_ROOT/scripts/lib/common.sh\"; "
+             "source \"$ANVIL_ROOT/scripts/lib/install.sh\"; "
+             "anvil_build_config \"$1\" '' no \"$2\"", "_", str(prepared_config), str(target_major)],
+            env_for(paths, ANVIL_ROOT=str(ROOT)))
+        command.extend(["no", str(prepared_config), "yes"])
+    rehearsal = run(command, env_for(paths, ANVIL_TEST_MODE="1"))
+    check("isolated empty data store" in rehearsal.stdout,
+          "rehearsal did not verify native stats using an isolated empty XDG data store")
     after = {
         "config": tree_hash(paths["config"]),
         "data": tree_hash(paths["data_opencode"]),
@@ -1806,7 +1819,8 @@ def rehearsal_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
         "binary": file_hash(paths["binary"]),
     }
     check(before == after, "rehearsal modified the live fixture")
-    print("PASS exact OpenCode 2 candidate rehearses V1 config, opaque data/state and V1 Markdown memory without live changes")
+    scope = "Anvil-only" if anvil_only else "runtime-migration"
+    print(f"PASS exact OpenCode {target_major} {scope} rehearsal leaves credentials, runtime data/state, and private memory uncopied")
 
 
 def reforge_test(temp: pathlib.Path, wrapper: pathlib.Path) -> None:
@@ -2455,6 +2469,12 @@ def main() -> int:
     wrapper_v2 = wrapper_dir / "opencode-v2-test"
     wrapper_v2.write_text(
         "#!/usr/bin/env bash\n"
+        "if [[ \"${ANVIL_REHEARSAL_PROBE:-off}\" != off && \"${1:-}\" == stats ]]; then "
+        "[[ ! -e \"$XDG_DATA_HOME/opencode/auth.json\" ]] || { echo 'rehearsal copied OpenCode credentials' >&2; exit 94; }; "
+        "[[ ! -e \"$XDG_STATE_HOME/opencode/state.fixture\" ]] || { echo 'rehearsal copied OpenCode state' >&2; exit 95; }; "
+        "[[ ! -e \"$XDG_DATA_HOME/anvil/memory/company/databricks-secret-policy.md\" ]] || { echo 'rehearsal copied private Anvil memory' >&2; exit 96; }; "
+        "if [[ \"$ANVIL_REHEARSAL_PROBE\" == anvil-only ]]; then "
+        "[[ ! -e \"$XDG_CONFIG_HOME/opencode/opencode.jsonc\" && ! -e \"$XDG_CONFIG_HOME/opencode/cli.json\" ]] || { echo 'Anvil-only rehearsal copied the user profile' >&2; exit 97; }; fi; fi\n"
         f"if [[ \"${{1:-}}\" == --version ]]; then printf 'opencode v{VERSION_V2}\\n'; "
         f"else exec {shlex.quote(str(CANDIDATE_V2))} \"$@\"; fi\n",
         encoding="utf-8",
@@ -2463,6 +2483,12 @@ def main() -> int:
     wrapper_v1 = wrapper_dir / "opencode-v1-test"
     wrapper_v1.write_text(
         "#!/usr/bin/env bash\n"
+        "if [[ \"${ANVIL_REHEARSAL_PROBE:-off}\" != off && \"${1:-}\" == stats ]]; then "
+        "[[ ! -e \"$XDG_DATA_HOME/opencode/auth.json\" ]] || { echo 'rehearsal copied OpenCode credentials' >&2; exit 94; }; "
+        "[[ ! -e \"$XDG_STATE_HOME/opencode/state.fixture\" ]] || { echo 'rehearsal copied OpenCode state' >&2; exit 95; }; "
+        "[[ ! -e \"$XDG_DATA_HOME/anvil/memory/company/databricks-secret-policy.md\" ]] || { echo 'rehearsal copied private Anvil memory' >&2; exit 96; }; "
+        "if [[ \"$ANVIL_REHEARSAL_PROBE\" == anvil-only ]]; then "
+        "[[ ! -e \"$XDG_CONFIG_HOME/opencode/opencode.jsonc\" && ! -e \"$XDG_CONFIG_HOME/opencode/cli.json\" ]] || { echo 'Anvil-only rehearsal copied the user profile' >&2; exit 97; }; fi; fi\n"
         f"if [[ \"${{1:-}}\" == --version ]]; then printf 'opencode v{VERSION_V1}\\n'; "
         f"else exec {shlex.quote(str(CANDIDATE_V1))} \"$@\"; fi\n",
         encoding="utf-8",
@@ -2539,8 +2565,14 @@ def main() -> int:
         check("Status: NOT INSTALLED" in first_doctor.stdout and "Approved policy major  1" in first_doctor.stdout, "first-use doctor did not report the approved runtime policy informatively")
         check("Version documentation  valid" in first_doctor.stdout, "first-use doctor omitted release documentation health")
         print("PASS make stats gives first-install guidance when OpenCode is absent")
-    with tempfile.TemporaryDirectory(prefix="anvil-upgrade-rehearsal-", dir=TEST_ROOT) as name:
-        rehearsal_test(pathlib.Path(name), wrapper_v2)
+    with tempfile.TemporaryDirectory(prefix="anvil-upgrade-rehearsal-v1-", dir=TEST_ROOT) as name:
+        rehearsal_test(pathlib.Path(name), wrapper_v1, 1)
+    with tempfile.TemporaryDirectory(prefix="anvil-upgrade-rehearsal-v2-", dir=TEST_ROOT) as name:
+        rehearsal_test(pathlib.Path(name), wrapper_v2, 2)
+    with tempfile.TemporaryDirectory(prefix="anvil-only-rehearsal-v1-", dir=TEST_ROOT) as name:
+        rehearsal_test(pathlib.Path(name), wrapper_v1, 1, anvil_only=True)
+    with tempfile.TemporaryDirectory(prefix="anvil-only-rehearsal-v2-", dir=TEST_ROOT) as name:
+        rehearsal_test(pathlib.Path(name), wrapper_v2, 2, anvil_only=True)
     with tempfile.TemporaryDirectory(prefix="anvil-runtime-quiesce-", dir=TEST_ROOT) as name:
         runtime_quiesce_test(pathlib.Path(name))
     with tempfile.TemporaryDirectory(prefix="anvil-reforge-idempotent-", dir=TEST_ROOT) as name:

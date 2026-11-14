@@ -186,7 +186,7 @@ if [[ "$major" == 1 ]]; then
 else
   python3 "$ROOT/scripts/configure.py" audit "$ready_config/generated/opencode.jsonc" >/dev/null
 fi
-bash "$ROOT/scripts/rehearse-upgrade.sh" "$binary" "$runtime_version" "$major" "$major" no "$ready_config/generated"
+bash "$ROOT/scripts/rehearse-upgrade.sh" "$binary" "$runtime_version" "$major" "$major" no "$ready_config/generated" yes
 
 # Check backup prerequisites before interrupting the user's runtime. This is
 # read-only: backup creation itself remains after quiescence and final approval.

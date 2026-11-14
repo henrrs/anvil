@@ -5,8 +5,8 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source "$ROOT/scripts/lib/common.sh"
 source "$ROOT/scripts/lib/install.sh"
 
-if [[ $# -lt 4 || $# -gt 6 ]]; then
-  printf 'usage: rehearse-upgrade.sh CANDIDATE_BINARY EXACT_VERSION SOURCE_MAJOR TARGET_MAJOR [reuse-config] [prepared-config]\n' >&2
+if [[ $# -lt 4 || $# -gt 7 ]]; then
+  printf 'usage: rehearse-upgrade.sh CANDIDATE_BINARY EXACT_VERSION SOURCE_MAJOR TARGET_MAJOR [reuse-config] [prepared-config] [anvil-only]\n' >&2
   exit 2
 fi
 candidate="$1"
@@ -16,8 +16,14 @@ source_major="$3"
 target_major="$4"
 reuse_config="${5:-no}"
 prepared_config="${6:-}"
+anvil_only="${7:-no}"
 [[ "$source_major" == 1 || "$source_major" == 2 ]] || { anvil_error "Unsupported source OpenCode major: $source_major"; exit 2; }
 [[ "$target_major" == 1 || "$target_major" == 2 ]] || { anvil_error "Unsupported target OpenCode major: $target_major"; exit 2; }
+[[ "$anvil_only" == yes || "$anvil_only" == no ]] || { anvil_error 'Invalid Anvil-only rehearsal mode.'; exit 2; }
+if [[ "$anvil_only" == yes && -z "$prepared_config" ]]; then
+  anvil_error 'An Anvil-only rehearsal requires the audited prepared profile.'
+  exit 2
+fi
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/anvil-upgrade-rehearsal.XXXXXX")"
 chmod 700 -- "$tmp_root"
 cleanup() {
@@ -44,34 +50,42 @@ test_config_home="$tmp_root/xdg-config"
 test_data_home="$tmp_root/xdg-data"
 test_state_home="$tmp_root/xdg-state"
 mkdir -p -- "$test_home" "$test_config_home" "$test_data_home" "$test_state_home" "$tmp_root/v1-config"
-if [[ -d "$ANVIL_CONFIG_DIR" ]]; then
-  cp -a -- "$ANVIL_CONFIG_DIR/." "$tmp_root/v1-config/"
+if [[ "$anvil_only" == no ]]; then
+  if [[ -d "$ANVIL_CONFIG_DIR" ]]; then
+    cp -a -- "$ANVIL_CONFIG_DIR/." "$tmp_root/v1-config/"
+  else
+    anvil_error 'No global OpenCode config exists to rehearse.'
+    exit 1
+  fi
+  if [[ "$source_major" == 1 ]]; then
+    python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$tmp_root/v1-config/opencode.jsonc"
+  else
+    python3 "$ROOT/scripts/configure.py" audit-compatible "$tmp_root/v1-config/opencode.jsonc"
+  fi
 else
-  anvil_error 'No global OpenCode config exists to rehearse.'
-  exit 1
+  # make upgrade only changes Anvil-owned profile files; the caller has
+  # already audited both installed and staged profiles. Do not copy a global
+  # OpenCode profile that may contain provider credentials into the rehearsal.
+  [[ -d "$prepared_config" && ! -L "$prepared_config" ]] || {
+    anvil_error 'The prepared target config is missing or unsafe for Anvil-only rehearsal.'
+    exit 1
+  }
+  if [[ "$target_major" == 1 ]]; then
+    python3 "$ROOT/scripts/configure.py" audit-v1 "$prepared_config/opencode.jsonc"
+  else
+    python3 "$ROOT/scripts/configure.py" audit "$prepared_config/opencode.jsonc"
+  fi
 fi
-if [[ "$source_major" == 1 ]]; then
-  python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$tmp_root/v1-config/opencode.jsonc"
-else
-  python3 "$ROOT/scripts/configure.py" audit-compatible "$tmp_root/v1-config/opencode.jsonc"
+rehearsal_probe=off
+if [[ "${ANVIL_TEST_MODE:-0}" == 1 ]]; then
+  rehearsal_probe=full
+  [[ "$anvil_only" == yes ]] && rehearsal_probe=anvil-only
 fi
-if [[ -d "$ANVIL_DATA_HOME/opencode" ]]; then
-  mkdir -p -- "$test_data_home/opencode"
-  cp -a -- "$ANVIL_DATA_HOME/opencode/." "$test_data_home/opencode/"
-fi
-if [[ -d "$ANVIL_STATE_DIR" ]]; then
-  mkdir -p -- "$test_state_home/opencode"
-  cp -a -- "$ANVIL_STATE_DIR/." "$test_state_home/opencode/"
-fi
-if [[ -d "$ANVIL_MEMORY_DIR" ]]; then
-  mkdir -p -- "$test_data_home/anvil/memory"
-  cp -a -- "$ANVIL_MEMORY_DIR/." "$test_data_home/anvil/memory/"
-fi
-
 rehearsal_env=(env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$test_home" \
   XDG_CONFIG_HOME="$test_config_home" XDG_DATA_HOME="$test_data_home" XDG_STATE_HOME="$test_state_home" \
   TMPDIR="${TMPDIR:-/tmp}" LANG="${LANG:-C.UTF-8}" OPENCODE_DISABLE_AUTOUPDATE=1 ANVIL_ROOT="$ROOT" \
   ANVIL_TEST_MODE="${ANVIL_TEST_MODE:-0}" \
+  ANVIL_REHEARSAL_PROBE="$rehearsal_probe" \
   ANVIL_TEST_FAIL_CANDIDATE_VALIDATION="${ANVIL_TEST_FAIL_CANDIDATE_VALIDATION:-0}" \
   ANVIL_TEST_FAIL_REHEARSAL="${ANVIL_TEST_FAIL_REHEARSAL:-0}")
 if [[ -n "$prepared_config" ]]; then
@@ -79,7 +93,7 @@ if [[ -n "$prepared_config" ]]; then
     anvil_error 'The prepared target config is missing or unsafe for lifecycle rehearsal.'
     exit 1
   }
-  cp -a -- "$prepared_config/." "$tmp_root/target-config/"
+  if [[ "$anvil_only" == no ]]; then cp -a -- "$prepared_config/." "$tmp_root/target-config/"; fi
 elif [[ "$reuse_config" == yes ]]; then
   cp -a -- "$tmp_root/v1-config/." "$tmp_root/target-config/"
 else
@@ -89,16 +103,18 @@ else
     anvil_build_config "$1" "$2" yes "$3"
   ' _ "$tmp_root/target-config" "$tmp_root/v1-config" "$target_major"
 fi
-mkdir -p -- "$test_config_home/opencode"
-cp -a -- "$tmp_root/target-config/." "$test_config_home/opencode/"
-chmod 600 -- "$test_config_home/opencode/opencode.jsonc"
-if [[ "$target_major" == 1 ]]; then
+if [[ "$anvil_only" == no ]]; then
+  mkdir -p -- "$test_config_home/opencode"
+  cp -a -- "$tmp_root/target-config/." "$test_config_home/opencode/"
+  chmod 600 -- "$test_config_home/opencode/opencode.jsonc"
+fi
+if [[ "$anvil_only" == no && "$target_major" == 1 ]]; then
   if [[ "$reuse_config" == yes && -z "$prepared_config" ]]; then
     python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$test_config_home/opencode/opencode.jsonc"
   else
     python3 "$ROOT/scripts/configure.py" audit-v1 "$test_config_home/opencode/opencode.jsonc"
   fi
-else
+elif [[ "$anvil_only" == no ]]; then
   if [[ "$reuse_config" == yes && -z "$prepared_config" ]]; then
     python3 "$ROOT/scripts/configure.py" audit-compatible "$test_config_home/opencode/opencode.jsonc"
   else
@@ -144,30 +160,38 @@ if [[ "${ANVIL_TEST_FAIL_REHEARSAL:-0}" == 1 ]]; then
 fi
 
 if [[ "$target_major" == 2 ]]; then
-  # Native stats starts OpenCode 2 against copied user state.
+  # Native stats starts OpenCode against a clean, disposable XDG data store.
+  # An Anvil-only upgrade neither migrates nor needs access to private
+  # OpenCode sessions, credentials, state, or Anvil memory.
   "${rehearsal_env[@]}" "$test_binary" stats --standalone --days 30 --models --cost --json > "$tmp_root/rehearsal-stats.json"
   python3 - "$tmp_root/rehearsal-stats.json" "$expected_version" <<'PY'
 import json,sys
 data=json.load(open(sys.argv[1],encoding="utf-8"))
 assert isinstance(data,dict) and isinstance(data.get("range"),dict) and isinstance(data.get("tokens"),dict)
-print(f"OpenCode {sys.argv[2]} read the copied state through native stats")
+print(f"OpenCode {sys.argv[2]} stats passed against the isolated empty data store")
 PY
 else
-  # OpenCode 1 exposes native text stats. Starting that command against the
-  # copied data/state exercises the V1 reader without touching the live DB.
+  # OpenCode 1 exposes native text stats. Run it only against disposable
+  # empty XDG directories; do not copy or inspect a user's database.
   "${rehearsal_env[@]}" "$test_binary" stats --days 30 > "$tmp_root/rehearsal-stats.txt"
   python3 - "$tmp_root/rehearsal-stats.txt" "$expected_version" <<'PY'
 import sys
 from pathlib import Path
 text=Path(sys.argv[1]).read_text(encoding="utf-8")
 assert "Sessions" in text and "Input" in text, "OpenCode 1 did not return its native stats summary"
-print(f"OpenCode {sys.argv[2]} read the copied state through native text stats")
+print(f"OpenCode {sys.argv[2]} stats passed against the isolated empty data store")
 PY
 fi
 
-# Smoke-test the selected runtime adapter with the copied config.
-"${rehearsal_env[@]}" bash "$ROOT/scripts/validate-candidate.sh" \
-  "$test_binary" "$test_config_home/opencode" "$expected_version" "$target_major"
-"${rehearsal_env[@]}" env PATH="$test_home/.opencode/bin:${PATH:-/usr/bin:/bin}" \
-  ANVIL_SKIP_RUNTIME_PROBE=1 ANVIL_DOCTOR_LOCAL=1 ANVIL_REHEARSAL=1 bash "$ROOT/scripts/doctor.sh"
-anvil_ok 'Migration rehearsal passed; the staged runtime/config and copied OpenCode data/state remained isolated.'
+if [[ "$anvil_only" == no ]]; then
+  # Runtime operations must validate the staged profile. The Anvil-only path
+  # leaves the exact runtime and profile parsing boundary unchanged; its target
+  # managed profile was audited above without copying user configuration.
+  "${rehearsal_env[@]}" bash "$ROOT/scripts/validate-candidate.sh" \
+    "$test_binary" "$test_config_home/opencode" "$expected_version" "$target_major"
+  "${rehearsal_env[@]}" env PATH="$test_home/.opencode/bin:${PATH:-/usr/bin:/bin}" \
+    ANVIL_SKIP_RUNTIME_PROBE=1 ANVIL_DOCTOR_LOCAL=1 ANVIL_REHEARSAL=1 bash "$ROOT/scripts/doctor.sh"
+  anvil_ok 'Runtime migration rehearsal passed with isolated empty OpenCode data/state; user databases and memory were not copied.'
+else
+  anvil_ok 'Anvil-only rehearsal passed with the existing OpenCode executable and isolated empty data/state; user config and memory were not copied.'
+fi

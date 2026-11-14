@@ -256,7 +256,7 @@ fi
 if [[ "${DRY_RUN:-0}" == 1 ]]; then
   printf '\nCandidate                OpenCode %s\n' "$candidate_version"
   printf 'Config                   %s runtime profile staged and audited\n' "opencode-v$target_major"
-  printf 'Migration rehearsal      passed against copied user state\n'
+  printf 'Migration rehearsal      passed with disposable OpenCode data/state; user state was not copied\n'
   printf '\nDry run complete. No backup was created and no live files were changed.\n'
   exit 0
 fi
