@@ -99,6 +99,7 @@ def stream_metrics(process, timeout: int, output_limit: int, trace_path: pathlib
     """Retain only event metadata, counters, and digests; never retain message text."""
     tool_calls = 0
     tool_completed = 0
+    tool_errors = 0
     usage = {}
     recognized = False
     stdout_digest, stderr_digest = hashlib.sha256(), hashlib.sha256()
@@ -246,7 +247,7 @@ def stream_metrics(process, timeout: int, output_limit: int, trace_path: pathlib
         return None
 
     def consume(raw, trace):
-        nonlocal tool_calls, tool_completed, recognized, text_chars, failure_class, public_test_commands, reason
+        nonlocal tool_calls, tool_completed, tool_errors, recognized, text_chars, failure_class, public_test_commands, reason
         try:
             event = json.loads(raw)
         except ValueError:
@@ -299,15 +300,23 @@ def stream_metrics(process, timeout: int, output_limit: int, trace_path: pathlib
                                re.search(r"\b(pytest|unittest|acceptance\.py)\b", command_value) is not None)
         if public_test_command:
             public_test_commands += 1
-        completed = (kind in {"tool_result", "tool_completed", "tool_finished"} or
-                     tool_status in {"completed", "complete", "error", "failed"})
-        if completed:
+        settled = (kind in {"tool_result", "tool_completed", "tool_finished"} or
+                   tool_status in {"completed", "complete", "error", "failed"})
+        if settled:
+            tool_error = (tool_status in {"error", "failed"} or
+                          (kind in {"tool_result", "tool_completed", "tool_finished"} and bool(event.get("error"))))
             if isinstance(call_id, str):
                 if call_id not in completed_tool_ids:
                     completed_tool_ids.add(call_id)
-                    tool_completed += 1
+                    if tool_error:
+                        tool_errors += 1
+                    else:
+                        tool_completed += 1
             else:
-                tool_completed += 1
+                if tool_error:
+                    tool_errors += 1
+                else:
+                    tool_completed += 1
         token_record = safe_token_record(part.get("tokens"))
         if isinstance(token_record, dict):
             for key, value in token_record.items():
@@ -335,6 +344,7 @@ def stream_metrics(process, timeout: int, output_limit: int, trace_path: pathlib
                                 "tool": safe_identifier(tool_name, 100),
                                 "call_id": call_id,
                                 "tool_status": str(tool_status)[:40] if isinstance(tool_status, str) else None,
+                                "tool_error": bool(tool_status in {"error", "failed"}),
                                 "tokens": token_record,
                                 "error_class": error_class,
                                 "error_type": error_metadata["error_type"] if kind == "error" else None,
@@ -435,6 +445,7 @@ def stream_metrics(process, timeout: int, output_limit: int, trace_path: pathlib
     else:
         provider_category = None
     return {"tool_calls": tool_calls if recognized else None, "tool_completed": tool_completed if recognized else None,
+            "tool_errors": tool_errors if recognized else None,
             "token_usage": usage or None,
             "reported_cost_telemetry": sum(cost_values) if cost_values else None, "monetary_cost": None,
             "event_types": event_counts, "session_ids": sorted(session_ids), "text_chars_observed": text_chars,
@@ -923,6 +934,7 @@ def merge_metrics(first: dict, second: dict) -> dict:
     return {
         "tool_calls": (first.get("tool_calls") or 0) + (second.get("tool_calls") or 0),
         "tool_completed": (first.get("tool_completed") or 0) + (second.get("tool_completed") or 0),
+        "tool_errors": (first.get("tool_errors") or 0) + (second.get("tool_errors") or 0),
         "token_usage": usage or None,
         "reported_cost_telemetry": (sum(value for value in
              (first.get("reported_cost_telemetry"), second.get("reported_cost_telemetry"))

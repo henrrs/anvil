@@ -37,16 +37,33 @@
       "observed_output_tokens": 2318,
       "reported_cost_telemetry": 0,
       "monetary_cost": null
+    },
+    {
+      "index": 3,
+      "key": "anvil-active:fast-control:1",
+      "kind": "challenge",
+      "started_at_epoch": 1794688925.038445,
+      "reserved_seconds": 600,
+      "reserved_input_tokens": 393216,
+      "reserved_output_tokens": 24576,
+      "status": "COMPLETED",
+      "elapsed_seconds": 82.964,
+      "finished_at_epoch": 1794689008.0025632,
+      "observed_input_tokens": 13370,
+      "observed_output_tokens": 1424,
+      "reported_cost_telemetry": 0,
+      "monetary_cost": null
     }
   ],
   "challenge_keys": [
-    "native-opencode:fast-control:1"
+    "native-opencode:fast-control:1",
+    "anvil-active:fast-control:1"
   ],
   "resume_keys": [],
-  "actual_wall_seconds": 79.91,
+  "actual_wall_seconds": 162.874,
   "reserved_wall_seconds": 0,
-  "actual_input_tokens": 14291,
-  "actual_output_tokens": 2325,
+  "actual_input_tokens": 27661,
+  "actual_output_tokens": 3749,
   "reserved_input_tokens": 0,
   "reserved_output_tokens": 0,
   "evaluation_id": "anvil-engineering-local-2026-11-14-auth-refresh-01"

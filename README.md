@@ -1,5 +1,7 @@
 # Anvil
 
+Current repository release: **Anvil 2.20.1**. See the [2.20.1 patch notes](docs/versions/v2.20.1.md) and [live engineering evaluation](docs/engineering-live-evaluation-v2.20.1.md).
+
 > **Anvil — A lean, model-agnostic OpenCode harness designed to maximize reliable task completion while minimizing unnecessary context and token usage.**
 >
 > **Better harness. Better execution.**

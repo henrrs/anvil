@@ -104,6 +104,7 @@ class AnalyticsServiceManagementTests(unittest.TestCase):
              patch("scripts.analytics_service._systemd_available", return_value=True), \
              patch("scripts.analytics_service._run_systemctl", side_effect=run_systemctl), \
              patch("scripts.analytics_service._systemctl_value", return_value="inactive"), \
+             patch("scripts.analytics_service._migrate_legacy_listener"), \
              patch("scripts.analytics_service.service_state", return_value={
                  "installed": True, "enabled": True, "active": True, "main_pid": 123,
                  "healthy": True, "status": "READY"}), \

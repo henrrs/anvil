@@ -20,6 +20,8 @@ Anvil 2.18.0 makes Analytics routing coverage-first, hardens materialization rec
 
 Anvil 2.20.0 adds optional native OpenCode 2 compaction continuity for an active Anvil engineering task, lazy engineering-quality guidance, and deterministic plus opt-in model evaluation. OpenCode 1 recovery remains explicit; no runtime migration or task-state schema change is introduced. Live compaction and model quality remain unverified. See [release notes](v2.20.0.md), [migration](../migrations/v2.19.0-to-v2.20.0.md), and the [engineering harness report](../engineering-harness-report-v2.20.0.md).
 
+Anvil 2.20.1 clarifies the lazy `anvil-engineering` trigger for explicit dependent phases. It does not change runtime support or task state. See [patch notes](v2.20.1.md), [migration](../migrations/v2.20.0-to-v2.20.1.md), and the [live evaluation report](../engineering-live-evaluation-v2.20.1.md).
+
 | Anvil 2.20 engineering capability | OpenCode 1 | OpenCode 2 |
 |---|---|---|
 | Existing task-local Requirements / Architecture / Work models | Shared helper and XDG store | Shared helper and XDG store |

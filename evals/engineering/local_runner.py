@@ -51,9 +51,9 @@ def child_env(**extra: str) -> dict[str, str]:
 
 
 def invoke_metadata(opencode: pathlib.Path, args: list[str], cwd: pathlib.Path,
-                    timeout: int = 30) -> tuple[int, str]:
+                    timeout: int = 30, *, pure: bool = False) -> tuple[int, str]:
     try:
-        result = subprocess.run([str(opencode), *args], cwd=cwd, env=child_env(),
+        result = subprocess.run([str(opencode), *( ["--pure"] if pure else []), *args], cwd=cwd, env=child_env(),
                                 capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
         raise EvaluationBlocked(f"OpenCode metadata command timed out: {args[0]}") from None
@@ -72,8 +72,8 @@ def _redact_config(value, key: str = ""):
     return value
 
 
-def resolve_config(opencode: pathlib.Path, cwd: pathlib.Path) -> dict:
-    code, output = invoke_metadata(opencode, ["debug", "config"], cwd)
+def resolve_config(opencode: pathlib.Path, cwd: pathlib.Path, *, pure: bool = False) -> dict:
+    code, output = invoke_metadata(opencode, ["debug", "config"], cwd, pure=pure)
     if code != 0:
         raise EvaluationBlocked("OpenCode could not resolve the existing local configuration")
     try:
@@ -94,7 +94,8 @@ def _agent_instruction_digest(raw: str) -> str | None:
         return None
     if not isinstance(value, dict):
         return None
-    content = {key: item for key, item in value.items() if key not in {"permission", "steps", "tools"}}
+    content = {key: item for key, item in value.items()
+               if key not in {"permission", "steps", "tools", "disable"}}
     return hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -212,7 +213,8 @@ def _permissions(project: pathlib.Path, agent: str, shell: pathlib.Path | None,
     deny = {"*": "deny"}
     permission = dict(deny)
     if smoke:
-        return {"permission": permission, "agent": {agent: {"steps": 1, "permission": dict(deny)}}}
+        return {"permission": permission,
+                "agent": {agent: {"disable": False, "steps": 1, "permission": dict(deny)}}}
 
     external = {"*": "deny"}
     for path in allowed_external:
@@ -221,11 +223,32 @@ def _permissions(project: pathlib.Path, agent: str, shell: pathlib.Path | None,
     if state_root:
         external[str(state_root.resolve()) + "/**"] = "allow"
 
-    scoped_write = {"*": "deny", str(project) + "/**": "allow"}
-    scoped_write[str(project / "opencode.json")] = "deny"
-    scoped_write[str(project / ".git") + "/**"] = "deny"
+    # OpenCode V1's apply_patch permission check uses project-relative paths.
+    # Allow those paths, explicitly deny edits to readable Anvil references,
+    # then re-allow only the fixture and its isolated task-state subtree.
+    scoped_write = {"*": "deny", "**": "allow"}
+    for path in allowed_external:
+        external_path = str(path.resolve())
+        scoped_write[external_path] = "deny"
+        scoped_write[external_path + "/**"] = "deny"
     if state_root:
-        scoped_write[str(state_root.resolve()) + "/**"] = "allow"
+        state_path = str(state_root.resolve())
+        scoped_write[state_path] = "allow"
+        scoped_write[state_path + "/**"] = "allow"
+    project_path = str(project.resolve())
+    scoped_write[project_path] = "allow"
+    scoped_write[project_path + "/**"] = "allow"
+    scoped_write[project_path + "/opencode.json"] = "deny"
+    scoped_write["opencode.json"] = "deny"
+    scoped_write[project_path + "/.git"] = "deny"
+    scoped_write[project_path + "/.git/**"] = "deny"
+    scoped_write[".git"] = "deny"
+    scoped_write[".git/**"] = "deny"
+    # apply_patch resolves paths relative to the OpenCode worktree. Every
+    # target outside this project therefore begins with ../ after resolution.
+    # Keep readable Anvil references immutable even though external_directory
+    # allows the agent to read those specific roots.
+    scoped_write["../**"] = "deny"
 
     permission.update({
         "read": "allow", "glob": "allow", "grep": "allow", "list": "allow",
@@ -239,7 +262,7 @@ def _permissions(project: pathlib.Path, agent: str, shell: pathlib.Path | None,
     })
     agent_permission = dict(permission)
     config = {"$schema": "https://opencode.ai/config.json", "permission": permission,
-              "agent": {agent: {"steps": 12, "permission": agent_permission}}}
+              "agent": {agent: {"disable": False, "steps": 12, "permission": agent_permission}}}
     if shell:
         config["shell"] = str(shell.resolve())
     return config
@@ -254,24 +277,57 @@ def _write_project_config(project: pathlib.Path, config: dict) -> pathlib.Path:
     return path
 
 
+def _native_agent_baseline(opencode: pathlib.Path, run_root: pathlib.Path, agent: str) -> str:
+    """Resolve the built-in agent with only its global disable flag overridden locally."""
+    probe = run_root / "native-agent-baseline"
+    probe.mkdir(mode=0o700)
+    _write_project_config(probe, {"$schema": "https://opencode.ai/config.json",
+                                  "agent": {agent: {"disable": False}}})
+    code, output = invoke_metadata(opencode, ["debug", "agent", agent], probe, pure=True)
+    digest = _agent_instruction_digest(output) if code == 0 else None
+    if not digest:
+        raise EvaluationBlocked("OpenCode's built-in native agent could not be resolved safely")
+    return digest
+
+
 def _verify_overlay(opencode: pathlib.Path, project: pathlib.Path, agent: str,
-                    shell: pathlib.Path | None, baseline_agent_digest: str | None) -> dict:
-    resolved = resolve_config(opencode, project)
-    agent_code, agent_output = invoke_metadata(opencode, ["debug", "agent", agent], project)
+                    shell: pathlib.Path | None, baseline_agent_digest: str | None,
+                    read_roots: list[pathlib.Path], state_root: pathlib.Path | None,
+                    *, pure: bool = False) -> dict:
+    resolved = resolve_config(opencode, project, pure=pure)
+    agent_code, agent_output = invoke_metadata(opencode, ["debug", "agent", agent], project, pure=pure)
     overlay_agent_digest = _agent_instruction_digest(agent_output) if agent_code == 0 else None
     permissions = resolved.get("agent", {}).get(agent, {}).get("permission", {})
     external = permissions.get("external_directory", {}) if isinstance(permissions, dict) else {}
+    edit = permissions.get("edit", {}) if isinstance(permissions, dict) else {}
+    if not isinstance(edit, dict):
+        edit = {}
+    project_path = str(project.resolve())
+    readable_edits_denied = all(
+        edit.get(str(path.resolve())) == "deny" and edit.get(str(path.resolve()) + "/**") == "deny"
+        for path in read_roots
+    )
     if (not isinstance(permissions, dict) or permissions.get("bash") != ("allow" if shell else "deny") or
             permissions.get("*") != "deny" or
             permissions.get("task") != "deny" or permissions.get("anvil_memory_search") != "deny" or
             permissions.get("anvil_analytics_*") != "deny" or
             not isinstance(external, dict) or external.get("*") != "deny" or
+            edit.get("*") != "deny" or edit.get("**") != "allow" or
+            edit.get(project_path) != "allow" or edit.get(project_path + "/**") != "allow" or
+            edit.get(project_path + "/opencode.json") != "deny" or edit.get("opencode.json") != "deny" or
+            edit.get(project_path + "/.git/**") != "deny" or edit.get(".git/**") != "deny" or
+            edit.get("../**") != "deny" or not readable_edits_denied or
+            (state_root and (edit.get(str(state_root.resolve())) != "allow" or
+                             edit.get(str(state_root.resolve()) + "/**") != "allow")) or
+            resolved.get("agent", {}).get(agent, {}).get("disable") is True or
             (shell and resolved.get("shell") != str(shell.resolve())) or
             not baseline_agent_digest or overlay_agent_digest != baseline_agent_digest):
         raise EvaluationBlocked("OpenCode did not resolve the fixture-only permission overlay")
     return {"project_overlay_resolved": True, "provider_config_overridden": False,
             "home_xdg_overridden": False, "external_directory_default": external.get("*"),
             "agent_instruction_digest_preserved": True,
+            "project_relative_patch_allowed": edit.get("**") == "allow",
+            "read_only_anvil_paths_remain_immutable": readable_edits_denied,
             "plugin_tools_allowed": False,
             "agent_definition_sha256": overlay_agent_digest}
 
@@ -469,8 +525,7 @@ def _challenge(args, opencode: pathlib.Path, name: str, treatment: str) -> dict:
     if agent == "anvil":
         baseline_agent_digest = profile.get("anvil_agent_definition_sha256")
     else:
-        code, output = invoke_metadata(opencode, ["debug", "agent", agent], project)
-        baseline_agent_digest = _agent_instruction_digest(output) if code == 0 else None
+        baseline_agent_digest = _native_agent_baseline(opencode, run_root, agent)
 
     shell = _build_shell(args, run_root)
     state_root, read_roots, state_home = _local_paths(
@@ -490,14 +545,9 @@ def _challenge(args, opencode: pathlib.Path, name: str, treatment: str) -> dict:
         environment["ANVIL_EVAL_STATE_HOME"] = str(state_home.resolve())
     if roots:
         environment["ANVIL_EVAL_READ_ROOTS"] = ":".join(roots)
-    overlay = _verify_overlay(opencode, project, agent, shell, baseline_agent_digest)
-    prompt = (
-        "Implement specification.md in this disposable fixture repository. Work only in the current project. "
-        "Use Anvil's loaded engineering instructions and relevant skills when this treatment is Anvil. "
-        "Do not inspect credentials, user memory, external repositories, hidden graders, or production services. "
-        "Use the public checks when available, preserve existing behavior, and report evidence, limitations, "
-        "and unfinished requirements."
-    )
+    overlay = _verify_overlay(opencode, project, agent, shell, baseline_agent_digest,
+                              read_roots, state_root, pure=(treatment == "native-opencode"))
+    prompt = challenge_prompt()
     argv = [str(opencode)]
     if treatment == "native-opencode":
         argv.append("--pure")
@@ -546,7 +596,10 @@ def _challenge(args, opencode: pathlib.Path, name: str, treatment: str) -> dict:
                "execution_status": "COMPLETED" if code == 0 and not metrics.get("failure_class") and not metrics.get("limit") else "BLOCKED",
                "failure_class": metrics.get("failure_class"), "exit_code": code, "latency_seconds": elapsed,
                "files_changed": changed_files, "tool_calls": metrics.get("tool_calls"),
-               "tool_completed": metrics.get("tool_completed"), "token_usage": metrics.get("token_usage"),
+               "tool_completed": metrics.get("tool_completed"), "tool_errors": metrics.get("tool_errors"),
+               "limit_category": metrics.get("timeout_category"),
+               "failure_stage": metrics.get("failure_stage"),
+               "token_usage": metrics.get("token_usage"),
                "reported_cost_telemetry": metrics.get("reported_cost_telemetry"),
                "monetary_cost": None, "event_types": metrics.get("event_types"),
                "session_id_sha256": session_hashes, "text_chars_observed": metrics.get("text_chars_observed"),
@@ -560,6 +613,17 @@ def _challenge(args, opencode: pathlib.Path, name: str, treatment: str) -> dict:
                "private_grader_inside_workspace": False,
                "semantic_review": "REQUIRED; the deterministic grader does not establish design quality"}
     return outcome
+
+
+def challenge_prompt() -> str:
+    """Return identical user-task guidance for every evaluation treatment."""
+    return (
+        "Implement specification.md in this disposable fixture repository. Work only in the current project. "
+        "Use repository-provided instructions and skills when applicable to this task. "
+        "Do not inspect credentials, user memory, external repositories, hidden graders, or production services. "
+        "Use the public checks when available, preserve existing behavior, and report evidence, limitations, "
+        "and unfinished requirements."
+    )
 
 
 def _save_report(args, runtime: dict, results: list[dict], status: str) -> None:

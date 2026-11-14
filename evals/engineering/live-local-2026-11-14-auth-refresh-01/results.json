@@ -2,7 +2,7 @@
   "schema_version": 1,
   "evaluation_id": "anvil-engineering-local-2026-11-14-auth-refresh-01",
   "mode": "challenge",
-  "status": "COMPLETED",
+  "status": "BLOCKED",
   "runtime": {
     "executable": "opencode",
     "version": "1.19.5",
@@ -125,6 +125,110 @@
           "anvil-engineering-local-c0habtjm"
         ]
       }
+    },
+    {
+      "fixture": "fast-control",
+      "treatment": "anvil-active",
+      "model": "openai/gpt-6-luna",
+      "variant": "high",
+      "runtime_version": "1.19.5",
+      "fixture_initial_sha256": "004c5686a92731aecd54a7368cbf7199cd1015b7ab112d55f20c7df3aba6473c",
+      "acceptance": "FAIL",
+      "grader": {
+        "status": "FAIL",
+        "exit_code": 1,
+        "diagnostics_bytes": 430,
+        "diagnostics_sha256": "57b26d1234fdba987e1c97d7bd45946fcf027893a35ea0e1eaba2234c90ee161",
+        "diagnostics_private": true,
+        "raw_diagnostics_retained": false
+      },
+      "execution_status": "COMPLETED",
+      "failure_class": null,
+      "exit_code": 0,
+      "latency_seconds": 82.964,
+      "files_changed": [],
+      "tool_calls": 13,
+      "tool_completed": 13,
+      "token_usage": {
+        "total": 81658,
+        "input": 13370,
+        "output": 1424,
+        "reasoning": 1456
+      },
+      "reported_cost_telemetry": 0,
+      "monetary_cost": null,
+      "event_types": {
+        "step_start": 10,
+        "text": 3,
+        "tool_use": 13,
+        "step_finish": 10
+      },
+      "session_id_sha256": [
+        "2c8bb470eb14632ec6afe3960c79676c358659ce6caddc7eb533e6607bca3654"
+      ],
+      "text_chars_observed": 935,
+      "loaded_anvil_skills": [
+        "anvil-engineering"
+      ],
+      "public_test_commands": 0,
+      "safe_trace": "<isolated-evaluation-root>/anvil-active/fast-control-01/trace-metadata.jsonl",
+      "permission_overlay": {
+        "project_overlay_resolved": true,
+        "provider_config_overridden": false,
+        "home_xdg_overridden": false,
+        "external_directory_default": "deny",
+        "agent_instruction_digest_preserved": true,
+        "plugin_tools_allowed": false,
+        "agent_definition_sha256": "242657223c72d85578287f9e7201ee89639524bb9712775823c322ddf594db4f"
+      },
+      "active_profile_inventory": {
+        "anvil_agent_resolves": true,
+        "anvil_agent_definition_sha256": "242657223c72d85578287f9e7201ee89639524bb9712775823c322ddf594db4f",
+        "anvil_instruction_source_resolves": true,
+        "anvil_agent_instructions_present": false,
+        "anvil_plugin_configured": true,
+        "anvil_plugin_tools_resolve": [
+          "anvil_analytics_compare_routes",
+          "anvil_analytics_describe_table",
+          "anvil_analytics_explain_query",
+          "anvil_analytics_lineage",
+          "anvil_analytics_local_coverage",
+          "anvil_analytics_materialize",
+          "anvil_analytics_preview_table",
+          "anvil_analytics_profile_table",
+          "anvil_analytics_query_history",
+          "anvil_analytics_refresh_local",
+          "anvil_analytics_refresh_metadata",
+          "anvil_analytics_run_query",
+          "anvil_analytics_search_catalog",
+          "anvil_memory_search"
+        ],
+        "anvil_skill_ids": [
+          "anvil-communication",
+          "anvil-data-ingestion",
+          "anvil-databricks",
+          "anvil-delta-lake",
+          "anvil-engineering",
+          "anvil-memory",
+          "anvil-spark-performance",
+          "anvil-system-design"
+        ],
+        "anvil_instruction_reference_configured": false,
+        "global_agents_file_present": true,
+        "global_agents_mentions_anvil": true,
+        "agent_count": 5,
+        "plugin_count": 1,
+        "skill_inspection_succeeded": true,
+        "active_anvil_verified": true
+      },
+      "resume": {
+        "status": "NOT_REQUIRED"
+      },
+      "native_control_caveat": null,
+      "workspace": "<isolated-evaluation-root>/anvil-active/fast-control-01/project",
+      "private_reasoning_logged": false,
+      "private_grader_inside_workspace": false,
+      "semantic_review": "REQUIRED; the deterministic grader does not establish design quality"
     }
   ],
   "budget_config": "evals/engineering/live-local-2026-11-14-auth-refresh-01/config.json",

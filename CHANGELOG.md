@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.20.1] - 2026-11-14
+
+- Clarified when to load the lazy `anvil-engineering` skill: explicit dependent phases such as validation, dependency resolution, filesystem activation/rollback, and CLI integration now qualify even in a small, single-repository task.
+- Added a live evaluation report for OpenCode 1.19.5 with Luna 6 High, including independent acceptance outcomes, token and latency measurements, and the limitations of one run per treatment.
+- Preserved the existing task-state format, runtime selection, provider configuration, and OpenCode executable. This patch changes lazy instruction guidance only.
+
 ## [2.20.0] - 2026-11-13 (candidate; live model evaluation remains unexecuted)
 
 - Added a bounded, read-only engineering continuity packet to the documented OpenCode 2 compaction hook. It is reconstructed from Anvil's existing checksummed task state, labels stale evidence, excludes transcripts, and fails soft; OpenCode 1 keeps its existing manual resume path.

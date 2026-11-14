@@ -7,8 +7,8 @@
   },
   "managed_artifacts": {
     "files": {
-      "AGENTS.md": "0b9f9df58dd4425194dcf347a843003bcf89236a8e1f3d469682ae0789752ad5",
-      "VERSION": "f9390af682526565a4ea8d3299bd45f738940035311ee197eb2eeede78178119",
+      "AGENTS.md": "022e42090898ffc90cd9115740574a132f2e6ed58bb57ffa24cb4a13f8e3b7e0",
+      "VERSION": "ad709c219554404347779226100846dad6483dd84abbdbfd27c68e477bd5aa83",
       "commands/distill.md": "5a481d161c347fcef2f24085edc3e7739a9cd9abcd9c22e4d4a2847c4330d55d",
       "commands/recall.md": "53031bd6648d8f12da60b810f3d1de473c9d66bff8bef42de4ff8cb8545b96da",
       "commands/remember.md": "7b9dae0f9513882e15bbb4348a7b9c1a419fc61110c7d34caaf514905f7baeab",
@@ -154,7 +154,7 @@
       "web/analytics/styles.css": "8781dcd37526a12fe1c09fdfe838682759f55115d4d39a505b5b5014e5cede29",
       "skills/anvil-engineering/references/quality.md": "ce031262d040c19bbcbd7ace91a85bc6ca29757aa59f4a6b359a34884dd7f322"
     },
-    "release": "2.20.0"
+    "release": "2.20.1"
   },
   "schema_version": 1,
   "skills": {

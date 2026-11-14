@@ -1,7 +1,7 @@
 # Anvil runtime compatibility
 
 **Official runtime/plugin documentation last checked:** 2026-11-13
-**Anvil release:** `2.20.0`
+**Anvil release:** `2.20.1`
 **Policy:** OpenCode 1.x and 2.x supported; default major `1`; automatic major upgrade disabled.
 
 | Anvil | OpenCode runtime | Minimum | Offline profile fixture | Adapter | Support |
@@ -18,6 +18,8 @@
 The 2.18.0 mandatory suite uses offline OpenCode 1/2 profile fixtures and isolated lifecycle, memory, Databricks, communication, engineering and Analytics regressions. The runtime compatibility floors and adapters are unchanged. Provider/model discovery is validated against the running runtime catalog; this repository's offline suite does not establish that a live GitHub Copilot account exposes Luna 6. Analytics V1/V2 plugin contracts are source-tested, but live plugin loading and runtime chat remain separate environment checks.
 
 Anvil 2.20.0 retains the same V1/V2 runtime floors. The V2 plugin optionally registers OpenCode's documented session `compaction` hook at the installed API boundary; if registration or the bounded local state lookup is unavailable, compaction proceeds without Anvil's checkpoint. The repository's local OpenCode is V1 1.19.5; the V2 hook has source-contract coverage only and was not live-loaded in this environment. Do not interpret support for the V2 runtime adapter as proof that every V2 patch exposes the optional hook.
+
+Anvil 2.20.1 changes only lazy engineering-skill activation guidance. Runtime floors, adapters, providers, and OpenCode configuration remain unchanged.
 
 ## Common and runtime-specific capabilities
 

@@ -293,6 +293,7 @@ pass 'Analytical evaluation harness remains separate, deterministic and offline-
 python3 "$ROOT/tests/communication.py" || fail 'communication/artifact intelligence offline contracts and regressions'
 pass 'Communication and artifact intelligence runs deterministic offline regressions'
 python3 "$ROOT/tests/engineering.py" || fail 'engineering state, interruption, stale evidence and direct-path regressions'
+python3 "$ROOT/tests/local_evaluation.py" || fail 'local OpenCode evaluation policy and trace privacy regressions'
 python3 "$ROOT/evals/engineering/run.py" --mode replay --repeats 2 --output "$tmp_root/engineering-eval.json" || fail 'ingestion and unrelated scheduler engineering replays'
 pass 'Engineering models, atomic recovery, conformance, compaction and unrelated-domain replays'
 python3 "$ROOT/evals/engineering/adaptive.py" --output "$tmp_root/adaptive-eval.json" || fail 'task-local adaptive activation cases'
