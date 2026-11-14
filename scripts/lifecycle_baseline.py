@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -66,6 +67,133 @@ def _atomic_bytes(destination: Path, payload: bytes, mode: int) -> None:
     except BaseException:
         Path(temporary).unlink(missing_ok=True)
         raise
+
+
+def _sqlite_integrity(path: Path) -> str:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Anvil-owned OpenCode database snapshot is missing or unsafe")
+    connection: sqlite3.Connection | None = None
+    try:
+        uri = path.absolute().as_uri() + "?mode=ro"
+        connection = sqlite3.connect(uri, uri=True, timeout=10)
+        return str(connection.execute("PRAGMA quick_check(1)").fetchone()[0]).lower()
+    except sqlite3.Error as exc:
+        raise ValueError("Anvil-owned OpenCode database failed its read-only integrity check") from exc
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _capture_opencode_database(database: Path, artifact_dir: Path) -> dict[str, Any]:
+    """Capture the Anvil service database without depending on OpenCode's schema."""
+    if database.is_symlink():
+        raise ValueError("Anvil-owned OpenCode database must not be a symbolic link")
+    sidecars = [Path(str(database) + suffix) for suffix in ("-wal", "-shm")]
+    for sidecar in sidecars:
+        if sidecar.is_symlink() or (sidecar.exists() and not sidecar.is_file()):
+            raise ValueError("Anvil-owned OpenCode SQLite sidecar is unsafe")
+    if not database.exists():
+        if any(sidecar.exists() for sidecar in sidecars):
+            raise ValueError("Anvil-owned OpenCode database has orphaned SQLite sidecars")
+        return {"present": False, "sha256": None, "mode": None,
+                "artifact": None, "integrity": "NOT_PRESENT"}
+    if not database.is_file():
+        raise ValueError("Anvil-owned OpenCode database is not a regular file")
+
+    artifact = artifact_dir / "opencode-runtime.db"
+    if artifact.exists() or artifact.is_symlink():
+        raise ValueError("OpenCode database rollback artifact already exists")
+    fd, temporary_name = tempfile.mkstemp(prefix=".opencode-baseline.", dir=artifact_dir)
+    os.close(fd)
+    temporary = Path(temporary_name)
+    source: sqlite3.Connection | None = None
+    target: sqlite3.Connection | None = None
+    try:
+        source = sqlite3.connect(database.absolute().as_uri() + "?mode=ro", uri=True, timeout=10)
+        target = sqlite3.connect(temporary, timeout=10)
+        source.backup(target)
+        target.commit()
+    except sqlite3.Error as exc:
+        raise ValueError("SQLite backup could not capture the Anvil-owned OpenCode database") from exc
+    finally:
+        if target is not None:
+            target.close()
+        if source is not None:
+            source.close()
+    try:
+        integrity = _sqlite_integrity(temporary)
+        if integrity != "ok":
+            raise ValueError("Anvil-owned OpenCode database snapshot failed SQLite integrity validation")
+        temporary.chmod(0o600)
+        with temporary.open("rb") as stream:
+            os.fsync(stream.fileno())
+        os.replace(temporary, artifact)
+        directory_fd = os.open(artifact_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    return {"present": True, "sha256": _hash(artifact),
+            "mode": stat.S_IMODE(database.stat().st_mode),
+            "artifact": "lifecycle-baseline/opencode-runtime.db", "integrity": integrity}
+
+
+def _verify_opencode_database_snapshot(record: dict[str, Any], artifact_dir: Path) -> Path | None:
+    artifact = artifact_dir / "opencode-runtime.db"
+    if not record.get("present"):
+        if artifact.exists() or artifact.is_symlink():
+            raise ValueError("unexpected OpenCode database rollback artifact exists")
+        return None
+    relative = record.get("artifact")
+    if relative != "lifecycle-baseline/opencode-runtime.db":
+        raise ValueError("OpenCode database rollback artifact path is invalid")
+    if artifact.is_symlink() or not artifact.is_file() or _hash(artifact) != record.get("sha256"):
+        raise ValueError("verified OpenCode database rollback artifact is missing or changed")
+    if _sqlite_integrity(artifact) != "ok":
+        raise ValueError("OpenCode database rollback artifact failed integrity validation")
+    return artifact
+
+
+def _restore_opencode_database(record: dict[str, Any], artifact_dir: Path, database: Path) -> None:
+    artifact = _verify_opencode_database_snapshot(record, artifact_dir)
+    if database.is_symlink():
+        raise ValueError("Anvil-owned OpenCode database became a symbolic link during rollback")
+    for sidecar in (Path(str(database) + "-wal"), Path(str(database) + "-shm")):
+        if sidecar.is_symlink() or (sidecar.exists() and not sidecar.is_file()):
+            raise ValueError("Anvil-owned OpenCode SQLite sidecar became unsafe during rollback")
+        if sidecar.exists():
+            sidecar.unlink()
+    if database.exists():
+        if not database.is_file():
+            raise ValueError("Anvil-owned OpenCode database became a non-file during rollback")
+        database.unlink()
+    if artifact is None:
+        return
+    _atomic_copy(artifact, database, int(record.get("mode") or 0o600))
+    if _hash(database) != record.get("sha256") or _sqlite_integrity(database) != "ok":
+        raise ValueError("restored OpenCode database failed content or integrity verification")
+
+
+def _verify_restored_opencode_database(record: dict[str, Any], artifact_dir: Path,
+                                       database: Path, *, service_active: bool) -> None:
+    artifact = _verify_opencode_database_snapshot(record, artifact_dir)
+    if database.is_symlink():
+        raise ValueError("Anvil-owned OpenCode database is a symbolic link after rollback")
+    sidecars = [Path(str(database) + suffix) for suffix in ("-wal", "-shm")]
+    if any(path.is_symlink() or (path.exists() and not path.is_file()) for path in sidecars):
+        raise ValueError("Anvil-owned OpenCode SQLite sidecar is unsafe after rollback")
+    if artifact is None:
+        if database.exists() or any(path.exists() for path in sidecars):
+            raise ValueError("Anvil-owned OpenCode database differs from the absent pre-operation baseline")
+        return
+    if not database.is_file() or _sqlite_integrity(database) != "ok":
+        raise ValueError("Anvil-owned OpenCode database is missing or corrupt after rollback")
+    if not service_active and (_hash(database) != record.get("sha256")
+                               or stat.S_IMODE(database.stat().st_mode) != int(record.get("mode") or 0o600)):
+        raise ValueError("Anvil-owned OpenCode database differs from the pre-operation baseline")
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -132,6 +260,8 @@ def capture(args: argparse.Namespace) -> None:
     if runtime_present:
         _atomic_copy(runtime_state_file, artifact_dir / "analytics-runtime.json", runtime_mode or 0o600)
     database_baseline = analytics_schema.capture_rollback_state(context_database, artifact_dir)
+    opencode_database_baseline = _capture_opencode_database(runtime_state_file.parent / "opencode.db",
+                                                            artifact_dir)
 
     runtime_saved: dict[str, Any] = {}
     if runtime_present:
@@ -174,11 +304,13 @@ def capture(args: argparse.Namespace) -> None:
             "dependency_runtime": active_runtime_path,
             "dependencies_ready": dependencies_ready,
             "context_database": database_baseline,
+            "opencode_database": opencode_database_baseline,
         },
         "artifacts": {
             "service_unit": "lifecycle-baseline/analytics-service.unit" if unit_owned else None,
             "runtime_json": "lifecycle-baseline/analytics-runtime.json" if runtime_present else None,
             "context_database": database_baseline.get("artifact"),
+            "opencode_database": opencode_database_baseline.get("artifact"),
         },
     }
     baseline_path = artifact_dir / "pre-operation-state.json"
@@ -251,6 +383,9 @@ def restore(args: argparse.Namespace) -> dict[str, Any]:
         analytics_schema.restore_rollback_state(
             database_baseline, args.backup / "lifecycle-baseline",
             runtime_state_file.parent / "context.db")
+    opencode_database_baseline = analytics.get("opencode_database", {"present": False})
+    _restore_opencode_database(opencode_database_baseline, args.backup / "lifecycle-baseline",
+                               runtime_state_file.parent / "opencode.db")
 
     if analytics.get("systemd_manager"):
         if not _systemctl("daemon-reload"):
@@ -346,6 +481,15 @@ def verify(args: argparse.Namespace, *, strict_configuration: bool = False) -> d
                                                    args.analytics_runtime_state.parent / "context.db")
         except (OSError, ValueError) as exc:
             errors.append(str(exc))
+    try:
+        _verify_restored_opencode_database(
+            analytics.get("opencode_database", {"present": False}),
+            args.backup / "lifecycle-baseline",
+            args.analytics_runtime_state.parent / "opencode.db",
+            service_active=bool(analytics.get("service", {}).get("active")),
+        )
+    except (OSError, ValueError) as exc:
+        errors.append(str(exc))
     unit_record = analytics["service_unit"]
     unit = args.systemd_dir / UNIT_NAME
     actual_unit_hash = _hash(unit) if unit.is_file() and not unit.is_symlink() else None

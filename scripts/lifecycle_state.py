@@ -141,12 +141,30 @@ def evaluate(runtime_result: dict[str, Any] | None = None,
     managed_config_result: dict[str, Any] | None = None
     managed_config_error: str | None = None
     managed_drift: dict[str, Any] | None = None
+    external_unmanaged_profile = False
     if config_present and locations["config"].is_dir():
         try:
-            managed_config_result = managed_config.validate_installed(
-                locations["config"], recorded_version if recorded_version_valid else None, repository_version,
-                record.get("managed_config_manifest_sha256") if isinstance(record, dict) else None,
-            )
+            manifest_path = locations["config"] / managed_config.MANIFEST_NAME
+            has_manifest = manifest_path.exists() or manifest_path.is_symlink()
+            if recorded_version is None and not has_manifest:
+                source_state = managed_config.inspect_source(
+                    locations["config"], None, allow_external=True)
+                if source_state.get("config_external") is True:
+                    # A valid, non-Anvil OpenCode tree is user state, not a broken
+                    # Anvil installation. Let the official reforge path merge the
+                    # Anvil profile while preserving every unowned file.
+                    managed_config_result = source_state
+                    external_unmanaged_profile = True
+                else:
+                    managed_config_result = managed_config.validate_installed(
+                        locations["config"], None, repository_version,
+                        record.get("managed_config_manifest_sha256") if isinstance(record, dict) else None,
+                    )
+            else:
+                managed_config_result = managed_config.validate_installed(
+                    locations["config"], recorded_version if recorded_version_valid else None, repository_version,
+                    record.get("managed_config_manifest_sha256") if isinstance(record, dict) else None,
+                )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             managed_config_error = str(exc)
             manifest_path = locations["config"] / managed_config.MANIFEST_NAME
@@ -202,7 +220,8 @@ def evaluate(runtime_result: dict[str, Any] | None = None,
             blockers.append(managed_config_error)
     elif repairable_drift:
         warnings.append(f"{len(managed_drift.get('findings', []))} Anvil-managed file(s) differ from the installed manifest; the target release has verified replacements and make upgrade can preserve them for rollback.")
-    if config_present and config_major == 0 and not (version_relation is not None and version_relation > 0):
+    if (config_present and config_major == 0 and not external_unmanaged_profile
+            and not (version_relation is not None and version_relation > 0)):
         corrupted = True
         blockers.append("The managed OpenCode config failed Anvil's supported profile audit.")
     unsafe_path = next((path for path in (locations["config"], locations["config"] / "opencode.jsonc",
@@ -300,6 +319,8 @@ def evaluate(runtime_result: dict[str, Any] | None = None,
         manifest_present = False
         manifest_invalid = True
     recovery = _recovery_plan(lifecycle, managed_config_error, runtime_usable, unsafe_path, transaction)
+    if external_unmanaged_profile:
+        warnings.append("An existing external OpenCode config has been classified for preservation; make reforge will add Anvil-managed files without claiming user-owned files.")
 
     return {
         "schema_version": 1,
@@ -322,9 +343,11 @@ def evaluate(runtime_result: dict[str, Any] | None = None,
                                                 if version_relation is not None and version_relation < 0 else
                                                 version_relation == 0)},
         "configuration": {"present": config_present, "valid": config_valid,
+                           "external_unmanaged": external_unmanaged_profile,
                            "runtime_major": config_major or None,
                            "path": str(locations["config"])},
-        "managed_config": {"valid": managed_config_error is None and managed_config_result is not None,
+        "managed_config": {"valid": (managed_config_error is None and managed_config_result is not None
+                                       and not external_unmanaged_profile),
                             "manifest_present": manifest_present,
                             "manifest_invalid": manifest_invalid,
                             "owned_files": len(managed_config_result.get("owned_files", [])) if managed_config_result else 0,
@@ -399,8 +422,8 @@ def _human(value: dict[str, Any]) -> str:
     lines = ["Anvil lifecycle", "────────────────", f"Status                {names.get(value['lifecycle'], value['lifecycle'])}",
              f"Installed release     {value['transition']['source_version'] or 'unknown'}",
              f"Target release        {value['transition']['target_version'] or 'invalid'}",
-             f"OpenCode profile      {'valid' if value['configuration']['valid'] else 'not available'}",
-             f"Managed file audit    {'valid' if value['managed_config']['valid'] else 'needs review' if value['configuration']['present'] else 'not available'}",
+             f"OpenCode profile      {'valid' if value['configuration']['valid'] else 'external/unmanaged' if value['configuration'].get('external_unmanaged') else 'not available'}",
+             f"Managed file audit    {'valid' if value['managed_config']['valid'] else 'external files classified for preservation' if value['configuration'].get('external_unmanaged') else 'needs review' if value['configuration']['present'] else 'not available'}",
              f"Managed file manifest {'present' if value['managed_config']['manifest_present'] else 'invalid' if value['managed_config']['manifest_invalid'] else 'legacy/unrecorded'}",
              f"OpenCode runtime      {value['runtime']['version'] or 'not available'}",
              f"Memory directory     {'present' if value['memory']['present'] else 'not initialized'}",

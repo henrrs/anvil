@@ -16,6 +16,7 @@ class AnalyticsPaths:
     state: Path
     runtime: Path
     database: Path
+    opencode_database: Path
     workspace: Path
     datasets: Path
     snapshots: Path
@@ -36,6 +37,7 @@ class AnalyticsPaths:
             state=state,
             runtime=state / "runtime.json",
             database=state / "context.db",
+            opencode_database=state / "opencode.db",
             workspace=root / "workspaces" / "analytics",
             datasets=state / "datasets",
             snapshots=state / "snapshots",
@@ -61,7 +63,7 @@ class AnalyticsPaths:
             if directory.exists():
                 self.secure_directory(directory)
 
-        for file_path in (self.runtime, self.database):
+        for file_path in (self.runtime, self.database, self.opencode_database):
             if file_path.is_symlink():
                 raise IntegrityError(f"Analytics file must not be a symlink: {file_path}")
             if file_path.exists() and not file_path.is_file():
@@ -71,12 +73,13 @@ class AnalyticsPaths:
                     file_path.chmod(0o600)
                 except OSError as exc:
                     raise IntegrityError(f"Could not secure Analytics file: {file_path}") from exc
-        for suffix in ("-wal", "-shm"):
-            sidecar = Path(str(self.database) + suffix)
-            if sidecar.is_symlink():
-                raise IntegrityError("SQLite sidecar files must not be symlinks")
-            if sidecar.exists() and not sidecar.is_file():
-                raise IntegrityError("SQLite sidecar paths must be regular files")
+        for database in (self.database, self.opencode_database):
+            for suffix in ("-wal", "-shm"):
+                sidecar = Path(str(database) + suffix)
+                if sidecar.is_symlink():
+                    raise IntegrityError("SQLite sidecar files must not be symlinks")
+                if sidecar.exists() and not sidecar.is_file():
+                    raise IntegrityError("SQLite sidecar paths must be regular files")
 
     def secure_directory(self, directory: Path) -> None:
         candidate = directory.absolute()

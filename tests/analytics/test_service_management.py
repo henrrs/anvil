@@ -30,7 +30,7 @@ class AnalyticsServiceManagementTests(unittest.TestCase):
         text = _unit_text(self.config, self.home, 8765, interpreter)
         escaped_config = str(self.config).replace(" ", "\\x20").replace(chr(34), "\\x22")
         self.assertIn(f"WorkingDirectory={escaped_config}", text)
-        self.assertIn(f'ExecStart="{interpreter}" -m scripts.analytics.server', text)
+        self.assertIn(f'ExecStart="{interpreter}" -B -m scripts.analytics.server', text)
         self.assertIn('Environment="XDG_DATA_HOME=', text)
 
     def test_unit_includes_only_readable_trust_files_from_allowlist(self) -> None:
@@ -58,12 +58,15 @@ class AnalyticsServiceManagementTests(unittest.TestCase):
              patch("scripts.analytics_service._port_open", return_value=False), \
              patch("scripts.analytics_service._fallback_paths", return_value=(
                  self.root / "pid", self.root / "lock", self.root / "log")), \
-             patch("scripts.analytics_service.subprocess.Popen", side_effect=lambda *a, **kw: captured.update(kw) or Process()):
+             patch("scripts.analytics_service.subprocess.Popen",
+                   side_effect=lambda *a, **kw: captured.update({"argv": a[0], **kw}) or Process()):
             (self.root / "lock").touch()
             _start_fallback(self.config, self.home, 8765, Path("/usr/bin/python3"))
         child_env = captured["env"]
         self.assertEqual(child_env["SSL_CERT_FILE"], str(ca))
         self.assertNotIn("AWS_SECRET_ACCESS_KEY", child_env)
+        self.assertEqual(captured["argv"][1], "-B")
+        self.assertEqual(child_env["PYTHONDONTWRITEBYTECODE"], "1")
 
     def test_systemd_mainpid_zero_is_not_ready_even_when_health_answers(self) -> None:
         self.systemd.mkdir(parents=True)

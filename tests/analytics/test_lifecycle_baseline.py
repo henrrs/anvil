@@ -117,6 +117,8 @@ class LifecycleBaselineTests(unittest.TestCase):
                             encoding="utf-8")
             with sqlite3.connect(runtime_file.parent / "context.db") as connection:
                 connection.execute("CREATE TABLE created_during_failed_migration(value TEXT)")
+            with sqlite3.connect(runtime_file.parent / "opencode.db") as connection:
+                connection.execute("CREATE TABLE created_during_failed_activation(value TEXT)")
 
             restore_args = Namespace(
                 backup=backup, config_dir=config, home=home, installation=installation,
@@ -142,6 +144,8 @@ class LifecycleBaselineTests(unittest.TestCase):
             self.assertEqual(unit.read_bytes(), original_unit)
             self.assertFalse((runtime_file.parent / "context.db").exists(),
                              "rollback must remove a control database created after an absent baseline")
+            self.assertFalse((runtime_file.parent / "opencode.db").exists(),
+                             "rollback must remove a service database created after an absent baseline")
             self.assertEqual(unit.stat().st_mode & 0o777, 0o640)
             self.assertEqual(runtime_file.stat().st_mode & 0o777, 0o600)
             self.assertEqual(len(starts), 1)
@@ -157,6 +161,7 @@ class LifecycleBaselineTests(unittest.TestCase):
             installation = root / "data" / "anvil" / "installation.json"
             runtime_file = home / ".anvil" / "analytics" / "runtime.json"
             database = runtime_file.parent / "context.db"
+            opencode_database = runtime_file.parent / "opencode.db"
             for path in (config, systemd, installation.parent, runtime_file.parent, backup):
                 path.mkdir(parents=True, exist_ok=True)
             with sqlite3.connect(database) as connection:
@@ -165,6 +170,10 @@ class LifecycleBaselineTests(unittest.TestCase):
                 connection.executemany("INSERT INTO schema_migrations VALUES(?, 'baseline')", [(1,), (2,)])
                 connection.execute("CREATE TABLE control_state(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
                 connection.execute("INSERT INTO control_state VALUES('key', 'before')")
+            with sqlite3.connect(opencode_database) as connection:
+                connection.execute("CREATE TABLE preserved_session_data(value TEXT NOT NULL)")
+                connection.execute("INSERT INTO preserved_session_data VALUES('baseline')")
+            opencode_database.chmod(0o600)
 
             installation.write_text('{"schema_version":3,"anvil_version":"2.17.0"}\n', encoding="utf-8")
             service = {"installed": False, "unit_installed": False, "enabled": False,
@@ -193,11 +202,17 @@ class LifecycleBaselineTests(unittest.TestCase):
             snapshot = backup / "lifecycle-baseline" / "context.db"
             self.assertTrue(snapshot.is_file())
             lifecycle_baseline.analytics_schema.verify_snapshot(db_baseline, snapshot)
+            opencode_baseline = baseline["analytics"]["opencode_database"]
+            self.assertTrue(opencode_baseline["present"])
+            opencode_snapshot = backup / opencode_baseline["artifact"]
+            self.assertEqual(lifecycle_baseline._hash(opencode_snapshot), opencode_baseline["sha256"])
 
             with sqlite3.connect(database) as connection:
                 connection.execute("ALTER TABLE control_state ADD COLUMN migrated TEXT DEFAULT 'yes'")
                 connection.execute("INSERT INTO schema_migrations VALUES(3, 'target')")
                 connection.execute("UPDATE control_state SET value='after'")
+            with sqlite3.connect(opencode_database) as connection:
+                connection.execute("INSERT INTO preserved_session_data VALUES('changed')")
 
             restore_args = Namespace(
                 backup=backup, config_dir=config, home=home, installation=installation,
@@ -212,6 +227,11 @@ class LifecycleBaselineTests(unittest.TestCase):
                 result = lifecycle_baseline.verify(restore_args)
 
             self.assertEqual(result["status"], "RESTORED_DEGRADED_BASELINE", result["errors"])
+            self.assertEqual(lifecycle_baseline._hash(opencode_database), opencode_baseline["sha256"])
+            self.assertEqual(opencode_database.stat().st_mode & 0o777, 0o600)
+            with sqlite3.connect(opencode_database) as connection:
+                self.assertEqual(connection.execute("SELECT value FROM preserved_session_data").fetchall(),
+                                 [("baseline",)])
             with sqlite3.connect(database) as connection:
                 self.assertEqual(connection.execute("SELECT max(version) FROM schema_migrations").fetchone()[0], 2)
                 self.assertEqual(connection.execute("SELECT value FROM control_state WHERE key='key'").fetchone()[0], "before")

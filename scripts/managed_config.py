@@ -759,6 +759,31 @@ def _copy_entry(source_root: Path, target_root: Path, relative: str, *, replace:
     os.utime(target, ns=(metadata.st_atime_ns, metadata.st_mtime_ns), follow_symlinks=False)
 
 
+def _preserve_directory_modes(source_root: Path, target_root: Path,
+                              relative_paths: set[str] | list[str]) -> None:
+    """Restore source directory permissions after copying unowned descendants."""
+    directories: dict[str, int] = {}
+    for relative in relative_paths:
+        parent = PurePosixPath(relative).parent
+        while parent.parts:
+            name = parent.as_posix()
+            source = source_root.joinpath(*parent.parts)
+            target = target_root.joinpath(*parent.parts)
+            try:
+                source_mode = source.lstat().st_mode
+                target_mode = target.lstat().st_mode
+            except FileNotFoundError:
+                parent = parent.parent
+                continue
+            if stat.S_ISDIR(source_mode) and stat.S_ISDIR(target_mode):
+                directories[name] = stat.S_IMODE(source_mode)
+            parent = parent.parent
+    # Apply deepest paths first; their parents still have traversal permission.
+    for name in sorted(directories, key=lambda item: (item.count("/"), item), reverse=True):
+        target = target_root.joinpath(*_relative(name).parts)
+        target.chmod(directories[name])
+
+
 def snapshot(root: Path, target: Path) -> dict[str, Any]:
     """Copy only Anvil-owned files and the shared OpenCode profile/preferences."""
     source_state = inspect_source(root, recover_managed=True, allow_external=True)
@@ -854,6 +879,7 @@ def restore_merge(source: Path, target: Path) -> dict[str, Any]:
         if _symlink_ancestor(relative, target_links):
             raise ManagedConfigError(f"rollback cannot merge through a symbolic link: {relative}")
         _copy_entry(source, target, relative, replace=True)
+    _preserve_directory_modes(source, target, source_external)
 
     source_config = _config_data(source) if source_present else None
     target_config = _config_data(target)
@@ -929,6 +955,7 @@ def prepare(source: Path | None, target: Path, source_version: str | None,
         source_state["verified_target_matches"] = sorted(verified_target_matches)
         for relative in source_state["user_files"]:
             _copy_entry(source, target, relative, replace=relative in verified_target_matches)
+        _preserve_directory_modes(source, target, source_state["user_files"])
         for relative in verified_target_matches:
             if _digest_regular(target, relative) != authoritative_target["files"][relative]:
                 raise ManagedConfigError(f"preserved user file changed while staging the verified target: {relative}")

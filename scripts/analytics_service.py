@@ -170,7 +170,7 @@ def _unit_text(config: Path, home: Path, port: int, interpreter: Path | None = N
         f"Environment={_systemd_quote('PYTHONPATH=' + str(config))}",
         f"Environment={_systemd_quote('ANVIL_ANALYTICS_PORT=' + str(port))}",
         *trust_lines,
-        f"ExecStart={_systemd_quote(str(python))} -m scripts.analytics.server --host 127.0.0.1 --port {port}",
+        f"ExecStart={_systemd_quote(str(python))} -B -m scripts.analytics.server --host 127.0.0.1 --port {port}",
         "Restart=on-failure",
         "RestartSec=3",
         "UMask=0077",
@@ -387,13 +387,14 @@ def _start_fallback(config: Path, home: Path, port: int, python: Path, *, no_boo
                             "XDG_CONFIG_HOME": os.environ.get("XDG_CONFIG_HOME", str(home / ".config")),
                             "XDG_DATA_HOME": str(_data_home(home)),
                             "XDG_STATE_HOME": os.environ.get("XDG_STATE_HOME", str(home / ".local" / "state")),
+                            "PYTHONDONTWRITEBYTECODE": "1",
                             "PYTHONPATH": str(config) + (os.pathsep + environment.get("PYTHONPATH", "")),
                             "ANVIL_ANALYTICS_PORT": str(port)})
         if no_bootstrap:
             environment["ANVIL_ANALYTICS_NO_BOOTSTRAP"] = "1"
         with log_file.open("ab") as output:
             os.chmod(log_file, 0o600)
-            process = subprocess.Popen([str(python), "-m", "scripts.analytics.server",
+            process = subprocess.Popen([str(python), "-B", "-m", "scripts.analytics.server",
                                         "--host", "127.0.0.1", "--port", str(port)],
                                        cwd=config, env=environment, stdin=subprocess.DEVNULL,
                                        stdout=output, stderr=subprocess.STDOUT, start_new_session=True,

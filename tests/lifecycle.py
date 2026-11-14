@@ -483,6 +483,91 @@ def partial_lifecycle_matrix_test(temp: pathlib.Path, wrapper_v1: pathlib.Path) 
     print("PASS config-only, runtime-only, corrupted config, non-executable runtime, and invalid VERSION states")
 
 
+def external_unmanaged_profile_recovery_test(temp: pathlib.Path) -> None:
+    """An unrecorded OpenCode profile is preserved and can be adopted by reforge."""
+    paths = fixture(temp / "machine")
+    config = paths["config"]
+    shutil.rmtree(config)
+    config.mkdir(parents=True)
+    write_json(config / "opencode.jsonc", {
+        "$schema": "https://opencode.ai/config.json", "theme": "company-dark",
+    })
+    (config / "package.json").write_text('{"private":true}\n', encoding="utf-8")
+    dependency = config / "node_modules" / "company-package"
+    dependency.mkdir(parents=True)
+    (dependency / "index.js").write_text("module.exports = 'preserve';\n", encoding="utf-8")
+    bin_dir = config / "node_modules" / ".bin"
+    bin_dir.mkdir()
+    (bin_dir / "company-tool").symlink_to("../company-package/index.js")
+    command = config / "commands" / "company.md"
+    command.parent.mkdir()
+    command.write_text("company command state\n", encoding="utf-8")
+    (config / "node_modules").chmod(0o775)
+    bin_dir.chmod(0o750)
+    dependency.chmod(0o710)
+    before_node_modules = filesystem_snapshot(config / "node_modules")
+    before_commands = filesystem_snapshot(config / "commands")
+    before_profile = json.loads((config / "opencode.jsonc").read_text(encoding="utf-8"))
+    (paths["anvil_data"] / "installation.json").unlink()
+    (paths["anvil_data"] / "runtime.json").unlink(missing_ok=True)
+
+    env = offline_env(paths, temp / "machine", ANVIL_TEST_MODE="1", ANVIL_YES="1",
+                      ANVIL_SKIP_RUNTIME_PROBE="1", ANVIL_UPGRADE_COUNTDOWN_SECONDS="0")
+    inspected = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
+    check("Status                PARTIALLY_INSTALLED" in inspected.stdout
+          and "OpenCode profile      external/unmanaged" in inspected.stdout
+          and "make reforge" in inspected.stdout
+          and "CORRUPTED" not in inspected.stdout,
+          "an unrecorded external OpenCode profile was incorrectly treated as Anvil corruption")
+    before_dry = filesystem_snapshot(config)
+    dry = run(["/usr/bin/make", "--no-print-directory", "reforge", "DRY_RUN=1"], env)
+    check("No snapshot was created" in dry.stdout,
+          "external-profile reforge preview did not remain read-only")
+    check(filesystem_snapshot(config) == before_dry,
+          "external-profile reforge dry run changed user config")
+
+    runtime_hash = file_hash(paths["binary"])
+    run(["/usr/bin/make", "--no-print-directory", "reforge"], env)
+    after = json.loads((config / "opencode.jsonc").read_text(encoding="utf-8"))
+    check(after.get("theme") == "company-dark"
+          and isinstance(after.get("agent"), dict) and "anvil" in after["agent"],
+          "reforge did not merge the Anvil profile with existing user OpenCode settings")
+    check((config / "package.json").read_text(encoding="utf-8") == '{"private":true}\n'
+          and (dependency / "index.js").read_text(encoding="utf-8") == "module.exports = 'preserve';\n"
+          and command.read_text(encoding="utf-8") == "company command state\n"
+          and (bin_dir / "company-tool").is_symlink()
+          and os.readlink(bin_dir / "company-tool") == "../company-package/index.js",
+          "reforge changed or dropped user-owned config files or package-manager links")
+    check(filesystem_snapshot(config / "node_modules") == before_node_modules,
+          "reforge changed user-owned package directory permissions or link metadata")
+    check(file_hash(paths["binary"]) == runtime_hash,
+          "reforge changed the existing OpenCode runtime while adopting external config")
+    installed = json.loads((paths["anvil_data"] / "installation.json").read_text(encoding="utf-8"))
+    check(installed.get("anvil_version") == ANVIL_VERSION,
+          "reforge did not record the target Anvil release")
+    ready = run(["/usr/bin/make", "--no-print-directory", "inspect"], env)
+    check("Status                READY" in ready.stdout,
+          "reforge did not produce a healthy Anvil lifecycle after adopting external config")
+    run(["/usr/bin/make", "--no-print-directory", "rollback"], env)
+    rolled_back_profile = json.loads((config / "opencode.jsonc").read_text(encoding="utf-8"))
+    check(rolled_back_profile.get("theme") == before_profile["theme"]
+          and not (isinstance(rolled_back_profile.get("agent"), dict)
+                   and "anvil" in rolled_back_profile["agent"])
+          and not (isinstance(rolled_back_profile.get("agents"), dict)
+                   and "anvil" in rolled_back_profile["agents"]),
+          "rollback did not restore the external OpenCode profile and preserve its user settings")
+    check(filesystem_snapshot(config / "node_modules") == before_node_modules,
+          "rollback did not restore external package directory permissions or symlink metadata")
+    check(filesystem_snapshot(config / "commands") == before_commands,
+          "rollback did not restore user-owned command directory permissions or files")
+    check((config / "package.json").read_text(encoding="utf-8") == '{"private":true}\n',
+          "rollback did not restore the root-level user-owned package file")
+    check(file_hash(paths["binary"]) == runtime_hash,
+          "rollback changed the pre-existing OpenCode runtime")
+    assert_no_external_network(temp / "machine")
+    print("PASS unrecorded external OpenCode profile reforge preserves user files, links, settings and runtime")
+
+
 def lifecycle_version_order_test() -> None:
     check(parse_version("2.10.0") == (2, 10, 0), "semantic version parser did not retain numeric minor ordering")
     check(compare_versions("2.10.0", "2.9.9") == 1, "semantic version ordering compared minor releases lexically")
@@ -2392,6 +2477,8 @@ def main() -> int:
         malformed_observation_characterization_test(pathlib.Path(name))
     with tempfile.TemporaryDirectory(prefix="anvil-partial-lifecycle-", dir=TEST_ROOT) as name:
         partial_lifecycle_matrix_test(pathlib.Path(name), wrapper_v1)
+    with tempfile.TemporaryDirectory(prefix="anvil-external-profile-recovery-", dir=TEST_ROOT) as name:
+        external_unmanaged_profile_recovery_test(pathlib.Path(name))
     lifecycle_version_order_test()
     with tempfile.TemporaryDirectory(prefix="anvil-config-ownership-", dir=TEST_ROOT) as name:
         config_ownership_transition_test(pathlib.Path(name))

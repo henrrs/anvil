@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -10,7 +11,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from scripts.analytics.context import ContextResolver
-from scripts.analytics.errors import ProviderError, UnavailableError, ValidationError
+from scripts.analytics.errors import IntegrityError, ProviderError, UnavailableError, ValidationError
 from scripts.analytics.models import KnowledgeItem
 from scripts.analytics.opencode import create_adapter
 from scripts.analytics.paths import AnalyticsPaths
@@ -199,13 +200,33 @@ class OpenCodeRuntimeTests(unittest.TestCase):
                 return self.calls > 1
 
         health = HealthAdapter()
-        manager = AnalyticsRuntimeManager(self.paths, process_factory=lambda *_a, **_k: Process(),
-                                          startup_timeout=2)
+        launched = {}
+
+        def launch(*args, **kwargs):
+            launched.update(kwargs)
+            return Process()
+
+        manager = AnalyticsRuntimeManager(self.paths, process_factory=launch, startup_timeout=2)
         with patch("scripts.analytics.runtime.create_adapter", return_value=health), \
-             patch("scripts.analytics.runtime.time.sleep", return_value=None):
+             patch("scripts.analytics.runtime.time.sleep", return_value=None), \
+             patch.dict(os.environ, {"HOME": "/existing/home",
+                                     "XDG_CONFIG_HOME": "/existing/config",
+                                     "XDG_DATA_HOME": "/existing/data",
+                                     "XDG_STATE_HOME": "/existing/state"}):
             result = manager._start_runtime({"executable": str(executable), "generation": 1})
         self.assertTrue(result.startswith("http://127.0.0.1:"))
         self.assertEqual(health.calls, 2)
+        self.assertEqual(launched["env"]["OPENCODE_DB"], str(self.paths.opencode_database))
+        for key, value in {"HOME": "/existing/home", "XDG_CONFIG_HOME": "/existing/config",
+                           "XDG_DATA_HOME": "/existing/data", "XDG_STATE_HOME": "/existing/state"}.items():
+            self.assertEqual(launched["env"][key], value)
+
+    def test_opencode_database_path_rejects_symlink(self):
+        outside = self.paths.root.parent / "outside-opencode.db"
+        outside.write_bytes(b"user-owned data")
+        self.paths.opencode_database.symlink_to(outside)
+        with self.assertRaises(IntegrityError):
+            self.paths.validate(create=False)
 
     def test_provider_discovery_uses_a_larger_route_specific_bounded_response(self):
         RuntimeHTTPHandler.provider_padding = "x" * (2 * 1024 * 1024 + 64)

@@ -41,7 +41,7 @@ The UI header resolves the authenticated Databricks identity from the selected A
 
 ## Runtime update and migration
 
-`make update-runtime` revalidates the existing Analytics dependency environment and service after the same-major OpenCode update. `make migrate-runtime OPENCODE_MAJOR=N` prepares the target profile/dependencies, installs the requested runtime, then activates the Analytics service against that runtime. The matching OpenCode 1 or 2 plugin adapter is packaged with the target runtime. Service readiness waits for the canonical `anvil-global-analytics` session; missing/stale sessions are reused, recovered or recreated and rehydrated from SQLite under a process lock.
+`make update-runtime` revalidates the existing Analytics dependency environment and service after the same-major OpenCode update. `make migrate-runtime OPENCODE_MAJOR=N` prepares the target profile/dependencies, installs the requested runtime, then activates the Analytics service against that runtime. The matching OpenCode 1 or 2 plugin adapter is packaged with the target runtime. Service readiness waits for the canonical `anvil-global-analytics` session; missing/stale sessions are reused, recovered or recreated and rehydrated from SQLite under a process lock. The service starts the real configured OpenCode executable with the existing HOME, XDG paths, provider configuration and authentication, while setting `OPENCODE_DB` to the Anvil-owned `analytics/opencode.db`. This keeps service sessions out of the user's default OpenCode database without copying or reading credentials. Lifecycle snapshots protect that dedicated database with SQLite's online backup API and an integrity check; Anvil does not inspect its tables or messages.
 
 ## Data and rollback
 

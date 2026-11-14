@@ -103,6 +103,7 @@ class AnalyticsRuntimeManager:
             port = probe.getsockname()[1]
         env = os.environ.copy()
         env["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
+        env["OPENCODE_DB"] = str(self.paths.opencode_database)
         try:
             process = self.process_factory([executable, "serve", "--hostname", "127.0.0.1",
                                             "--port", str(port)], cwd=self.paths.workspace,
