@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "invocations": [
+    {
+      "index": 1,
+      "key": "model-selection-smoke",
+      "kind": "smoke",
+      "started_at_epoch": 1794662753.6412554,
+      "reserved_seconds": 120,
+      "status": "COMPLETED",
+      "elapsed_seconds": 8.16,
+      "finished_at_epoch": 1794662761.801983,
+      "observed_input_tokens": 3216,
+      "observed_output_tokens": 7,
+      "reported_cost_telemetry": 0,
+      "monetary_cost": null
+    },
+    {
+      "index": 2,
+      "key": "native-opencode:retry-policy:1",
+      "kind": "challenge",
+      "started_at_epoch": 1794666000.3069885,
+      "reserved_seconds": 600,
+      "reserved_input_tokens": 393216,
+      "reserved_output_tokens": 24576,
+      "status": "START_OR_RUN_FAILED",
+      "elapsed_seconds": 64.744,
+      "finished_at_epoch": 1794666065.0506854,
+      "observed_input_tokens": null,
+      "observed_output_tokens": null,
+      "reported_cost_telemetry": null,
+      "monetary_cost": null,
+      "failure_class": "UNCLASSIFIED_OPENCODE_ERROR",
+      "event_types": {
+        "error": 1
+      },
+      "token_usage_observed": false,
+      "diagnostic_message_retained": false
+    },
+    {
+      "index": 3,
+      "key": "anvil-2.20.0:retry-policy:1",
+      "kind": "challenge",
+      "started_at_epoch": 1794666242.5957417,
+      "reserved_seconds": 600,
+      "reserved_input_tokens": 393216,
+      "reserved_output_tokens": 24576,
+      "status": "START_OR_RUN_FAILED",
+      "elapsed_seconds": 64.687,
+      "finished_at_epoch": 1794666307.2829843,
+      "observed_input_tokens": null,
+      "observed_output_tokens": null,
+      "reported_cost_telemetry": null,
+      "monetary_cost": null,
+      "failure_class": "UNCLASSIFIED_OPENCODE_ERROR",
+      "event_types": {
+        "error": 1
+      },
+      "token_usage_observed": false,
+      "diagnostic_message_retained": false
+    }
+  ],
+  "challenge_keys": [
+    "native-opencode:retry-policy:1",
+    "anvil-2.20.0:retry-policy:1"
+  ],
+  "actual_wall_seconds": 137.591,
+  "reserved_wall_seconds": 0,
+  "resume_keys": [],
+  "actual_input_tokens": 3216,
+  "actual_output_tokens": 7,
+  "reserved_input_tokens": 0,
+  "reserved_output_tokens": 0
+}

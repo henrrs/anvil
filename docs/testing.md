@@ -32,7 +32,7 @@ The suite checks shell/Python syntax, runtime policy and capabilities, release d
 
 ## Limits
 
-The suite does not run a real model, contact a Databricks workspace, authenticate with a provider, or smoke-test live OpenCode release artifacts. Runtime install/upgrade still needs access to the official release source and verifies its published artifact digest. OpenCode database files remain opaque; Anvil does not inspect or edit undocumented SQLite schemas. Semantic distillation quality remains agent-guided and is not represented as benchmarked model behavior. The [system map](system-map.md) and [full-system quality audit](quality-audit.md) document the current component inventory, confidence matrix, findings and evidence limits.
+The suite does not run a real model, contact a Databricks workspace, authenticate with a provider, or smoke-test live OpenCode release artifacts. Runtime install/upgrade still needs access to the official release source and verifies its published artifact digest. OpenCode databases remain schema-opaque; the Analytics lifecycle may take a consistent backup of its own isolated service database and run SQLite's integrity check, without inspecting tables or messages. Semantic distillation quality remains agent-guided and is not represented as benchmarked model behavior. The [system map](system-map.md) and [full-system quality audit](quality-audit.md) document the current component inventory, confidence matrix, findings and evidence limits.
 
 ## Engineering continuity checks
 

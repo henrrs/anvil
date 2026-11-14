@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "evaluation_id": "anvil-engineering-live-2026-11-14",
+  "repository_release": "2.20.0",
+  "baseline_commit": "b09d9651952aef9f6a296b559cf38c08c320ca74",
+  "baseline_file_manifest_sha256": "591f414649029e6e219b4c2d5c3ae0b0926badaeddb76f526b5f5e4f295bf266",
+  "runtime": {
+    "executable": "$HOME/.opencode/bin/opencode",
+    "version": "1.19.5",
+    "major": 1,
+    "provider": "openai",
+    "model": "openai/gpt-6-luna",
+    "variant": "high",
+    "fallback": false,
+    "shell_isolation": "OpenCode and its managed V1 plugin run in a bubblewrap workspace that hides host home, repository, temporary paths and grader sources. The model shell is launched through an evaluation-owned Landlock+seccomp wrapper with workspace-scoped writes and denied socket/network syscalls. Anvil Analytics tools are denied; the managed plugin dependency is preseeded from the pinned, read-only local cache. The OpenCode process retains provider network access. No HTTP(S) proxy variables were present in the host environment. A failed preflight stops before model execution.",
+    "anvil_v1_plugin_dependency_cache": {
+      "path": "<temporary-evaluation-root>/plugin-dependency-cache",
+      "package": "@opencode-ai/plugin",
+      "version": "1.19.5",
+      "sha256": "d472d4801e68cdec500dc7e6ca9987b859ef4715303ae1ee626eaa78a22c30e2",
+      "lockfile_version": 3,
+      "files": 3658,
+      "bytes": 55637033,
+      "mode": "read-only hardlinked cache"
+    }
+  },
+  "treatments": [
+    "native-opencode",
+    "anvil-2.20.0",
+    "anvil-candidate"
+  ],
+  "resource_budget": {
+    "max_challenge_sessions": 23,
+    "max_resume_invocations": 3,
+    "max_cli_invocations_including_resume": 26,
+    "max_smoke_invocations": 1,
+    "max_cli_invocations_total": 27,
+    "concurrency": 1,
+    "repetitions_per_treatment": 1,
+    "max_agent_steps_per_invocation": 12,
+    "max_context_tokens": 32768,
+    "max_output_tokens_per_response": 2048,
+    "max_wall_seconds_per_invocation": 600,
+    "max_global_wall_seconds": 18000,
+    "max_stdout_event_bytes_per_invocation": 10485760,
+    "max_tool_output_bytes": 40000,
+    "estimated_upper_bound_input_tokens": 10256384,
+    "estimated_upper_bound_output_tokens": 641024,
+    "max_total_input_tokens": 10256384,
+    "max_total_output_tokens": 641024,
+    "monetary_cost_ceiling": null,
+    "monetary_cost_observability": "The smoke stream emitted a numeric cost telemetry value of 0, but its meaning as actual billing is unverified. Report event telemetry separately; monetary cost remains NOT MEASURED."
+  },
+  "stop_conditions": [
+    "Provider quota, billing, authentication, or rate-limit error",
+    "Runtime/model/variant differs from the selected values",
+    "Sandbox or hidden-grader isolation check fails",
+    "Per-invocation time, output, or global wall budget is reached",
+    "Any unexpected access to host secrets or protected evaluation data",
+    "A challenge would require external services or production resources",
+    "Unclassified terminal OpenCode error before any tool or token event; stop the sequence rather than repeat or infer a cause"
+  ],
+  "automatic_retries": 0,
+  "cost_claims": "No cost claim will be made when the provider does not report cost.",
+  "benchmarks_sha256": "d63043f942b1e9d224c83a2c8b9d73a61ba830d0d9aa615b1b591f06b224aee9"
+}

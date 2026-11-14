@@ -26,6 +26,21 @@ def prepare(base: pathlib.Path, name="ingestion"):
     return project
 
 
+def prepare_model(base: pathlib.Path, name="ingestion"):
+    """Prepare a live-model project without placing its private grader in the sandbox."""
+    fixture = ROOT / "evals/engineering" / name
+    project = base / "project"
+    shutil.copytree(fixture / "fixture", project,
+                    ignore=shutil.ignore_patterns("acceptance.py", "private", "__pycache__"))
+    shutil.copy2(fixture / "specification.md", project / "specification.md")
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(["git", "-C", str(project), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "add", "."], check=True)
+    subprocess.run(["git", "-C", str(project), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "commit", "-qm", "fixture baseline"], check=True)
+    return project
+
+
 def implement_unit(state, project, name, task_id, *, start=True):
     if start:
         engine.start(state, project, task_id)

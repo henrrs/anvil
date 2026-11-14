@@ -19,5 +19,5 @@ root cause and keep policy calculation separate from scheduling.
 
 ## Acceptance
 
-Run `python3 acceptance.py all`. The assertions are independent of the
-implementation and use a fixed clock for HTTP-date cases.
+Run `python3 -m unittest discover -s tests`. The tests use a fixed clock for
+HTTP-date cases.

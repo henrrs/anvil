@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "evaluation_id": "anvil-engineering-local-2026-11-14",
+  "repository_release": "2.20.0",
+  "baseline_commit": "b09d9651952aef9f6a296b559cf38c08c320ca74",
+  "baseline_file_manifest_sha256": "591f414649029e6e219b4c2d5c3ae0b0926badaeddb76f526b5f5e4f295bf266",
+  "benchmarks_sha256": "d63043f942b1e9d224c83a2c8b9d73a61ba830d0d9aa615b1b591f06b224aee9",
+  "runtime": {
+    "executable": "PATH",
+    "version": "1.19.5",
+    "major": 1,
+    "provider": "openai",
+    "model": "openai/gpt-6-luna",
+    "variant": "high",
+    "fallback": false,
+    "execution": "The installed OpenCode CLI is resolved from the current PATH, or an explicit local executable may be supplied. The actual binary is recorded by basename and version only. The subprocess uses the user\u2019s existing HOME, XDG, provider configuration, and authentication. No credential file is opened, copied, or modified by the evaluator.",
+    "tool_isolation": "Project-local OpenCode permissions restrict file access to the disposable fixture, read-only Anvil skill/helper paths, and its fixture-specific temporary task-state subtree. Model shell commands run through Landlock with fixture/state-only writes and denied network syscalls. The OpenCode process retains the real HOME/XDG profile and provider access."
+  },
+  "treatments": [
+    "native-opencode",
+    "anvil-active"
+  ],
+  "resource_budget": {
+    "max_challenge_sessions": 23,
+    "max_resume_invocations": 3,
+    "max_cli_invocations_including_resume": 26,
+    "max_smoke_invocations": 1,
+    "max_cli_invocations_total": 27,
+    "concurrency": 1,
+    "repetitions_per_treatment": 1,
+    "max_agent_steps_per_invocation": 12,
+    "max_context_tokens": 32768,
+    "max_output_tokens_per_response": 2048,
+    "max_wall_seconds_per_invocation": 600,
+    "max_global_wall_seconds": 18000,
+    "max_stdout_event_bytes_per_invocation": 10485760,
+    "max_tool_output_bytes": 40000,
+    "estimated_upper_bound_input_tokens": 10256384,
+    "estimated_upper_bound_output_tokens": 641024,
+    "max_total_input_tokens": 10256384,
+    "max_total_output_tokens": 641024,
+    "monetary_cost_ceiling": null,
+    "monetary_cost_observability": "No cost telemetry was observed in this local evaluation smoke. Billing semantics are unavailable; monetary cost is NOT MEASURED."
+  },
+  "stop_conditions": [
+    "Local smoke fails before returning assistant text and token/cost telemetry",
+    "The minimal disposable code challenge fails its independent grader",
+    "Anvil agent, core plugin, and Anvil skills are not present in the active local profile",
+    "Provider quota, billing, authentication, or rate-limit error",
+    "Runtime/model/variant differs from the selected values",
+    "Fixture-only permission overlay or Landlock preflight fails",
+    "Per-invocation time, output, or global wall budget is reached",
+    "Any unexpected access to host secrets or protected evaluation data",
+    "A challenge would require external services or production resources",
+    "Automatic retries are disabled"
+  ],
+  "automatic_retries": 0,
+  "cost_claims": "No cost claim will be made when provider billing semantics are unavailable."
+}

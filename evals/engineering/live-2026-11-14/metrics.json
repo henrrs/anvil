@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "evaluation_id": "anvil-engineering-live-2026-11-14",
+  "overall_status": "BLOCKED",
+  "certification": "NOT_CERTIFIED",
+  "baseline": {
+    "release": "2.20.0",
+    "commit": "b09d9651952aef9f6a296b559cf38c08c320ca74",
+    "worktree": "<temporary-evaluation-root>/baseline",
+    "manifest": "<temporary-evaluation-root>/baseline-files.sha256",
+    "manifest_sha256": "591f414649029e6e219b4c2d5c3ae0b0926badaeddb76f526b5f5e4f295bf266",
+    "verified_unchanged": true
+  },
+  "runtime": {
+    "opencode_version": "1.19.5",
+    "opencode_v2_available": false,
+    "model": "openai/gpt-6-luna",
+    "variant": "high",
+    "reasoning_effort": "high",
+    "context_limit": 32768,
+    "output_limit": 2048,
+    "max_agent_steps": 12,
+    "fallback": false,
+    "credential_listed_without_reading_contents": true,
+    "host_anvil_installed": false,
+    "isolated_anvil_profile_preflight": "PASS",
+    "anvil_plugin": "file:///tmp/home/.config/opencode/plugins/anvil-core-v1.ts",
+    "anvil_plugin_dependency": {
+      "package": "@opencode-ai/plugin",
+      "version": "1.19.5",
+      "sha256": "d472d4801e68cdec500dc7e6ca9987b859ef4715303ae1ee626eaa78a22c30e2"
+    }
+  },
+  "benchmark": {
+    "manifest": "benchmarks.json",
+    "manifest_sha256": "d63043f942b1e9d224c83a2c8b9d73a61ba830d0d9aa615b1b591f06b224aee9",
+    "primary_scenarios": [
+      "retry-policy",
+      "refactor",
+      "ingestion",
+      "queue-preview",
+      "long-horizon",
+      "context-recovery"
+    ],
+    "fast_control": "fast-control",
+    "holdouts": [
+      "holdout-atomic-recovery",
+      "holdout-api-compat"
+    ],
+    "repetitions_per_treatment": 1,
+    "private_grader_separation_preflight": "PASS"
+  },
+  "treatments": {
+    "native-opencode": {
+      "attempted": [
+        "retry-policy"
+      ],
+      "completed": [],
+      "status": "BLOCKED",
+      "failure_class": "UNCLASSIFIED_OPENCODE_ERROR",
+      "elapsed_seconds": 64.744,
+      "tool_calls": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "cost": null,
+      "report": "native-baseline.json",
+      "trace": "traces/native-opencode-retry-policy.jsonl"
+    },
+    "anvil-2.20.0": {
+      "attempted": [
+        "retry-policy"
+      ],
+      "completed": [],
+      "status": "BLOCKED",
+      "failure_class": "UNCLASSIFIED_OPENCODE_ERROR",
+      "elapsed_seconds": 64.687,
+      "tool_calls": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "cost": null,
+      "report": "anvil-baseline.json",
+      "trace": "traces/anvil-2.20.0-retry-policy.jsonl"
+    },
+    "anvil-candidate": {
+      "status": "NOT_EXECUTED",
+      "reason": "Both baseline treatments terminated before task execution; no model-backed diagnosis supported a targeted Anvil change."
+    }
+  },
+  "model_smoke": {
+    "status": "COMPLETED",
+    "elapsed_seconds": 8.16,
+    "input_tokens": 3216,
+    "output_tokens": 7,
+    "reasoning_tokens": 42,
+    "reported_cost_telemetry": 0,
+    "monetary_cost": null,
+    "trace": "traces/model-selection-smoke.jsonl"
+  },
+  "resource_usage": {
+    "max_cli_invocations": 27,
+    "actual_cli_invocations": 3,
+    "max_challenge_sessions": 23,
+    "actual_challenge_sessions": 2,
+    "max_resume_invocations": 3,
+    "max_wall_seconds_global": 18000,
+    "actual_wall_seconds": 137.591,
+    "actual_input_tokens": 3216,
+    "actual_output_tokens": 7,
+    "unreported_challenge_tokens": true,
+    "monetary_cost": null
+  },
+  "context_recovery": {
+    "controlled_process_interruption": "NOT_EXECUTED",
+    "same_session_resume": "NOT_EXECUTED",
+    "opencode_v2_native_compaction": "NOT_EXECUTED"
+  },
+  "offline_validation": {
+    "make_test": {
+      "status": "PASS",
+      "tests": 169,
+      "skipped": 3
+    },
+    "make_eval_engineering": {
+      "status": "PASS",
+      "fixtures": 3,
+      "repetitions_per_fixture": 3
+    },
+    "make_eval_analytics": {
+      "status": "PASS",
+      "checks": 148
+    },
+    "make_eval_analytical": {
+      "status": "PASS",
+      "model_calls": 0
+    },
+    "make_eval_analytical_semantic": {
+      "status": "PASS",
+      "model_calls": 0
+    },
+    "python_compile": "PASS",
+    "sanitized_error_classification": "PASS",
+    "git_diff_check": "PASS",
+    "baseline_manifest": "PASS"
+  },
+  "interpretation": {
+    "valid_live_comparison": false,
+    "model_quality_conclusion": "NONE",
+    "causal_anvil_benefit_claim": "NOT_SUPPORTED",
+    "exact_runtime_provider_error": "UNKNOWN; original error content was intentionally not retained"
+  },
+  "commit_or_push": false
+}

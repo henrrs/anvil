@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "evaluation_id": "anvil-engineering-runtime-diagnostic-2026-11-14",
+  "runtime": {
+    "version": "1.19.5",
+    "executable": "$HOME/.opencode/bin/opencode",
+    "model": "openai/gpt-6-luna",
+    "variant": "high",
+    "reasoning_effort": "high",
+    "fallback": false
+  },
+  "sequence": [
+    "native smoke diagnostic repeat",
+    "Anvil smoke",
+    "native fast-control",
+    "Anvil fast-control",
+    "native retry-policy",
+    "Anvil retry-policy"
+  ],
+  "resource_budget": {
+    "max_cli_invocations_total": 7,
+    "max_smoke_invocations": 3,
+    "max_challenge_sessions": 4,
+    "concurrency": 1,
+    "max_agent_steps_per_invocation": 12,
+    "max_context_tokens": 32768,
+    "max_output_tokens_per_response": 2048,
+    "max_wall_seconds_per_invocation": 300,
+    "max_global_wall_seconds": 1800,
+    "max_stdout_event_bytes_per_invocation": 10485760,
+    "max_tool_output_bytes": 40000,
+    "max_total_input_tokens": 1710000,
+    "max_total_output_tokens": 110000
+  },
+  "automatic_retries": 0,
+  "stop_conditions": [
+    "any failed smoke",
+    "provider/auth/quota/rate-limit failure",
+    "unclassified terminal error before tools or token usage",
+    "runtime or sandbox preflight mismatch"
+  ]
+}

@@ -1,0 +1,689 @@
+#!/usr/bin/env python3
+"""Live engineering evaluation through the user's installed OpenCode profile."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import importlib.util
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "evals/engineering"))
+
+from engineering.repository import identity, no_symlinks  # noqa: E402
+from harness import prepare_model  # noqa: E402
+
+_run_spec = importlib.util.spec_from_file_location("anvil_engineering_run", ROOT / "evals/engineering/run.py")
+if _run_spec is None or _run_spec.loader is None:
+    raise RuntimeError("The existing engineering evaluator could not be loaded")
+_run = importlib.util.module_from_spec(_run_spec)
+_run_spec.loader.exec_module(_run)
+
+LIVE_FIXTURES = (*_run.LIVE_FIXTURES, _run.FAST_FIXTURE)
+TREATMENTS = ("native-opencode", "anvil-active")
+DEFAULT_EVALUATION = "anvil-engineering-local-2026-11-14"
+DEFAULT_BUDGET = ROOT / "evals/engineering/live-local-2026-11-14/config.json"
+DEFAULT_STATE = ROOT / "evals/engineering/live-local-2026-11-14/budget-state.json"
+DEFAULT_RESULTS = ROOT / "evals/engineering/live-local-2026-11-14/results.json"
+DEFAULT_BENCHMARKS = ROOT / "evals/engineering/live-2026-11-14/benchmarks.json"
+
+
+class EvaluationBlocked(RuntimeError):
+    pass
+
+
+def child_env(**extra: str) -> dict[str, str]:
+    """Keep the user's HOME/XDG/provider environment for OpenCode itself."""
+    result = os.environ.copy()
+    result["NO_COLOR"] = "1"
+    result.update(extra)
+    return result
+
+
+def invoke_metadata(opencode: pathlib.Path, args: list[str], cwd: pathlib.Path,
+                    timeout: int = 30) -> tuple[int, str]:
+    try:
+        result = subprocess.run([str(opencode), *args], cwd=cwd, env=child_env(),
+                                capture_output=True, text=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        raise EvaluationBlocked(f"OpenCode metadata command timed out: {args[0]}") from None
+    except OSError as error:
+        raise EvaluationBlocked(f"OpenCode metadata command could not start: {type(error).__name__}") from None
+    return result.returncode, result.stdout
+
+
+def _redact_config(value, key: str = ""):
+    if re.search(r"(?i)(api.?key|token|secret|password|authorization|credential|cookie|private.?key)", key):
+        return "[redacted]"
+    if isinstance(value, dict):
+        return {name: _redact_config(item, name) for name, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_config(item, key) for item in value]
+    return value
+
+
+def resolve_config(opencode: pathlib.Path, cwd: pathlib.Path) -> dict:
+    code, output = invoke_metadata(opencode, ["debug", "config"], cwd)
+    if code != 0:
+        raise EvaluationBlocked("OpenCode could not resolve the existing local configuration")
+    try:
+        value = json.loads(output)
+    except ValueError:
+        raise EvaluationBlocked("OpenCode resolved configuration was not valid JSON") from None
+    value = _redact_config(value)
+    if not isinstance(value, dict):
+        raise EvaluationBlocked("OpenCode resolved configuration had an unsupported shape")
+    return value
+
+
+def _agent_instruction_digest(raw: str) -> str | None:
+    """Fingerprint the resolved agent content without retaining user instruction text."""
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(value, dict):
+        return None
+    content = {key: item for key, item in value.items() if key not in {"permission", "steps", "tools"}}
+    return hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _agent_has_instruction_payload(raw: str) -> bool:
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return False
+    instruction_keys = {"prompt", "instruction", "instructions", "system"}
+    def visit(item) -> bool:
+        if isinstance(item, dict):
+            return any((str(key).lower() in instruction_keys and isinstance(child, str) and child.strip()) or visit(child)
+                       for key, child in item.items())
+        if isinstance(item, list):
+            return any(visit(child) for child in item)
+        return False
+    return visit(value)
+
+
+def _resolved_anvil_tools(raw: str) -> list[str]:
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return []
+    tools = value.get("tools") if isinstance(value, dict) else None
+    if not isinstance(tools, dict):
+        return []
+    return sorted(str(name) for name, enabled in tools.items()
+                  if enabled is True and re.match(r"(?i)^anvil[_-]", str(name)))
+
+
+def _instruction_reference_resolves(item, cwd: pathlib.Path, config_home: pathlib.Path) -> bool:
+    if not isinstance(item, str) or "anvil" not in item.lower():
+        return False
+    reference = pathlib.Path(item).expanduser()
+    candidates = [reference] if reference.is_absolute() else [cwd / reference, config_home / reference]
+    for candidate in candidates:
+        try:
+            parent, pattern = candidate.parent, candidate.name
+            if parent.is_dir() and any(path.is_file() for path in parent.glob(pattern)):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def anvil_inventory(opencode: pathlib.Path, cwd: pathlib.Path) -> dict:
+    """Inspect only whether Anvil components resolve; never persist prompts/config values."""
+    config = resolve_config(opencode, cwd)
+    agent_code, agent_output = invoke_metadata(opencode, ["debug", "agent", "anvil"], cwd)
+    agent_definition_sha256 = _agent_instruction_digest(agent_output) if agent_code == 0 else None
+    agent_has_instructions = agent_code == 0 and _agent_has_instruction_payload(agent_output)
+    agent_plugin_tools = _resolved_anvil_tools(agent_output) if agent_code == 0 else []
+    skill_code, skill_output = invoke_metadata(opencode, ["debug", "skill"], cwd)
+    if skill_code != 0:
+        skill_output = ""
+    skills = sorted(set(re.findall(r"\banvil-[a-z0-9][a-z0-9-]{0,79}\b", skill_output.lower())))
+    plugins = config.get("plugin") if isinstance(config.get("plugin"), list) else []
+    anvil_plugin = any("anvil" in str(plugin).lower() for plugin in plugins)
+    config_agents = config.get("agent") if isinstance(config.get("agent"), dict) else {}
+    instructions = config.get("instructions") if isinstance(config.get("instructions"), list) else []
+    config_home = pathlib.Path(os.environ.get(
+        "XDG_CONFIG_HOME", str(pathlib.Path.home() / ".config"))).expanduser() / "opencode"
+    anvil_instruction_reference = any(_instruction_reference_resolves(item, cwd, config_home)
+                                      for item in instructions)
+    agents_file = config_home / "AGENTS.md"
+    agents_file_mentions_anvil = False
+    try:
+        if agents_file.is_file() and agents_file.stat().st_size <= 1_048_576:
+            agents_file_mentions_anvil = "anvil" in agents_file.read_text(encoding="utf-8", errors="ignore").lower()
+    except OSError:
+        pass
+    agent_resolves = agent_code == 0 and bool(agent_output.strip())
+    instruction_source_resolves = (anvil_instruction_reference or agents_file_mentions_anvil or
+                                   (agent_resolves and agent_has_instructions))
+    return {
+        "anvil_agent_resolves": agent_resolves,
+        "anvil_agent_definition_sha256": agent_definition_sha256,
+        "anvil_instruction_source_resolves": instruction_source_resolves,
+        "anvil_agent_instructions_present": agent_has_instructions,
+        "anvil_plugin_configured": anvil_plugin,
+        "anvil_plugin_tools_resolve": agent_plugin_tools,
+        "anvil_skill_ids": skills,
+        "anvil_instruction_reference_configured": anvil_instruction_reference,
+        "global_agents_file_present": agents_file.is_file(),
+        "global_agents_mentions_anvil": agents_file_mentions_anvil,
+        "agent_count": len(config_agents),
+        "plugin_count": len(plugins),
+        "skill_inspection_succeeded": skill_code == 0,
+        "active_anvil_verified": bool(agent_resolves and anvil_plugin and agent_plugin_tools and skills and instruction_source_resolves),
+    }
+
+
+def local_runtime_preflight(opencode: pathlib.Path, cwd: pathlib.Path, model: str) -> dict:
+    try:
+        version_result = subprocess.run([str(opencode), "--version"], cwd=cwd, env=child_env(),
+                                        capture_output=True, text=True, timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise EvaluationBlocked(f"OpenCode executable preflight failed: {type(error).__name__}") from None
+    version = version_result.stdout.strip().splitlines()[0] if version_result.stdout.strip() else None
+    if version_result.returncode != 0 or not version:
+        raise EvaluationBlocked("The OpenCode executable in the local environment is not usable")
+    code, models_output = invoke_metadata(opencode, ["models", "openai"], cwd, timeout=60)
+    if code != 0 or model.split("/", 1)[-1].lower() not in models_output.lower():
+        raise EvaluationBlocked("The local OpenCode model catalog does not list the selected model")
+    return {"executable": opencode.name, "version": version, "model": model,
+            "variant": "high", "path_source": "explicit path" if opencode != pathlib.Path(shutil.which("opencode") or "").resolve() else "PATH",
+            "home_xdg_overridden": False, "credentials_read_or_copied": False}
+
+
+def _permissions(project: pathlib.Path, agent: str, shell: pathlib.Path | None,
+                 allowed_external: list[pathlib.Path], state_root: pathlib.Path | None,
+                 *, smoke: bool = False) -> dict:
+    project = project.resolve()
+    deny = {"*": "deny"}
+    permission = dict(deny)
+    if smoke:
+        return {"permission": permission, "agent": {agent: {"steps": 1, "permission": dict(deny)}}}
+
+    external = {"*": "deny"}
+    for path in allowed_external:
+        external[str(path.resolve()) + "/**"] = "allow"
+        external[str(path.resolve())] = "allow"
+    if state_root:
+        external[str(state_root.resolve()) + "/**"] = "allow"
+
+    scoped_write = {"*": "deny", str(project) + "/**": "allow"}
+    scoped_write[str(project / "opencode.json")] = "deny"
+    scoped_write[str(project / ".git") + "/**"] = "deny"
+    if state_root:
+        scoped_write[str(state_root.resolve()) + "/**"] = "allow"
+
+    permission.update({
+        "read": "allow", "glob": "allow", "grep": "allow", "list": "allow",
+        "write": dict(scoped_write), "edit": dict(scoped_write),
+        "bash": "allow" if shell else "deny",
+        "external_directory": external,
+        "skill": {"*": "deny", "anvil-*": "allow"} if agent == "anvil" else "deny",
+        "task": "deny", "question": "deny", "webfetch": "deny", "websearch": "deny",
+        "todowrite": "deny", "todoread": "deny",
+        "anvil_memory_search": "deny", "anvil_analytics_*": "deny",
+    })
+    agent_permission = dict(permission)
+    config = {"$schema": "https://opencode.ai/config.json", "permission": permission,
+              "agent": {agent: {"steps": 12, "permission": agent_permission}}}
+    if shell:
+        config["shell"] = str(shell.resolve())
+    return config
+
+
+def _write_project_config(project: pathlib.Path, config: dict) -> pathlib.Path:
+    path = project / "opencode.json"
+    if path.exists() or path.is_symlink():
+        raise EvaluationBlocked("The fixture already contains opencode.json; refusing to replace it")
+    path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+    return path
+
+
+def _verify_overlay(opencode: pathlib.Path, project: pathlib.Path, agent: str,
+                    shell: pathlib.Path | None, baseline_agent_digest: str | None) -> dict:
+    resolved = resolve_config(opencode, project)
+    agent_code, agent_output = invoke_metadata(opencode, ["debug", "agent", agent], project)
+    overlay_agent_digest = _agent_instruction_digest(agent_output) if agent_code == 0 else None
+    permissions = resolved.get("agent", {}).get(agent, {}).get("permission", {})
+    external = permissions.get("external_directory", {}) if isinstance(permissions, dict) else {}
+    if (not isinstance(permissions, dict) or permissions.get("bash") != ("allow" if shell else "deny") or
+            permissions.get("*") != "deny" or
+            permissions.get("task") != "deny" or permissions.get("anvil_memory_search") != "deny" or
+            permissions.get("anvil_analytics_*") != "deny" or
+            not isinstance(external, dict) or external.get("*") != "deny" or
+            (shell and resolved.get("shell") != str(shell.resolve())) or
+            not baseline_agent_digest or overlay_agent_digest != baseline_agent_digest):
+        raise EvaluationBlocked("OpenCode did not resolve the fixture-only permission overlay")
+    return {"project_overlay_resolved": True, "provider_config_overridden": False,
+            "home_xdg_overridden": False, "external_directory_default": external.get("*"),
+            "agent_instruction_digest_preserved": True,
+            "plugin_tools_allowed": False,
+            "agent_definition_sha256": overlay_agent_digest}
+
+
+def _local_paths(project: pathlib.Path, run_root: pathlib.Path, agent: str
+                 ) -> tuple[pathlib.Path | None, list[pathlib.Path], pathlib.Path | None]:
+    if agent != "anvil":
+        return None, [], None
+    home = pathlib.Path.home().resolve()
+    config_value = os.environ.get("XDG_CONFIG_HOME", str(home / ".config"))
+    if not pathlib.Path(config_value).expanduser().is_absolute():
+        raise EvaluationBlocked("The existing XDG config path must be absolute for a safely scoped Anvil run")
+    config_home = pathlib.Path(config_value).expanduser().absolute()
+    no_symlinks(config_home)
+    anvil_config = config_home / "opencode"
+    if anvil_config.exists():
+        no_symlinks(anvil_config)
+        anvil_config = anvil_config.absolute()
+    script_root = anvil_config / "scripts"
+    repo_id = identity(project)["id"]
+    state_home = run_root / "anvil-state-home"
+    state_root = state_home / "anvil" / "engineering" / repo_id
+    no_symlinks(state_root)
+    state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    state_home.chmod(0o700)
+    state_root.chmod(0o700)
+    readable = [path for path in (script_root / "engineering.py", script_root / "engineering") if path.exists()]
+    skill_root = anvil_config / "skills"
+    if skill_root.is_dir():
+        readable.extend(path for path in sorted(skill_root.glob("anvil-*")) if path.is_dir())
+    for path in readable:
+        no_symlinks(path)
+        if not path.resolve().is_relative_to(anvil_config):
+            raise EvaluationBlocked("Anvil skill/helper path escaped the configured OpenCode directory")
+    return state_root, readable, state_home
+
+
+def _build_shell(args, run_root: pathlib.Path) -> pathlib.Path:
+    tools = run_root / "tools"
+    tools.mkdir(mode=0o700)
+    shell = tools / "local-landlock-shell"
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    if not compiler:
+        raise EvaluationBlocked("A C compiler is needed for fixture-scoped shell permissions")
+    try:
+        subprocess.run([compiler, "-O2", "-Wall", "-Wextra", "-Werror",
+                        str(ROOT / "evals/engineering/local_landlock_shell.c"), "-o", str(shell)],
+                       capture_output=True, timeout=45, check=True)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise EvaluationBlocked(f"The fixture-scoped shell could not be built: {type(error).__name__}") from None
+    shell.chmod(0o500)
+    return shell
+
+
+def _ensure_temp_root(path: pathlib.Path) -> pathlib.Path:
+    temp_root = pathlib.Path(tempfile.gettempdir()).resolve()
+    absolute = path.absolute()
+    if ".." in absolute.parts:
+        raise EvaluationBlocked("Evaluation run directories cannot contain parent traversal")
+    try:
+        canonical = absolute.resolve()
+        canonical.relative_to(temp_root)
+    except ValueError:
+        raise EvaluationBlocked("Evaluation run directories must remain under the system temporary directory") from None
+    for item in (absolute, *absolute.parents):
+        if item.is_symlink():
+            raise EvaluationBlocked("Evaluation run directories must not traverse symlinks")
+    if canonical.exists():
+        raise EvaluationBlocked(f"Refusing to reuse an existing evaluation directory: {canonical}")
+    if not canonical.parent.is_dir():
+        raise EvaluationBlocked("The parent of an explicit evaluation directory must already exist")
+    canonical.mkdir(mode=0o700)
+    canonical.chmod(0o700)
+    return canonical
+
+
+def _require_smoke_passed(state_path: pathlib.Path) -> None:
+    if not state_path.is_file():
+        raise EvaluationBlocked("Run the local OpenCode smoke first; no successful smoke is recorded")
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    smoke = [row for row in state.get("invocations", []) if row.get("kind") == "smoke"]
+    if not smoke or smoke[-1].get("status") != "COMPLETED" or not smoke[-1].get("response_and_telemetry"):
+        raise EvaluationBlocked("Local OpenCode smoke has not completed with response and telemetry; stop before benchmarks")
+
+
+def _require_minimal_challenge_passed(results_path: pathlib.Path, treatment: str) -> None:
+    if not results_path.is_file():
+        raise EvaluationBlocked("Run and independently pass the disposable fast-control challenge before the full suite")
+    report = json.loads(results_path.read_text(encoding="utf-8"))
+    passed = any(row.get("fixture") == _run.FAST_FIXTURE and row.get("treatment") == treatment and
+                 row.get("execution_status") == "COMPLETED" and row.get("acceptance") == "PASS"
+                 for row in report.get("results", []))
+    if not passed:
+        raise EvaluationBlocked("The fast-control challenge has not passed the independent grader for this treatment")
+
+
+def _run_smoke(args, opencode: pathlib.Path) -> dict:
+    run_root = args.workspace_root / "smoke" / "local-runtime"
+    if run_root.exists():
+        raise EvaluationBlocked(f"Refusing to reuse an existing smoke directory: {run_root}")
+    run_root.mkdir(parents=True, mode=0o700)
+    run_root.chmod(0o700)
+    project = run_root / "project"
+    project.mkdir(mode=0o700)
+    agent = "build"
+    _write_project_config(project, _permissions(project, agent, None, [], None, smoke=True))
+    resolved = resolve_config(opencode, project)
+    if resolved.get("permission", {}).get("*") != "deny":
+        raise EvaluationBlocked("Smoke project did not deny every OpenCode tool")
+    prompt = "Reply with exactly READY. Do not call tools."
+    argv = [str(opencode), "run", "--format", "json", "--agent", agent, "--model", args.model,
+            "--variant", args.variant, "--title", f"{args.evaluation_id} local smoke", prompt]
+    metrics, code, elapsed = _run.run_cli_invocation(
+        args, [], argv, project, child_env(), min(args.timeout, 120), args.stdout_limit,
+        run_root / "trace-metadata.jsonl", "local-runtime-smoke", "smoke")
+    usage = metrics.get("token_usage") or {}
+    telemetry = bool(usage or metrics.get("reported_cost_telemetry") is not None)
+    response = bool(metrics.get("text_chars_observed"))
+    passed = bool(code == 0 and response and telemetry and not metrics.get("failure_class") and not metrics.get("limit"))
+    record = {"status": "COMPLETED" if passed else "START_OR_RUN_FAILED",
+              "response_and_telemetry": passed, "response_received": response,
+              "telemetry_available": telemetry, "exit_code": code, "elapsed_seconds": elapsed,
+              "event_types": metrics.get("event_types"), "token_usage": usage or None,
+              "reported_cost_telemetry": metrics.get("reported_cost_telemetry"),
+              "failure_class": metrics.get("failure_class"), "safe_trace": str(run_root / "trace-metadata.jsonl"),
+              "private_reasoning_logged": False, "credentials_read_or_copied": False}
+    return record
+
+
+def _record_smoke(args, result: dict) -> None:
+    """Enrich the reserved call record without charging the invocation twice."""
+    state = json.loads(args.budget_state.read_text(encoding="utf-8")) if args.budget_state.exists() else {
+        "schema_version": 1, "invocations": [], "challenge_keys": [], "resume_keys": [],
+        "actual_wall_seconds": 0, "reserved_wall_seconds": 0,
+        "actual_input_tokens": 0, "actual_output_tokens": 0,
+        "reserved_input_tokens": 0, "reserved_output_tokens": 0,
+    }
+    if state.get("evaluation_id") not in (None, args.evaluation_id):
+        raise EvaluationBlocked("Evaluation ID does not match the smoke budget state")
+    state["evaluation_id"] = args.evaluation_id
+    row = next((item for item in state["invocations"] if item.get("key") == "local-runtime-smoke"), None)
+    if row is None:
+        row = {"index": len(state["invocations"]) + 1, "key": "local-runtime-smoke", "kind": "smoke"}
+        state["invocations"].append(row)
+        state["actual_wall_seconds"] = state.get("actual_wall_seconds", 0) + result["elapsed_seconds"]
+        usage = result.get("token_usage") or {}
+        state["actual_input_tokens"] = state.get("actual_input_tokens", 0) + (usage.get("input") or 0)
+        state["actual_output_tokens"] = state.get("actual_output_tokens", 0) + (usage.get("output") or 0)
+    row.update({"kind": "smoke", "status": result["status"],
+                "elapsed_seconds": result["elapsed_seconds"],
+                "observed_input_tokens": (result.get("token_usage") or {}).get("input"),
+                "observed_output_tokens": (result.get("token_usage") or {}).get("output"),
+                "response_and_telemetry": result["response_and_telemetry"],
+                "response_received": result["response_received"],
+                "token_telemetry_available": result["telemetry_available"],
+                "reported_cost_telemetry": result.get("reported_cost_telemetry"),
+                "failure_class": result.get("failure_class"), "exit_code": result.get("exit_code")})
+    _run.write_json_atomic(args.budget_state, state)
+
+
+def _grade(project: pathlib.Path, grader: pathlib.Path) -> dict:
+    grader_env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(project), "PYTHONDONTWRITEBYTECODE": "1",
+                  "HOME": str(project), "NO_COLOR": "1"}
+    try:
+        result = subprocess.run([sys.executable, str(grader), "all"], cwd=project, env=grader_env,
+                                capture_output=True, timeout=60, check=False)
+        output = result.stdout + b"\n" + result.stderr
+        return {"status": "PASS" if result.returncode == 0 else "FAIL", "exit_code": result.returncode,
+                "diagnostics_bytes": len(output), "diagnostics_sha256": hashlib.sha256(output).hexdigest(),
+                "diagnostics_private": True, "raw_diagnostics_retained": False}
+    except subprocess.TimeoutExpired:
+        return {"status": "TIMEOUT", "exit_code": None, "raw_diagnostics_retained": False}
+
+
+def _challenge(args, opencode: pathlib.Path, name: str, treatment: str) -> dict:
+    run_root = args.workspace_root / treatment / f"{name}-01"
+    if run_root.exists():
+        raise EvaluationBlocked(f"Refusing to reuse an existing run directory: {run_root}")
+    run_root.mkdir(parents=True, mode=0o700)
+    run_root.chmod(0o700)
+    project = prepare_model(run_root, name)
+    initial_digest = _run.tree_digest(project)
+    frozen = json.loads(args.benchmark_manifest.read_text(encoding="utf-8"))
+    benchmark = next((item for item in frozen.get("scenarios", []) if item.get("fixture") == name), None)
+    if not benchmark or initial_digest != benchmark.get("visible_fixture_sha256"):
+        raise EvaluationBlocked(f"Visible fixture {name} does not match its frozen hash")
+    grader = _run.private_grader(name)
+    if not grader.is_file() or hashlib.sha256(grader.read_bytes()).hexdigest() != benchmark.get("private_grader_sha256"):
+        raise EvaluationBlocked(f"Private grader for {name} does not match its frozen hash")
+
+    profile = anvil_inventory(opencode, project)
+    if treatment == "anvil-active" and not profile["active_anvil_verified"]:
+        raise EvaluationBlocked("The installed OpenCode profile does not resolve the Anvil agent, plugin, skills, and instruction source")
+    agent = "anvil" if treatment == "anvil-active" else "build"
+    if agent == "anvil":
+        baseline_agent_digest = profile.get("anvil_agent_definition_sha256")
+    else:
+        code, output = invoke_metadata(opencode, ["debug", "agent", agent], project)
+        baseline_agent_digest = _agent_instruction_digest(output) if code == 0 else None
+
+    shell = _build_shell(args, run_root)
+    state_root, read_roots, state_home = _local_paths(
+        project, run_root, "anvil" if treatment == "anvil-active" else "build")
+    allowed_external = list(read_roots)
+    if state_root:
+        allowed_external.append(state_root)
+    local_config = _permissions(project, agent, shell, allowed_external, state_root)
+    local_config["agent"][agent]["steps"] = args.max_steps
+    _write_project_config(project, local_config)
+
+    roots = [str(path.resolve()) for path in read_roots]
+    environment = child_env(ANVIL_EVAL_WORKSPACE=str(project.resolve()))
+    if state_root:
+        environment["ANVIL_EVAL_STATE_ROOT"] = str(state_root.resolve())
+    if state_home:
+        environment["ANVIL_EVAL_STATE_HOME"] = str(state_home.resolve())
+    if roots:
+        environment["ANVIL_EVAL_READ_ROOTS"] = ":".join(roots)
+    overlay = _verify_overlay(opencode, project, agent, shell, baseline_agent_digest)
+    prompt = (
+        "Implement specification.md in this disposable fixture repository. Work only in the current project. "
+        "Use Anvil's loaded engineering instructions and relevant skills when this treatment is Anvil. "
+        "Do not inspect credentials, user memory, external repositories, hidden graders, or production services. "
+        "Use the public checks when available, preserve existing behavior, and report evidence, limitations, "
+        "and unfinished requirements."
+    )
+    argv = [str(opencode)]
+    if treatment == "native-opencode":
+        argv.append("--pure")
+    argv.extend(["run", "--format", "json", "--agent", agent, "--model", args.model,
+                 "--variant", args.variant, "--title", f"{args.evaluation_id} {name} {treatment}", prompt])
+    trace_path = run_root / "trace-metadata.jsonl"
+    interrupt_path = project if name == "context-recovery" else None
+    metrics, code, elapsed = _run.run_cli_invocation(
+        args, [], argv, project, environment, args.timeout, args.stdout_limit,
+        trace_path, f"{treatment}:{name}:1", "challenge", interrupt_path)
+
+    resume = {"status": "NOT_REQUIRED"}
+    if name == "context-recovery" and metrics.get("controlled_interrupt"):
+        session_id = next(iter(metrics.get("session_ids", [])), None)
+        if session_id:
+            resume_prompt = (
+                "Continue the same task in this existing session. Inspect the current working tree and durable "
+                "progress first, reconcile completed work and evidence, avoid repeating completed side effects, "
+                "then finish the remaining requirements and public checks."
+            )
+            resume_argv = [str(opencode), "run", "--format", "json", "--session", session_id,
+                           "--agent", agent, "--model", args.model, "--variant", args.variant, resume_prompt]
+            resume_trace = run_root / "resume-trace-metadata.jsonl"
+            resume_metrics, resume_code, resume_elapsed = _run.run_cli_invocation(
+                args, [], resume_argv, project, environment, args.timeout, args.stdout_limit,
+                resume_trace, f"{treatment}:{name}:1", "resume")
+            resume = {"status": "COMPLETED" if resume_code == 0 and session_id in resume_metrics.get("session_ids", []) else "FAILED",
+                      "session_id_sha256": hashlib.sha256(session_id.encode()).hexdigest(),
+                      "elapsed_seconds": resume_elapsed}
+            metrics = _run.merge_metrics(metrics, resume_metrics)
+            code = resume_code
+            elapsed += resume_elapsed
+        else:
+            resume = {"status": "BLOCKED", "reason": "No session identifier was returned"}
+
+    grade = _grade(project, grader)
+    changed = subprocess.run(["git", "-C", str(project), "ls-files", "--others", "--exclude-standard"],
+                             capture_output=True, text=True, check=True).stdout.splitlines()
+    diff = subprocess.run(["git", "-C", str(project), "diff", "--name-only"],
+                          capture_output=True, text=True, check=True).stdout.splitlines()
+    changed_files = sorted((set(changed) | set(diff)) - {"opencode.json"})
+    session_hashes = [hashlib.sha256(value.encode()).hexdigest() for value in metrics.get("session_ids", [])]
+    outcome = {"fixture": name, "treatment": treatment, "model": args.model, "variant": args.variant,
+               "runtime_version": args.runtime_version, "fixture_initial_sha256": initial_digest,
+               "acceptance": grade["status"], "grader": grade,
+               "execution_status": "COMPLETED" if code == 0 and not metrics.get("failure_class") and not metrics.get("limit") else "BLOCKED",
+               "failure_class": metrics.get("failure_class"), "exit_code": code, "latency_seconds": elapsed,
+               "files_changed": changed_files, "tool_calls": metrics.get("tool_calls"),
+               "tool_completed": metrics.get("tool_completed"), "token_usage": metrics.get("token_usage"),
+               "reported_cost_telemetry": metrics.get("reported_cost_telemetry"),
+               "monetary_cost": None, "event_types": metrics.get("event_types"),
+               "session_id_sha256": session_hashes, "text_chars_observed": metrics.get("text_chars_observed"),
+               "loaded_anvil_skills": metrics.get("loaded_anvil_skills"),
+               "public_test_commands": metrics.get("public_test_commands"),
+               "safe_trace": str(trace_path), "permission_overlay": overlay,
+               "active_profile_inventory": profile, "resume": resume,
+               "native_control_caveat": ("Global Anvil instructions may remain in this native run; treat comparison as descriptive."
+                                          if treatment == "native-opencode" and profile["active_anvil_verified"] else None),
+               "workspace": str(project), "private_reasoning_logged": False,
+               "private_grader_inside_workspace": False,
+               "semantic_review": "REQUIRED; the deterministic grader does not establish design quality"}
+    return outcome
+
+
+def _save_report(args, runtime: dict, results: list[dict], status: str) -> None:
+    value = {"schema_version": 1, "evaluation_id": args.evaluation_id,
+             "mode": args.mode, "status": status, "runtime": runtime,
+             "results": results, "budget_config": str(args.budget_config),
+             "security": {"real_home_xdg_and_auth": True, "credentials_read_or_copied": False,
+                          "user_opencode_config_or_auth_modified": False,
+                          "temporary_project_permission_overlay_created": True,
+                          "fixture_repositories_only_in_temp": True,
+                          "hidden_graders_outside_agent_workspace": True,
+                          "shell_scope": "Landlock fixture/state roots; network syscalls denied",
+                          "raw_prompts_responses_logs_or_grader_diagnostics_retained": False},
+             "limitations": ["One run per treatment is descriptive, not statistically conclusive.",
+                             "Anvil plugin tools remain denied in the fixture overlay to protect user memory and external state.",
+                             "No monetary cost is reported unless provider telemetry has verified billing semantics."]}
+    _run.write_json_atomic(args.output, value)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", choices=("smoke", "challenge", "suite"), default="suite")
+    parser.add_argument("--fixture", choices=(*LIVE_FIXTURES, "all"), default="all")
+    parser.add_argument("--treatment", choices=TREATMENTS, default="anvil-active")
+    parser.add_argument("--opencode", type=pathlib.Path)
+    parser.add_argument("--model", default="openai/gpt-6-luna")
+    parser.add_argument("--variant", default="high")
+    parser.add_argument("--runtime-version")
+    parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--max-steps", type=int, default=12)
+    parser.add_argument("--context-limit", type=int, default=32768)
+    parser.add_argument("--output-token-limit", type=int, default=2048)
+    parser.add_argument("--stdout-limit", type=int, default=10_485_760)
+    parser.add_argument("--evaluation-id", default=DEFAULT_EVALUATION)
+    parser.add_argument("--workspace-root", type=pathlib.Path)
+    parser.add_argument("--budget-config", type=pathlib.Path, default=DEFAULT_BUDGET)
+    parser.add_argument("--budget-state", type=pathlib.Path, default=DEFAULT_STATE)
+    parser.add_argument("--benchmark-manifest", type=pathlib.Path, default=DEFAULT_BENCHMARKS)
+    parser.add_argument("--output", type=pathlib.Path, default=DEFAULT_RESULTS)
+    args = parser.parse_args()
+    try:
+        config = json.loads(args.budget_config.read_text(encoding="utf-8"))
+        frozen = json.loads(args.benchmark_manifest.read_text(encoding="utf-8"))
+        if config.get("evaluation_id") != args.evaluation_id:
+            raise EvaluationBlocked("Evaluation ID does not match the frozen budget configuration")
+        if args.budget_state.exists():
+            state_identity = json.loads(args.budget_state.read_text(encoding="utf-8"))
+            if state_identity.get("evaluation_id") != args.evaluation_id:
+                raise EvaluationBlocked("Evaluation ID does not match the existing budget state")
+        if hashlib.sha256(args.benchmark_manifest.read_bytes()).hexdigest() != config.get("benchmarks_sha256"):
+            raise EvaluationBlocked("Frozen challenge/grader manifest hash does not match the registered evaluation")
+        runtime_config = config["runtime"]
+        budget = config["resource_budget"]
+        if args.model != runtime_config["model"] or args.variant != runtime_config["variant"]:
+            raise EvaluationBlocked("Local model and variant must match the frozen Luna HIGH evaluation")
+        if (args.timeout > budget["max_wall_seconds_per_invocation"] or args.max_steps > budget["max_agent_steps_per_invocation"] or
+                args.context_limit > budget["max_context_tokens"] or args.output_token_limit > budget["max_output_tokens_per_response"] or
+                args.stdout_limit > budget["max_stdout_event_bytes_per_invocation"]):
+            raise EvaluationBlocked("Requested limits exceed the frozen live-evaluation budget")
+        path_executable = shutil.which("opencode")
+        executable = args.opencode or (pathlib.Path(path_executable) if path_executable else None)
+        if executable is None:
+            raise EvaluationBlocked("OpenCode is not available on PATH and no local executable was supplied")
+        executable = executable.expanduser().resolve(strict=True)
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            raise EvaluationBlocked("The selected local OpenCode executable is not executable")
+        if args.workspace_root is None:
+            args.workspace_root = pathlib.Path(tempfile.mkdtemp(prefix="anvil-engineering-local-"))
+            args.workspace_root.chmod(0o700)
+        else:
+            args.workspace_root = _ensure_temp_root(args.workspace_root)
+        runtime = local_runtime_preflight(executable, args.workspace_root, args.model)
+        args.runtime_version = runtime["version"]
+        expected_executable = runtime_config.get("executable", "PATH")
+        if expected_executable != "PATH" and executable != pathlib.Path(expected_executable).expanduser().resolve():
+            raise EvaluationBlocked("The OpenCode executable differs from the one frozen in this local evaluation")
+        if args.runtime_version != runtime_config.get("version"):
+            raise EvaluationBlocked("Installed OpenCode version differs from the frozen runtime version")
+        if args.mode == "smoke":
+            result = _run_smoke(args, executable)
+            _record_smoke(args, result)
+            _save_report(args, runtime, [result], "READY" if result["response_and_telemetry"] else "BLOCKED")
+            return 0 if result["response_and_telemetry"] else 1
+
+        _require_smoke_passed(args.budget_state)
+        if args.mode == "challenge" and args.fixture == "all":
+            raise EvaluationBlocked("A challenge run requires one named fixture")
+        profile = anvil_inventory(executable, args.workspace_root)
+        if args.treatment == "anvil-active" and not profile["active_anvil_verified"]:
+            raise EvaluationBlocked("Anvil is not active in the local OpenCode profile; review `make inspect` and `make reforge DRY_RUN=1` first")
+        if args.mode == "suite":
+            _require_minimal_challenge_passed(args.output, args.treatment)
+
+        if args.mode == "challenge":
+            names = [args.fixture]
+        else:
+            names = list(LIVE_FIXTURES) if args.fixture == "all" else [args.fixture]
+        results = []
+        if args.output.exists():
+            previous = json.loads(args.output.read_text(encoding="utf-8"))
+            if previous.get("evaluation_id") == args.evaluation_id:
+                results.extend(previous.get("results", []))
+        if args.mode == "suite":
+            names = [name for name in names if not any(
+                row.get("fixture") == name and row.get("treatment") == args.treatment for row in results)]
+        for name in names:
+            if any(row.get("fixture") == name and row.get("treatment") == args.treatment for row in results):
+                raise EvaluationBlocked(f"This evaluation already contains {args.treatment}/{name}; use a new evaluation ID to repeat")
+            result = _challenge(args, executable, name, args.treatment)
+            results.append(result)
+            status = "BLOCKED" if result["execution_status"] == "BLOCKED" else "IN_PROGRESS"
+            _save_report(args, runtime, results, status)
+            if result["execution_status"] == "BLOCKED":
+                break
+        challenge_results = [row for row in results if isinstance(row, dict) and "execution_status" in row]
+        status = ("COMPLETED" if challenge_results and all(
+            row["execution_status"] == "COMPLETED" and row["acceptance"] == "PASS"
+            for row in challenge_results) else "BLOCKED")
+        _save_report(args, runtime, results, status)
+        return 0 if status == "COMPLETED" else 1
+    except (EvaluationBlocked, OSError, KeyError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"BLOCKED: {error}")
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

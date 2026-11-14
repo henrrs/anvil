@@ -1,0 +1,207 @@
+{
+  "schema_version": 1,
+  "evaluation_id": "anvil-engineering-runtime-diagnostic-2026-11-14",
+  "status": "BLOCKED",
+  "runtime": {
+    "version": "1.19.5",
+    "model": "openai/gpt-6-luna",
+    "variant": "high",
+    "reasoning_effort": "high",
+    "fallback": false
+  },
+  "baseline": {
+    "commit": "b09d9651952aef9f6a296b559cf38c08c320ca74",
+    "durable_directory": "$ANVIL_DATA_HOME/evaluations/anvil-engineering-live-2026-11-14",
+    "archive_sha256": "aa40c198b23e128dca4e39cb0a62d41df6b0263ea5b82ba35ef12732025e0630",
+    "manifest_sha256": "591f414649029e6e219b4c2d5c3ae0b0926badaeddb76f526b5f5e4f295bf266",
+    "manifest_files": 713
+  },
+  "results": [
+    {
+      "kind": "smoke",
+      "treatment": "native-opencode",
+      "status": "FAIL",
+      "exit_code": 1,
+      "elapsed_seconds": 66.926,
+      "failure_class": "UNCLASSIFIED_OPENCODE_ERROR",
+      "failure_stage": "MODEL_REQUEST_OR_RUNTIME",
+      "timeout_category": null,
+      "error_type": "UnknownError",
+      "error_code": null,
+      "http_status": null,
+      "provider_id": "openai",
+      "provider_category": "UNCLASSIFIED",
+      "retry_count": null,
+      "process_id": 207289,
+      "process_exit_code": 1,
+      "elapsed_from_runner_seconds": 66.926,
+      "run_ids": [],
+      "session_ids": [
+        "ses_e254a197affe5630OEbZ0ucvPa"
+      ],
+      "event_types": {
+        "error": 1
+      },
+      "token_usage": null,
+      "reported_cost_telemetry": null,
+      "text_chars_observed": 0,
+      "response_text_sha256": null,
+      "tool_calls": null,
+      "safe_trace": "$ANVIL_DATA_HOME/evaluations/anvil-engineering-runtime-diagnostic-2026-11-14/runs/native-opencode/smoke-01/trace-metadata.jsonl",
+      "resolved_config": {
+        "model": "openai/gpt-6-luna",
+        "variant": "high",
+        "reasoning_effort": "high",
+        "context_limit": 32768,
+        "output_limit": 256,
+        "agent_steps": 1,
+        "plugins": [],
+        "shell_configured": false,
+        "provider_endpoint": {
+          "provider": "openai",
+          "configured_origin": null,
+          "endpoint_source": "OpenCode provider default; not exposed by debug config"
+        }
+      },
+      "plugin_dependencies": {
+        "status": "NOT_REQUIRED",
+        "sha256": null,
+        "package": null
+      }
+    },
+    {
+      "kind": "smoke",
+      "attempt": 2,
+      "treatment": "native-opencode",
+      "status": "FAIL",
+      "exit_code": 1,
+      "elapsed_seconds": 66.317,
+      "failure_class": "UNCLASSIFIED_OPENCODE_ERROR",
+      "failure_stage": "MODEL_REQUEST_OR_RUNTIME",
+      "timeout_category": null,
+      "error_type": "UnknownError",
+      "error_code": null,
+      "http_status": null,
+      "provider_id": "openai",
+      "provider_category": "UNCLASSIFIED",
+      "retry_count": null,
+      "process_id": 208106,
+      "process_exit_code": 1,
+      "elapsed_from_runner_seconds": 66.317,
+      "run_ids": [],
+      "session_ids": [
+        "ses_e254342dfffeQF4OA3w6YBQUHd"
+      ],
+      "event_types": {
+        "error": 1
+      },
+      "token_usage": null,
+      "reported_cost_telemetry": null,
+      "text_chars_observed": 0,
+      "response_text_sha256": null,
+      "runtime_log_diagnostics": {
+        "files": 1,
+        "bytes": 5966,
+        "digests": [
+          {
+            "file": "opencode.log",
+            "sha256": "aa2bccc86779953a774445a9a2a553f5d40080ac08b2eed08fdac7774c2f183f",
+            "bytes_examined": 5966,
+            "truncated": false
+          }
+        ],
+        "error_type": "error.error",
+        "error_code": null,
+        "http_status": null,
+        "provider_id": "openai",
+        "retry_count": null,
+        "provider_category": null,
+        "endpoint_origins": [
+          "https://models.opencode.ai"
+        ]
+      },
+      "tool_calls": null,
+      "safe_trace": "$ANVIL_DATA_HOME/evaluations/anvil-engineering-runtime-diagnostic-2026-11-14/runs/native-opencode/smoke-02/trace-metadata.jsonl",
+      "resolved_config": {
+        "model": "openai/gpt-6-luna",
+        "variant": "high",
+        "reasoning_effort": "high",
+        "context_limit": 32768,
+        "output_limit": 256,
+        "agent_steps": 1,
+        "plugins": [],
+        "shell_configured": false,
+        "provider_endpoint": {
+          "provider": "openai",
+          "configured_origin": null,
+          "endpoint_source": "OpenCode provider default; not exposed by debug config"
+        }
+      },
+      "plugin_dependencies": {
+        "status": "NOT_REQUIRED",
+        "sha256": null,
+        "package": null
+      }
+    }
+  ],
+  "privacy": {
+    "raw_prompts_or_responses_persisted": false,
+    "reasoning_or_credentials_persisted": false,
+    "trace_content": "event metadata, counters, hashes, and sanitized failure metadata only"
+  },
+  "network_checks": {
+    "models_catalog": {
+      "origin": "https://models.opencode.ai",
+      "path": "/api.json",
+      "http_status": 200,
+      "elapsed_seconds": 0.147,
+      "authorization_sent": false,
+      "user_agent_variant": "OpenCode 1.19.5 compatible"
+    },
+    "openai_api": {
+      "origin": "https://api.openai.com",
+      "path": "/v1/models",
+      "http_status": 401,
+      "elapsed_seconds": 0.427,
+      "authorization_sent": false,
+      "interpretation": "DNS/TLS/HTTP reachable; expected unauthenticated response; does not validate the configured credential"
+    },
+    "host_proxy_variables_present": false,
+    "direct_network_only": true,
+    "models_catalog_opencode_user_agent": {
+      "http_statuses": [
+        200,
+        200
+      ],
+      "elapsed_seconds": [
+        0.152177,
+        0.136827
+      ],
+      "authorization_sent": false
+    }
+  },
+  "endpoint_analysis": {
+    "open_code_log_origin": "https://models.opencode.ai",
+    "meaning": "OpenCode model catalog fetch, not the model inference endpoint",
+    "inference_endpoint_observed": false,
+    "configured_base_url": null,
+    "model_catalog": {
+      "openai_provider_present": true,
+      "gpt_6_luna_present": true,
+      "provider_sdk": "@ai-sdk/openai",
+      "provider_api_url_exposed": false
+    },
+    "source_references": [
+      "https://github.com/anomalyco/opencode/blob/v1.19.5/packages/core/src/models-dev.ts#L150-L169",
+      "https://github.com/anomalyco/opencode/blob/v1.19.5/packages/opencode/src/provider/provider.ts#L1701-L1721"
+    ]
+  },
+  "investigation": {
+    "exact_root_cause": "UNKNOWN; error metadata did not include HTTP status or error code",
+    "observed_failure_scope": "MODEL_REQUEST_OR_RUNTIME before any assistant text, token usage, or tool call",
+    "production_anvil_changed": false,
+    "full_benchmark_started": false,
+    "anvil_smoke_in_new_diagnostic_id": "NOT_RUN; native smoke stopped with an unclassified error",
+    "historical_anvil_retry_policy": "BLOCKED in the original evaluation ID with the same pre-tool error pattern"
+  }
+}

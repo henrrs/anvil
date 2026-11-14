@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
-.PHONY: help inspect test test-core test-lifecycle reforge upgrade update-runtime upgrade-runtime migrate-runtime doctor capabilities stats databricks-setup rollback analytics analytics-dev analytics-status analytics-stop analytics-ui-mock eval-analytics eval-engineering eval-engineering-model eval-analytical eval-analytical-semantic eval-analytical-model eval-analytical-full eval-analytical-baseline eval-analytical-review
+.PHONY: help inspect test test-core test-lifecycle reforge upgrade update-runtime upgrade-runtime migrate-runtime doctor capabilities stats databricks-setup rollback analytics analytics-dev analytics-status analytics-stop analytics-ui-mock eval-analytics eval-engineering eval-engineering-model eval-engineering-model-legacy eval-analytical eval-analytical-semantic eval-analytical-model eval-analytical-full eval-analytical-baseline eval-analytical-review
 
 VERSION := $(shell cat VERSION 2>/dev/null || printf 'unknown')
 
@@ -25,7 +25,8 @@ help:
 	  'make analytics-stop  Stop the systemd user service when configured.' \
 	  'make eval-analytics  Run offline Analytics certification and write report artifacts.' \
 	  'make eval-engineering  Replay offline engineering recovery and quality fixtures.' \
-	  'make eval-engineering-model MODEL=provider/model OPENCODE=/path/to/opencode  Run explicitly selected live fixture.' \
+	  'make eval-engineering-model MODE=smoke|challenge|suite  Use local OpenCode config/auth with scoped fixture permissions.' \
+	  'make eval-engineering-model-legacy MODEL=provider/model OPENCODE=/path/to/opencode  Run the archived isolated-profile path.' \
 	  'make stats      Show native stats, or an honest runtime fallback.' \
 	  'make databricks-setup  Configure Databricks; attempts safe CLI install, then SDK fallback.' \
 	  'make eval-analytical  Run offline analytical fixtures, scoring and performance evaluation.' \
@@ -101,7 +102,10 @@ eval-engineering:
 	@python3 evals/engineering/run.py --mode replay --fixture "$(if $(FIXTURE),$(FIXTURE),all)" --repeats "$(if $(EVAL_REPS),$(EVAL_REPS),3)" --output "$(if $(REPORT),$(REPORT),/tmp/anvil-engineering-replay.json)"
 
 eval-engineering-model:
-	@python3 evals/engineering/run.py --mode live --fixture "$(if $(FIXTURE),$(FIXTURE),all)" --repeats "$(if $(EVAL_REPS),$(EVAL_REPS),1)" --profile "$(if $(PROFILE),$(PROFILE),full)" --opencode "$(OPENCODE)" --model "$(MODEL)" --major "$(if $(MAJOR),$(MAJOR),1)" --output "$(if $(REPORT),$(REPORT),/tmp/anvil-engineering-live.json)"
+	@python3 evals/engineering/local_runner.py --mode "$(if $(MODE),$(MODE),suite)" --fixture "$(if $(FIXTURE),$(FIXTURE),all)" --treatment "$(if $(TREATMENT),$(TREATMENT),anvil-active)" $(if $(OPENCODE),--opencode "$(OPENCODE)",) --model "$(if $(MODEL),$(MODEL),openai/gpt-6-luna)" --variant "$(if $(VARIANT),$(VARIANT),high)" --timeout "$(if $(TIMEOUT),$(TIMEOUT),600)" --evaluation-id "$(if $(EVALUATION_ID),$(EVALUATION_ID),anvil-engineering-local-2026-11-14)" --budget-config "$(if $(BUDGET_CONFIG),$(BUDGET_CONFIG),evals/engineering/live-local-2026-11-14/config.json)" --budget-state "$(if $(BUDGET_STATE),$(BUDGET_STATE),evals/engineering/live-local-2026-11-14/budget-state.json)" --benchmark-manifest "$(if $(BENCHMARK_MANIFEST),$(BENCHMARK_MANIFEST),evals/engineering/live-2026-11-14/benchmarks.json)" --output "$(if $(REPORT),$(REPORT),evals/engineering/live-local-2026-11-14/results.json)"
+
+eval-engineering-model-legacy:
+	@python3 evals/engineering/run.py --mode live --fixture "$(if $(FIXTURE),$(FIXTURE),all)" --repeats "$(if $(EVAL_REPS),$(EVAL_REPS),1)" --profile "$(if $(PROFILE),$(PROFILE),full)" --opencode "$(OPENCODE)" --model "$(MODEL)" --major "$(if $(MAJOR),$(MAJOR),1)" --output "$(if $(REPORT),$(REPORT),/tmp/anvil-engineering-live-legacy.json)"
 
 stats:
 	@bash scripts/stats.sh
