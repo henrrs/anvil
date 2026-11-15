@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -27,15 +28,89 @@ LIVE_FIXTURES = ("retry-policy", "refactor", "ingestion", "queue-preview", "long
 FAST_FIXTURE = "fast-control"
 
 TREATMENTS = ("native-opencode", "anvil-active")
-DEFAULT_EVALUATION = "anvil-engineering-local-2026-11-14"
-DEFAULT_BUDGET = ROOT / "evals/engineering/live-local-2026-11-14/config.json"
-DEFAULT_STATE = ROOT / "evals/engineering/live-local-2026-11-14/budget-state.json"
-DEFAULT_RESULTS = ROOT / "evals/engineering/live-local-2026-11-14/results.json"
-DEFAULT_BENCHMARKS = ROOT / "evals/engineering/live-2026-11-14/benchmarks.json"
+DEFAULT_MODEL = "openai/gpt-6-luna"
+DEFAULT_VARIANT = "high"
+DEFAULT_BENCHMARKS = ROOT / "evals/engineering/benchmarks.json"
+EVALUATION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\Z")
+RESOURCE_BUDGET = {
+    "max_challenge_sessions": 23,
+    "max_resume_invocations": 3,
+    "max_cli_invocations_including_resume": 26,
+    "max_smoke_invocations": 1,
+    "max_cli_invocations_total": 27,
+    "concurrency": 1,
+    "repetitions_per_treatment": 1,
+    "max_agent_steps_per_invocation": 12,
+    "max_context_tokens": 32768,
+    "max_output_tokens_per_response": 2048,
+    "max_wall_seconds_per_invocation": 600,
+    "max_global_wall_seconds": 18000,
+    "max_stdout_event_bytes_per_invocation": 10485760,
+    "max_tool_output_bytes": 40000,
+    "max_total_input_tokens": 10256384,
+    "max_total_output_tokens": 641024,
+}
 
 
 class EvaluationBlocked(RuntimeError):
     pass
+
+
+def new_evaluation_id() -> str:
+    timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    return f"anvil-engineering-{timestamp}-{uuid.uuid4().hex[:8]}"
+
+
+def evaluation_data_directory(evaluation_id: str) -> pathlib.Path:
+    if not EVALUATION_ID_PATTERN.fullmatch(evaluation_id) or evaluation_id in {".", ".."}:
+        raise EvaluationBlocked("Evaluation ID must use only letters, digits, dots, underscores, and hyphens")
+    state_home = pathlib.Path(os.environ.get("XDG_STATE_HOME") or
+                              str(pathlib.Path.home() / ".local/state")).expanduser()
+    if not state_home.is_absolute():
+        raise EvaluationBlocked("XDG_STATE_HOME must be an absolute path for evaluation records")
+    directory = state_home / "anvil" / "evaluations" / "engineering" / evaluation_id
+    if directory.resolve().is_relative_to(ROOT):
+        raise EvaluationBlocked("Evaluation budgets and results must remain outside the Anvil repository")
+    if directory.is_symlink():
+        raise EvaluationBlocked("Evaluation data directory cannot be a symbolic link")
+    if directory.exists() and not directory.is_dir():
+        raise EvaluationBlocked("Evaluation data path exists and is not a directory")
+    return directory
+
+
+def configure_evaluation_paths(args) -> pathlib.Path:
+    if not args.evaluation_id:
+        if args.mode != "smoke":
+            raise EvaluationBlocked("Start with MODE=smoke to create an evaluation ID, then pass EVALUATION_ID to later runs")
+        args.evaluation_id = new_evaluation_id()
+    directory = evaluation_data_directory(args.evaluation_id)
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    defaults = {"budget_config": directory / "budget.json",
+                "budget_state": directory / "budget-state.json",
+                "output": directory / "results.json"}
+    for name, default in defaults.items():
+        path = getattr(args, name) or default
+        path = path.expanduser()
+        resolved = path.resolve()
+        if resolved.is_relative_to(ROOT):
+            raise EvaluationBlocked("Evaluation budgets and results must remain outside the Anvil repository")
+        setattr(args, name, path)
+    args.benchmark_manifest = (args.benchmark_manifest or DEFAULT_BENCHMARKS).expanduser()
+    return directory
+
+
+def create_budget_config(path: pathlib.Path, evaluation_id: str, executable: pathlib.Path,
+                         runtime: dict, model: str, variant: str, manifest: pathlib.Path) -> None:
+    config = {
+        "schema_version": 1,
+        "evaluation_id": evaluation_id,
+        "benchmarks_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        "runtime": {"executable": str(executable), "version": runtime["version"], "major": 1,
+                    "provider": model.split("/", 1)[0], "model": model, "variant": variant,
+                    "fallback": False},
+        "resource_budget": RESOURCE_BUDGET,
+    }
+    _run.write_json_atomic(path, config)
 
 
 def child_env(**extra: str) -> dict[str, str]:
@@ -171,6 +246,9 @@ def local_runtime_preflight(opencode: pathlib.Path, cwd: pathlib.Path, model: st
     version = version_result.stdout.strip().splitlines()[0] if version_result.stdout.strip() else None
     if version_result.returncode != 0 or not version:
         raise EvaluationBlocked("The OpenCode executable in the local environment is not usable")
+    match = re.match(r"(?i)^(?:opencode\s+)?v?(\d+)\.", version)
+    if not match or int(match.group(1)) != 1:
+        raise EvaluationBlocked(f"The live Evaluation Lab supports OpenCode 1.x only; found {version}")
     return {"executable": opencode.name, "version": version, "model": model,
             "variant": "high", "path_source": "explicit path" if opencode != pathlib.Path(shutil.which("opencode") or "").resolve() else "PATH",
             "home_xdg_overridden": False, "credentials_read_or_copied": False,
@@ -701,40 +779,32 @@ def main() -> int:
     parser.add_argument("--fixture", choices=(*LIVE_FIXTURES, "all"), default="all")
     parser.add_argument("--treatment", choices=TREATMENTS, default="anvil-active")
     parser.add_argument("--opencode", type=pathlib.Path)
-    parser.add_argument("--model", default="openai/gpt-6-luna")
-    parser.add_argument("--variant", default="high")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--variant", default=DEFAULT_VARIANT)
     parser.add_argument("--runtime-version")
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--max-steps", type=int, default=12)
     parser.add_argument("--context-limit", type=int, default=32768)
     parser.add_argument("--output-token-limit", type=int, default=2048)
     parser.add_argument("--stdout-limit", type=int, default=10_485_760)
-    parser.add_argument("--evaluation-id", default=DEFAULT_EVALUATION)
+    parser.add_argument("--evaluation-id")
     parser.add_argument("--workspace-root", type=pathlib.Path)
-    parser.add_argument("--budget-config", type=pathlib.Path, default=DEFAULT_BUDGET)
-    parser.add_argument("--budget-state", type=pathlib.Path, default=DEFAULT_STATE)
-    parser.add_argument("--benchmark-manifest", type=pathlib.Path, default=DEFAULT_BENCHMARKS)
-    parser.add_argument("--output", type=pathlib.Path, default=DEFAULT_RESULTS)
+    parser.add_argument("--budget-config", type=pathlib.Path)
+    parser.add_argument("--budget-state", type=pathlib.Path)
+    parser.add_argument("--benchmark-manifest", type=pathlib.Path)
+    parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
     try:
-        config = json.loads(args.budget_config.read_text(encoding="utf-8"))
+        if args.model != DEFAULT_MODEL or args.variant != DEFAULT_VARIANT:
+            raise EvaluationBlocked("The live engineering comparison is frozen to Luna 6 High")
+        evaluation_directory = configure_evaluation_paths(args)
+        print(f"Evaluation ID: {args.evaluation_id}")
+        print(f"Evaluation data: {evaluation_directory}")
+        if not args.benchmark_manifest.is_file():
+            raise EvaluationBlocked("The frozen engineering benchmark manifest is missing")
         frozen = json.loads(args.benchmark_manifest.read_text(encoding="utf-8"))
-        if config.get("evaluation_id") != args.evaluation_id:
-            raise EvaluationBlocked("Evaluation ID does not match the frozen budget configuration")
-        if args.budget_state.exists():
-            state_identity = json.loads(args.budget_state.read_text(encoding="utf-8"))
-            if state_identity.get("evaluation_id") != args.evaluation_id:
-                raise EvaluationBlocked("Evaluation ID does not match the existing budget state")
-        if hashlib.sha256(args.benchmark_manifest.read_bytes()).hexdigest() != config.get("benchmarks_sha256"):
-            raise EvaluationBlocked("Frozen challenge/grader manifest hash does not match the registered evaluation")
-        runtime_config = config["runtime"]
-        budget = config["resource_budget"]
-        if args.model != runtime_config["model"] or args.variant != runtime_config["variant"]:
-            raise EvaluationBlocked("Local model and variant must match the frozen Luna HIGH evaluation")
-        if (args.timeout > budget["max_wall_seconds_per_invocation"] or args.max_steps > budget["max_agent_steps_per_invocation"] or
-                args.context_limit > budget["max_context_tokens"] or args.output_token_limit > budget["max_output_tokens_per_response"] or
-                args.stdout_limit > budget["max_stdout_event_bytes_per_invocation"]):
-            raise EvaluationBlocked("Requested limits exceed the frozen live-evaluation budget")
+        if not args.budget_config.is_file() and args.mode != "smoke":
+            raise EvaluationBlocked("Run MODE=smoke first to create this evaluation's external budget")
         path_executable = shutil.which("opencode")
         executable = args.opencode or (pathlib.Path(path_executable) if path_executable else None)
         if executable is None:
@@ -749,6 +819,37 @@ def main() -> int:
             args.workspace_root = _ensure_temp_root(args.workspace_root)
         runtime = local_runtime_preflight(executable, args.workspace_root, args.model)
         args.runtime_version = runtime["version"]
+
+        if not args.budget_config.is_file():
+            if args.mode != "smoke":
+                raise EvaluationBlocked("Run MODE=smoke first to create this evaluation's external budget")
+            create_budget_config(args.budget_config, args.evaluation_id, executable, runtime,
+                                 args.model, args.variant, args.benchmark_manifest)
+        config = json.loads(args.budget_config.read_text(encoding="utf-8"))
+        if config.get("evaluation_id") != args.evaluation_id:
+            raise EvaluationBlocked("Evaluation ID does not match the frozen budget configuration")
+        if args.budget_state.exists():
+            state_identity = json.loads(args.budget_state.read_text(encoding="utf-8"))
+            if state_identity.get("evaluation_id") != args.evaluation_id:
+                raise EvaluationBlocked("Evaluation ID does not match the existing budget state")
+        if hashlib.sha256(args.benchmark_manifest.read_bytes()).hexdigest() != config.get("benchmarks_sha256"):
+            raise EvaluationBlocked("Frozen challenge/grader manifest hash does not match the registered evaluation")
+        runtime_config = config["runtime"]
+        budget = config["resource_budget"]
+        if args.model != runtime_config["model"] or args.variant != runtime_config["variant"]:
+            raise EvaluationBlocked("Local model and variant must match the frozen Luna HIGH evaluation")
+        for key, ceiling in RESOURCE_BUDGET.items():
+            configured = budget.get(key)
+            if not isinstance(configured, int) or configured > ceiling:
+                raise EvaluationBlocked(f"Evaluation budget exceeds the supported ceiling for {key}")
+        if (args.timeout > budget["max_wall_seconds_per_invocation"] or args.max_steps > budget["max_agent_steps_per_invocation"] or
+                args.context_limit > budget["max_context_tokens"] or args.output_token_limit > budget["max_output_tokens_per_response"] or
+                args.stdout_limit > budget["max_stdout_event_bytes_per_invocation"]):
+            raise EvaluationBlocked("Requested limits exceed this evaluation's frozen budget")
+        if args.output.exists():
+            prior_report = json.loads(args.output.read_text(encoding="utf-8"))
+            if prior_report.get("evaluation_id") != args.evaluation_id:
+                raise EvaluationBlocked("Refusing to overwrite results belonging to another evaluation ID")
         expected_executable = runtime_config.get("executable", "PATH")
         if expected_executable != "PATH" and executable != pathlib.Path(expected_executable).expanduser().resolve():
             raise EvaluationBlocked("The OpenCode executable differs from the one frozen in this local evaluation")

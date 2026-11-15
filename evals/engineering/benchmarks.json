@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "frozen_before_model_runs": true,
-  "method": "Primary challenges and the FAST control are frozen before baseline. Two separate holdout tasks are reserved for candidate-only evaluation after any refinement. Each runtime run receives a copied visible fixture; private graders stay outside the sandbox and run only after model execution.",
+  "method": "The seven engineering scenarios are frozen before live model runs. Each treatment receives a copied visible fixture; private graders stay outside the model workspace and execute only after model execution.",
   "scenarios": [
     {
       "id": "SE-01",
@@ -68,52 +68,20 @@
       "fixture": "fast-control",
       "skill": "Small local change; performance overhead control",
       "primary": false,
-      "control": "FAST/simple task latency, tool-call and token overhead compared across all three treatments.",
+      "control": "FAST/simple task latency, tool-call and token overhead compared across Native and Anvil treatments.",
       "visible_fixture_sha256": "004c5686a92731aecd54a7368cbf7199cd1015b7ab112d55f20c7df3aba6473c",
       "specification_sha256": "3ec4d7cad3cee2c195398ee3eb624596bf49df6c7ee1bd87a044951cafc477ac",
       "private_grader": "evals/engineering/fast-control/private/acceptance.py",
       "private_grader_sha256": "89e41792aa20086188127abc09aec59a1e9347011efd73ae4d14db6a45314f93"
     }
   ],
-  "reserved_holdouts": [
-    "HOLDOUT-01 injected atomic-publication failure and temp cleanup",
-    "HOLDOUT-02 legacy positional API compatibility and stable JSON serialization",
-    "SE-01 invalid, non-finite and HTTP-date edge cases in the private grader",
-    "SE-02 rounding, ordering, filtering and error compatibility in the private grader",
-    "SE-03 interrupted sink/progress edge cases in the private grader",
-    "SE-04 non-mutation and capacity-ordering edge cases in the private grader",
-    "SE-05 shared dependency conflicts, cycles, and rollback in the private grader",
-    "SE-06 failure-before/after-commit and appended-source recovery in the private grader"
-  ],
   "scoring": {
     "correctness": "Private acceptance requirements; one pass/fail result per fixture",
     "architecture": "Private module-boundary assertions plus semantic review of resulting diff",
     "execution": "Elapsed wall time, observable tool calls, files changed, event errors and CLI exit status",
-    "context": "Session IDs, token counters when emitted, Anvil state artifacts and recovery continuity; V1 process interruption is not native V2 compaction",
+    "context": "Session IDs, token counters when emitted, Anvil state artifacts and recovery continuity; OpenCode 1 process interruption is not native context compaction",
     "efficiency": "Input/output/cached token fields and provider-reported cost only; unavailable values remain null"
   },
   "repetitions": 1,
-  "causal_claims": "Single-repetition paired results are descriptive and cannot establish statistical superiority.",
-  "holdouts": [
-    {
-      "id": "HOLDOUT-01",
-      "fixture": "holdout-atomic-recovery",
-      "skill": "Atomic publication under injected failure",
-      "purpose": "Unseen generalization after candidate refinement; candidate treatment only.",
-      "visible_fixture_sha256": "f7ae905b79e28f2d9cf92506f803c82d6697a0abbd5086362dece3f1513e407a",
-      "specification_sha256": "c3b5eef6810bfe0db911dd3504d69320f4c8f0a243d41215a6ccbd61c69e7439",
-      "private_grader": "evals/engineering/holdout-atomic-recovery/private/acceptance.py",
-      "private_grader_sha256": "a6c71c17ebe261d3f0606d8221094a25f6d2107481b3a79e47f68e864a161c4f"
-    },
-    {
-      "id": "HOLDOUT-02",
-      "fixture": "holdout-api-compat",
-      "skill": "Compatibility-preserving public API extension",
-      "purpose": "Unseen generalization after candidate refinement; candidate treatment only.",
-      "visible_fixture_sha256": "a4c8e5a447c7297351180294e59046a1c7eb1173833bc2ab42063c71a39c9878",
-      "specification_sha256": "aa99550a4a2074c97a5aed507993e6d19b76bb7e5de76603dea9d1dd95e3f739",
-      "private_grader": "evals/engineering/holdout-api-compat/private/acceptance.py",
-      "private_grader_sha256": "ff1b015977cfaaeb9b5c2fcee68086349f4791cda3967e5fecd523297346737c"
-    }
-  ]
+  "causal_claims": "Single-repetition paired results are descriptive and cannot establish statistical superiority."
 }

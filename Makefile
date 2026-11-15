@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
-.PHONY: help inspect test test-core test-lifecycle reforge upgrade update-runtime doctor capabilities stats databricks-setup rollback eval-engineering eval-engineering-model eval-analytical eval-analytical-semantic eval-analytical-model eval-analytical-full eval-analytical-baseline eval-analytical-review
+.PHONY: help inspect test test-core test-lifecycle reforge upgrade update-runtime doctor capabilities stats databricks-setup rollback eval-engineering eval-engineering-model
 
 VERSION := $(shell cat VERSION 2>/dev/null || printf 'unknown')
 
@@ -20,9 +20,7 @@ help:
 	  'make databricks-setup  Configure Databricks CLI and validate local readiness.' \
 	  'make rollback   Restore the latest complete lifecycle snapshot.' \
 	  'make eval-engineering  Replay offline engineering continuity and conformance fixtures.' \
-	  'make eval-engineering-model MODE=smoke|challenge|suite  Use local OpenCode config/auth with scoped fixture permissions.' \
-	  'make eval-analytical  Run deterministic analytical-intelligence fixtures.' \
-	  'make eval-analytical-semantic  Run semantic fixture certification and benchmark.' \
+	  'make eval-engineering-model MODE=smoke|challenge|suite  Use local OpenCode 1 with fixture-scoped permissions.' \
 	  '' \
 	  'Upgrade is local/offline and preserves the installed OpenCode executable.' \
 	  'Set DRY_RUN=1 to preview lifecycle operations without changing live files.' \
@@ -66,25 +64,7 @@ eval-engineering:
 	@python3 evals/engineering/run.py --fixture "$(if $(FIXTURE),$(FIXTURE),all)" --repeats "$(if $(EVAL_REPS),$(EVAL_REPS),3)" --output "$(if $(REPORT),$(REPORT),/tmp/anvil-engineering-replay.json)"
 
 eval-engineering-model:
-	@python3 evals/engineering/local_runner.py --mode "$(if $(MODE),$(MODE),suite)" --fixture "$(if $(FIXTURE),$(FIXTURE),all)" --treatment "$(if $(TREATMENT),$(TREATMENT),anvil-active)" $(if $(OPENCODE),--opencode "$(OPENCODE)",) --model "$(if $(MODEL),$(MODEL),openai/gpt-6-luna)" --variant "$(if $(VARIANT),$(VARIANT),high)" --timeout "$(if $(TIMEOUT),$(TIMEOUT),600)" --evaluation-id "$(if $(EVALUATION_ID),$(EVALUATION_ID),anvil-engineering-local-2026-11-14)" --budget-config "$(if $(BUDGET_CONFIG),$(BUDGET_CONFIG),evals/engineering/live-local-2026-11-14/config.json)" --budget-state "$(if $(BUDGET_STATE),$(BUDGET_STATE),evals/engineering/live-local-2026-11-14/budget-state.json)" --benchmark-manifest "$(if $(BENCHMARK_MANIFEST),$(BENCHMARK_MANIFEST),evals/engineering/live-2026-11-14/benchmarks.json)" --output "$(if $(REPORT),$(REPORT),evals/engineering/live-local-2026-11-14/results.json)"
-
-eval-analytical:
-	@python3 -m evals.analytical.cli run --mode deterministic --fixture "$(if $(FIXTURE),$(FIXTURE),all)" $(if $(DATASET),--dataset "$(DATASET)",) $(if $(GROUND_TRUTH),--ground-truth "$(GROUND_TRUTH)",) --benchmark-repetitions "$(if $(EVAL_REPS),$(EVAL_REPS),5)"
-
-eval-analytical-semantic:
-	@python3 -m evals.analytical.cli semantic --benchmark-repetitions "$(if $(EVAL_REPS),$(EVAL_REPS),3)"
-
-eval-analytical-model:
-	@python3 -m evals.analytical.cli run --mode model --fixture "$(if $(FIXTURE),$(FIXTURE),all)" $(if $(DATASET),--dataset "$(DATASET)",) $(if $(GROUND_TRUTH),--ground-truth "$(GROUND_TRUTH)",) --model "$(MODEL)" --runs "$(if $(RUNS),$(RUNS),1)" --benchmark-repetitions "$(if $(EVAL_REPS),$(EVAL_REPS),5)"
-
-eval-analytical-full:
-	@python3 -m evals.analytical.cli run --mode full --fixture "$(if $(FIXTURE),$(FIXTURE),all)" $(if $(DATASET),--dataset "$(DATASET)",) $(if $(GROUND_TRUTH),--ground-truth "$(GROUND_TRUTH)",) --model "$(MODEL)" --runs "$(if $(RUNS),$(RUNS),1)" --benchmark-repetitions "$(if $(EVAL_REPS),$(EVAL_REPS),5)"
-
-eval-analytical-baseline:
-	@python3 -m evals.analytical.cli run --mode deterministic --fixture all --freeze-baseline --benchmark-repetitions "$(if $(EVAL_REPS),$(EVAL_REPS),5)"
-
-eval-analytical-review:
-	@python3 -m evals.analytical.cli review --report "$(REPORT)" --review "$(REVIEW)" $(if $(GROUND_TRUTH),--ground-truth "$(GROUND_TRUTH)",)
+	@python3 evals/engineering/local_runner.py --mode "$(if $(MODE),$(MODE),suite)" --fixture "$(if $(FIXTURE),$(FIXTURE),all)" --treatment "$(if $(TREATMENT),$(TREATMENT),anvil-active)" $(if $(OPENCODE),--opencode "$(OPENCODE)",) --model "$(if $(MODEL),$(MODEL),openai/gpt-6-luna)" --variant "$(if $(VARIANT),$(VARIANT),high)" --timeout "$(if $(TIMEOUT),$(TIMEOUT),600)" $(if $(EVALUATION_ID),--evaluation-id "$(EVALUATION_ID)",) $(if $(BUDGET_CONFIG),--budget-config "$(BUDGET_CONFIG)",) $(if $(BUDGET_STATE),--budget-state "$(BUDGET_STATE)",) $(if $(BENCHMARK_MANIFEST),--benchmark-manifest "$(BENCHMARK_MANIFEST)",) $(if $(REPORT),--output "$(REPORT)",)
 
 rollback:
 	@bash scripts/rollback.sh

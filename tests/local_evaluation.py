@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import pathlib
 import subprocess
@@ -17,6 +18,100 @@ import local_runner
 
 
 class LocalEvaluationTests(unittest.TestCase):
+    def test_new_evaluation_ids_are_unique_and_path_safe(self):
+        first = local_runner.new_evaluation_id()
+        second = local_runner.new_evaluation_id()
+
+        self.assertNotEqual(first, second)
+        self.assertRegex(first, r"^anvil-engineering-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$")
+        self.assertTrue(local_runner.EVALUATION_ID_PATTERN.fullmatch(first))
+
+    def test_default_budget_and_results_paths_are_external_and_evaluation_scoped(self):
+        with tempfile.TemporaryDirectory(prefix="anvil-eval-state-") as temporary:
+            state_home = pathlib.Path(temporary) / "state"
+            namespace = argparse.Namespace(
+                mode="smoke", evaluation_id="anvil-eval-path-check", budget_config=None,
+                budget_state=None, output=None, benchmark_manifest=None,
+            )
+            with mock.patch.dict(local_runner.os.environ, {"XDG_STATE_HOME": str(state_home)}):
+                directory = local_runner.configure_evaluation_paths(namespace)
+
+            self.assertEqual(directory, state_home / "anvil/evaluations/engineering/anvil-eval-path-check")
+            self.assertEqual(namespace.budget_config, directory / "budget.json")
+            self.assertEqual(namespace.budget_state, directory / "budget-state.json")
+            self.assertEqual(namespace.output, directory / "results.json")
+            self.assertFalse(namespace.output.resolve().is_relative_to(ROOT))
+            self.assertEqual(namespace.benchmark_manifest, local_runner.DEFAULT_BENCHMARKS)
+
+    def test_budget_config_pins_unique_id_manifest_runtime_and_existing_limits(self):
+        with tempfile.TemporaryDirectory(prefix="anvil-eval-budget-") as temporary:
+            root = pathlib.Path(temporary)
+            manifest = root / "benchmarks.json"
+            manifest.write_text("{}\n", encoding="utf-8")
+            config_path = root / "budget.json"
+            executable = root / "opencode"
+            executable.touch()
+
+            local_runner.create_budget_config(
+                config_path, "evaluation-test", executable,
+                {"version": "1.19.5"}, "openai/gpt-6-luna", "high", manifest,
+            )
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(config["evaluation_id"], "evaluation-test")
+            self.assertEqual(config["runtime"]["version"], "1.19.5")
+            self.assertEqual(config["runtime"]["major"], 1)
+            self.assertEqual(config["resource_budget"], local_runner.RESOURCE_BUDGET)
+            self.assertEqual(config["benchmarks_sha256"], local_runner.hashlib.sha256(manifest.read_bytes()).hexdigest())
+
+    def test_live_manifest_covers_supported_fixtures_and_external_graders(self):
+        manifest = json.loads(local_runner.DEFAULT_BENCHMARKS.read_text(encoding="utf-8"))
+        scenarios = {item["fixture"]: item for item in manifest["scenarios"]}
+
+        self.assertEqual(set(scenarios), set(local_runner.LIVE_FIXTURES))
+        for name, item in scenarios.items():
+            grader = ROOT / item["private_grader"]
+            self.assertTrue(grader.is_file(), name)
+            self.assertEqual(local_runner.hashlib.sha256(grader.read_bytes()).hexdigest(),
+                             item["private_grader_sha256"], name)
+            self.assertTrue((ROOT / "evals/engineering" / name / "specification.md").is_file(), name)
+
+    def test_local_runner_accepts_opencode_1_and_rejects_other_runtime_generations(self):
+        with tempfile.TemporaryDirectory(prefix="anvil-eval-runtime-major-") as temporary:
+            root = pathlib.Path(temporary)
+            executable = root / "opencode"
+            with mock.patch.object(local_runner.subprocess, "run",
+                                   return_value=subprocess.CompletedProcess([], 0, "1.19.5\n", "")):
+                runtime = local_runner.local_runtime_preflight(executable, root, "openai/gpt-6-luna")
+            self.assertEqual(runtime["version"], "1.19.5")
+
+            with mock.patch.object(local_runner.subprocess, "run",
+                                   return_value=subprocess.CompletedProcess([], 0, "2.0.0\n", "")):
+                with self.assertRaisesRegex(local_runner.EvaluationBlocked, "OpenCode 1.x only"):
+                    local_runner.local_runtime_preflight(executable, root, "openai/gpt-6-luna")
+
+    def test_active_landlock_helper_keeps_filesystem_and_network_boundaries(self):
+        helper = ROOT / "evals/engineering/local_landlock_shell.c"
+        source = helper.read_text(encoding="utf-8")
+        build_source = pathlib.Path(local_runner._build_shell.__code__.co_filename).read_text(encoding="utf-8")
+
+        self.assertTrue(helper.is_file())
+        self.assertIn("local_landlock_shell.c", build_source)
+        self.assertIn("LANDLOCK_ACCESS_FS_WRITE_FILE", source)
+        self.assertIn("PR_SET_NO_NEW_PRIVS", source)
+        self.assertIn("SECCOMP_MODE_FILTER", source)
+        self.assertIn("__NR_socket", source)
+        self.assertIn("__NR_connect", source)
+
+    def test_prepared_model_workspace_excludes_private_acceptance_grader(self):
+        with tempfile.TemporaryDirectory(prefix="anvil-eval-grader-scope-") as temporary:
+            project = local_runner.prepare_model(pathlib.Path(temporary), "fast-control")
+            grader = local_runner._run.private_grader("fast-control").resolve()
+
+            self.assertTrue(grader.is_file())
+            self.assertFalse(grader.is_relative_to(project.resolve()))
+            self.assertFalse(any(path.name == "acceptance.py" for path in project.rglob("*.py")))
+
     def test_anvil_engineering_trigger_covers_explicit_dependent_phases(self):
         instructions = (ROOT / "config/AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("An explicit sequence of phases whose outputs feed later phases is a trigger", instructions)

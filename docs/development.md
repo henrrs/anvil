@@ -18,9 +18,26 @@ Do not point lifecycle tests at a real user profile. The test runner creates and
 
 - `make eval-engineering` replays deterministic engineering and recovery fixtures.
 - `make eval-engineering-model MODE=smoke|challenge|suite` runs selected fixtures with the locally configured OpenCode CLI.
-- `make eval-analytical` runs deterministic analytical fixtures.
-- `make eval-analytical-semantic` runs semantic fixture evaluation.
-- Model evaluation can contact the configured provider and consumes its normal token budget. It is opt-in and is not part of `make test`.
+- Model evaluation uses the real OpenCode 1 executable, configuration, authentication, and provider; it is opt-in and is not part of `make test`.
+
+Start a new live evaluation with a smoke. It generates and prints a unique evaluation ID:
+
+```bash
+make eval-engineering-model MODE=smoke
+```
+
+Replace `ID_FROM_SMOKE` below with the exact ID printed by the smoke. Reuse it for every command in that comparison. A later smoke creates a new ID and leaves the previous budget and results intact:
+
+```bash
+EVALUATION_ID=ID_FROM_SMOKE make eval-engineering-model MODE=challenge TREATMENT=native-opencode FIXTURE=fast-control
+EVALUATION_ID=ID_FROM_SMOKE make eval-engineering-model MODE=challenge TREATMENT=anvil-active FIXTURE=fast-control
+EVALUATION_ID=ID_FROM_SMOKE make eval-engineering-model MODE=suite TREATMENT=native-opencode
+EVALUATION_ID=ID_FROM_SMOKE make eval-engineering-model MODE=suite TREATMENT=anvil-active
+```
+
+Budgets, budget state, and reports are written under `${XDG_STATE_HOME:-~/.local/state}/anvil/evaluations/engineering/<evaluation-id>/`, outside the checkout. Fixture workspaces and the compiled Landlock shell remain temporary. The grader stays outside the model workspace and runs after each challenge. Per-call time, step, context, output, invocation, and aggregate token limits are enforced by the generated budget; automatic retries are disabled. `fast-control` must pass for a treatment before its full suite runs.
+
+The live runner does not read or copy credentials. Its OpenCode subprocess uses the configured profile and provider. The fixture shell can write only to the disposable fixture and evaluation state subtree, and network syscalls from that shell are denied; OpenCode itself retains provider network access.
 
 ## Release artifacts
 
