@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 import lifecycle_state
-from lifecycle_contributors import DatabricksContributor, OpenCodeContributor
+import runtime_state
 from lifecycle_model import PersistedState, resolve_persisted
 
 
@@ -27,12 +27,13 @@ class CurrentState:
 def resolve(*, include_databricks: bool = True) -> CurrentState:
     paths = lifecycle_state.paths()
     persisted = resolve_persisted(paths["home"], paths["config"].parent, paths["data"].parent)
-    active = OpenCodeContributor().inspect()
+    active = runtime_state.discover()
     lifecycle = lifecycle_state.evaluate(active, persisted)
     databricks: dict[str, Any] = {}
     if include_databricks:
         try:
-            databricks = DatabricksContributor().inspect()
+            import databricks
+            databricks = databricks.local_status()
         except (OSError, ValueError, RuntimeError) as exc:
             databricks = {"overall": "INVALID", "auth_checked": False, "workspace_checked": False,
                           "reason": type(exc).__name__}

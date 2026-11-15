@@ -33,26 +33,14 @@ anvil_build_config() {
   install -m 0600 -- "$ANVIL_ROOT/scripts/engineering.py" "$destination/scripts/engineering.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/public_errors.py" "$destination/scripts/public_errors.py"
   install -m 0700 -- "$ANVIL_ROOT/scripts/analyze.py" "$destination/scripts/analyze.py"
-  rm -rf -- "$destination/scripts/engineering"
-  cp -R -- "$ANVIL_ROOT/scripts/engineering" "$destination/scripts/engineering"
-  find "$destination/scripts/engineering" -type d -name __pycache__ -prune -exec rm -rf -- {} +
-  find "$destination/scripts/engineering" -type f -name '*.pyc' -delete
-  find "$destination/scripts/engineering" -type f -exec chmod 600 -- {} +
-  rm -rf -- "$destination/scripts/communication"
-  cp -R -- "$ANVIL_ROOT/scripts/communication" "$destination/scripts/communication"
-  find "$destination/scripts/communication" -type d -name __pycache__ -prune -exec rm -rf -- {} +
-  find "$destination/scripts/communication" -type f -name '*.pyc' -delete
-  find "$destination/scripts/communication" -type f -exec chmod 600 -- {} +
-  rm -rf -- "$destination/scripts/databricks_providers"
-  cp -R -- "$ANVIL_ROOT/scripts/databricks_providers" "$destination/scripts/databricks_providers"
-  find "$destination/scripts/databricks_providers" -type d -name __pycache__ -prune -exec rm -rf -- {} +
-  find "$destination/scripts/databricks_providers" -type f -name '*.pyc' -delete
-  find "$destination/scripts/databricks_providers" -type f -exec chmod 600 -- {} +
-  rm -rf -- "$destination/scripts/analysis"
-  cp -R -- "$ANVIL_ROOT/scripts/analysis" "$destination/scripts/analysis"
-  find "$destination/scripts/analysis" -type d -name __pycache__ -prune -exec rm -rf -- {} +
-  find "$destination/scripts/analysis" -type f -name '*.pyc' -delete
-  find "$destination/scripts/analysis" -type f -exec chmod 600 -- {} +
+  local package
+  for package in engineering communication databricks_providers analysis; do
+    rm -rf -- "$destination/scripts/$package"
+    cp -R -- "$ANVIL_ROOT/scripts/$package" "$destination/scripts/$package"
+    find "$destination/scripts/$package" -type d -name __pycache__ -prune -exec rm -rf -- {} +
+    find "$destination/scripts/$package" -type f -name '*.pyc' -delete
+    find "$destination/scripts/$package" -type f -exec chmod 600 -- {} +
+  done
   if [[ -z "$source_version" && -f "$ANVIL_DATA_DIR/installation.json" ]]; then
     source_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
 import json,sys

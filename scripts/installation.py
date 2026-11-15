@@ -10,8 +10,30 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from semver import parse as parse_version
-from lifecycle_migrations import migrate_installation
+
+
+def migrate_installation(value: Any) -> dict[str, Any]:
+    """Normalize Anvil-owned metadata in memory before the caller writes it."""
+    if not isinstance(value, dict):
+        raise ValueError("installation record must be a JSON object")
+    schema = value.get("schema_version", 1)
+    if type(schema) is not int or schema < 1:
+        raise ValueError("installation record has an invalid schema version")
+    if schema > 3:
+        raise ValueError("installation record schema is newer than this checkout")
+    result = dict(value)
+    if schema == 1:
+        result["schema_version"] = 2
+        if "runtime_major" not in result and type(result.get("generation")) is int:
+            result["runtime_major"] = result["generation"]
+        schema = 2
+    if schema == 2:
+        result["schema_version"] = 3
+        if result.get("runtime_major", result.get("generation")) == 1:
+            result.setdefault("runtime_profile", "opencode-v1")
+    return result
 
 
 def main() -> int:

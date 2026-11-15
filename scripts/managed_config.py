@@ -105,7 +105,7 @@ RELEASE_CONTROL_FILES = {
     "scripts/anvil_upgrade.sh", "scripts/upgrade.sh", "scripts/reforge.sh", "scripts/rollback.sh",
     "scripts/lib/common.sh", "scripts/lib/install.sh", "scripts/lib/backup.sh",
     "scripts/lib/lifecycle-operation.sh", "scripts/managed_config.py", "scripts/release_authority.py",
-    "scripts/lifecycle_state.py", "scripts/lifecycle_plan.py", "scripts/lifecycle_contributors.py",
+    "scripts/lifecycle_state.py", "scripts/lifecycle_plan.py",
     "scripts/lifecycle_executor.py", "scripts/lifecycle_verify.py", "scripts/lifecycle_transaction.py",
     "scripts/lifecycle_recovery.py", "scripts/state.py",
 }

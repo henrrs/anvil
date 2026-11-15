@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from lifecycle_model import (DocumentStatus, normalize_databricks,
                              normalize_installation, normalize_managed_manifest,
                              normalize_memory, normalize_runtime, resolve_persisted)
-from lifecycle_migrations import migrate_installation
+from installation import migrate_installation
 import lifecycle_transaction
 
 

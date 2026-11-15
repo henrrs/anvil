@@ -14,7 +14,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from lifecycle_contributors import DatabricksContributor, MemoryContributor, OpenCodeContributor
 from lifecycle_resolver import CurrentState, resolve
 from public_errors import run_public
 
@@ -124,6 +123,10 @@ def _op(kind: OperationKind, scope: str, reason: str, *, idempotent: bool = True
     return Operation(kind, scope, kind.value, reason, kind not in {OperationKind.VERIFY, OperationKind.COMMIT}, idempotent)
 
 
+def _memory_operation(present: bool) -> tuple[Operation, ...]:
+    return () if present else (_op(OperationKind.INITIALIZE_MEMORY, "memory", "Memory directory is absent"),)
+
+
 def plan(current: CurrentState, desired: DesiredState) -> ChangePlan:
     """Plan Anvil lifecycle actions for the OpenCode 1 profile."""
     state = current.lifecycle
@@ -142,7 +145,7 @@ def plan(current: CurrentState, desired: DesiredState) -> ChangePlan:
         elif lifecycle in {"READY", "INSTALLED", "DEGRADED", "STALE", "RECOVERABLE"}:
             operations.extend((_op(OperationKind.SNAPSHOT, "anvil", "Preserve exact pre-upgrade state"),
                                _op(OperationKind.REPLACE_MANAGED, "managed-config", "Converge target release artifacts"),
-                               *MemoryContributor().plan_initialize(state["memory"]["present"]),
+                               *_memory_operation(state["memory"]["present"]),
                                _op(OperationKind.VERIFY, "installation", "Verify target before metadata commit"),
                                _op(OperationKind.COMMIT, "installation", "Mark target release installed")))
     elif desired.operation == "reforge":
@@ -162,7 +165,7 @@ def plan(current: CurrentState, desired: DesiredState) -> ChangePlan:
             if not runtime.get("usable"):
                 operations.append(_op(OperationKind.INSTALL_RUNTIME, "opencode",
                                       "Provision OpenCode 1 on first installation", idempotent=False))
-            operations.extend((*MemoryContributor().plan_initialize(state["memory"]["present"]),
+            operations.extend((*_memory_operation(state["memory"]["present"]),
                                _op(OperationKind.VERIFY, "installation", "Verify rebuilt artifacts"),
                                _op(OperationKind.COMMIT, "installation", "Record rebuilt installation")))
     elif desired.operation == "update-runtime":
@@ -173,7 +176,8 @@ def plan(current: CurrentState, desired: DesiredState) -> ChangePlan:
             blockers.append("Anvil supports only OpenCode 1.x.")
         else:
             operations.extend((_op(OperationKind.SNAPSHOT, "runtime", "Preserve complete pre-runtime state"),
-                               *OpenCodeContributor().plan_runtime(),
+                               _op(OperationKind.INSTALL_RUNTIME, "opencode",
+                                   "Update OpenCode 1 without changing the Anvil release", idempotent=False),
                                _op(OperationKind.VERIFY, "runtime", "Verify OpenCode 1 compatibility"),
                                _op(OperationKind.COMMIT, "installation", "Record runtime provenance")))
     elif desired.operation == "rollback":
@@ -183,10 +187,9 @@ def plan(current: CurrentState, desired: DesiredState) -> ChangePlan:
             operations.extend((_op(OperationKind.RESTORE, "snapshot", "Restore exact recorded pre-operation snapshot"),
                                _op(OperationKind.VERIFY, "installation", "Verify restored state")))
     elif desired.operation == "databricks-setup":
-        contribution = DatabricksContributor().plan_setup(current.databricks)
-        if contribution:
+        if current.databricks.get("overall") != "READY":
             operations.extend((_op(OperationKind.SNAPSHOT, "databricks", "Preserve Anvil-owned provider state"),
-                               *contribution,
+                               _op(OperationKind.DATABRICKS_SETUP, "databricks", "Converge provider configuration"),
                                _op(OperationKind.VERIFY, "databricks", "Verify local provider state")))
     else:
         raise ValueError(f"unknown lifecycle operation: {desired.operation}")

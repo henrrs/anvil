@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import managed_config
-from lifecycle_contributors import MemoryContributor, OpenCodeContributor
+import runtime_state
 from semver import compare as compare_versions
 from public_errors import run_public
 
@@ -57,7 +57,10 @@ def verify(config: Path, memory: Path, binary: Path, *, product_version: str,
                 raise ValueError("restored managed state is not a verified repairable drift")
 
     def runtime() -> None:
-        OpenCodeContributor().verify(binary, runtime_version, runtime_major)
+        candidate = runtime_state.discover(str(binary)).get("runtime") or {}
+        if (not candidate.get("supported") or candidate.get("version") != runtime_version
+                or candidate.get("generation") != runtime_major):
+            raise ValueError("runtime does not match the planned supported candidate")
 
     def config_audit() -> None:
         import configure
@@ -68,7 +71,8 @@ def verify(config: Path, memory: Path, binary: Path, *, product_version: str,
             raise ValueError("managed runtime profile failed its audit")
 
     def memory_root() -> None:
-        MemoryContributor().verify(memory)
+        if memory.is_symlink() or not memory.is_dir():
+            raise ValueError("memory root is unavailable")
 
     probe("managed_artifacts", managed)
     probe("runtime_profile", config_audit)
