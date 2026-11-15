@@ -16,7 +16,7 @@
       "commands/review.md": "6810f25f0c7d235420cc51420e96aae54c63cb8c96580a1729fed698365269d3",
       "config/runtime-policy.json": "2853f04004ec7f2c593d20a1ef59c2d962b0a2fef29f178202a6cce33947dabb",
       "opencode.jsonc": null,
-      "plugins/anvil-core-v1.ts": "629de572681f9e41f48b76c4350e8915061e4d4d84dcd97c4dcb9eec1b61a89b",
+      "plugins/anvil-core-v1.ts": "ab6480599b8c9d8cc7b1f62269315095782410fd2df2432757f20563199085cf",
       "scripts/analysis/__init__.py": "cadaaf2c9c5caad914e24dbc150fbd0845a207e5165d0384036f871345a16feb",
       "scripts/analysis/contracts.py": "e8a6954e7622ad428bf5f64917fea548aa044611e9a6cc4456875a60678f1d50",
       "scripts/analysis/errors.py": "acbe2e28bd7752454953b8326f550aa66e58b1e0f9c24ed27b58c67d2eb60da6",

@@ -8,28 +8,27 @@ anvil_need python3
 observation="$(python3 "$ROOT/scripts/lifecycle_resolver.py")"
 lifecycle_text="$(python3 -c 'import json,sys; sys.path.insert(0,sys.argv[1]); import lifecycle_state; print(lifecycle_state._human(json.load(sys.stdin)["current"]["lifecycle"]))' "$ROOT/scripts" <<<"$observation")"
 record_file="$ANVIL_DATA_DIR/installation.json"
-summary="$(python3 - "$observation" "$ROOT" "$record_file" <<'PY'
+summary="$(python3 -c '
 import json,sys
 from pathlib import Path
-root=Path(sys.argv[2]); sys.path.insert(0,str(root/'scripts'))
+root=Path(sys.argv[1]); sys.path.insert(0,str(root/"scripts"))
 import runtime
-current=json.loads(sys.argv[1])['current']
-selected=current['active_runtime'].get('runtime') or {}
-capability=runtime.capabilities(observed_runtime=selected)['runtime']
-try: record=json.loads(Path(sys.argv[3]).read_text(encoding='utf-8'))
+current=json.load(sys.stdin)["current"]
+selected=current["active_runtime"].get("runtime") or {}
+capability=runtime.capabilities(observed_runtime=selected)["runtime"]
+try: record=json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
 except (OSError,ValueError): record={}
 if not isinstance(record,dict): record={}
-policy=json.loads((root/'config/runtime-policy.json').read_text(encoding='utf-8'))['opencode']
-for value in (root.joinpath('VERSION').read_text(encoding='utf-8').strip(),
-              current['lifecycle']['lifecycle'], policy['minimum_versions']['1'],
-              selected.get('executable') or '', record.get('version') or '',
-              record.get('anvil_version') or '', record.get('runtime_major',record.get('generation')) or '',
-              capability.get('version') or 'unknown', capability.get('major') or '',
-              str(capability.get('supported')), capability.get('minimum_version') or '',
-              'yes' if selected.get('path_ready') else 'no'):
+policy=json.loads((root/"config/runtime-policy.json").read_text(encoding="utf-8"))["opencode"]
+for value in (root.joinpath("VERSION").read_text(encoding="utf-8").strip(),
+              current["lifecycle"]["lifecycle"], policy["minimum_versions"]["1"],
+              selected.get("executable") or "", record.get("version") or "",
+              record.get("anvil_version") or "", record.get("runtime_major",record.get("generation")) or "",
+              capability.get("version") or "unknown", capability.get("major") or "",
+              str(capability.get("supported")), capability.get("minimum_version") or "",
+              "yes" if selected.get("path_ready") else "no"):
     print(value)
-PY
-)"
+' "$ROOT" "$record_file" <<<"$observation")"
 mapfile -t fields <<<"$summary"
 expected_anvil="${fields[0]}" lifecycle_status="${fields[1]}" policy_minimum="${fields[2]}" binary="${fields[3]}"
 recorded_opencode="${fields[4]}" recorded_anvil="${fields[5]}" recorded_major="${fields[6]}"

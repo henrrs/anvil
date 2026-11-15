@@ -41,6 +41,7 @@ function runHelper(script: string, args: string[]): Promise<string> {
 }
 
 const str = (max: number, min = 0) => tool.schema.string().min(min).max(max)
+const optionalStr = (max: number) => tool.schema.string().max(max).optional()
 const int = (minimum: number, maximum: number) => tool.schema.number().int().min(minimum).max(maximum)
 
 export const AnvilCorePlugin = async () => ({

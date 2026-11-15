@@ -156,6 +156,7 @@ assert policy["supported_majors"]==[1] and policy["default_major"]==1
 assert set(module.FEATURES)=={1}
 PY
 pass 'Runtime policy contains only the OpenCode 1 adapter'
+python3 "$ROOT/tests/doctor_large_observation.py" || fail 'doctor must accept lifecycle observations larger than ARG_MAX'
 python3 "$ROOT/tests/databricks.py" || fail 'Databricks offline integration and FinOps scenarios'
 pass 'Databricks profiles, bounded execution, no-mutation policy, and FinOps evidence scenarios'
 env ANVIL_DATABRICKS_CLI=/nonexistent/anvil-test-databricks \
@@ -189,6 +190,8 @@ assert {p.stem for p in (root/"config/commands").glob("*.md")}=={"remember","rec
 assert {p.name for p in (root/"config/skills").iterdir()}=={"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion","anvil-communication","anvil-engineering","anvil-system-design"}
 plugin=(root/"config/plugins-v1/anvil-core.ts").read_text(encoding="utf-8")
 assert "anvil_memory_search" in plugin and "ctx.tool.transform" not in plugin
+assert "const optionalStr =" in plugin and "scope: optionalStr(100)" in plugin, \
+    "Anvil memory search plugin references an undefined optional string schema helper"
 for path in root.rglob("*"):
     if not path.is_file() or ".git" in path.parts or path.suffix in {".pyc", ".db", ".sqlite"}: continue
     content=path.read_bytes()
