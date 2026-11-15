@@ -232,22 +232,49 @@ def release_checkout_changes(root: Path = ROOT, *, test_mode: bool | None = None
             source = _release_source_path(str(relative), major)
             if source:
                 source_paths.add(source)
+    ordered = sorted(source_paths)
+    try:
+        batch = subprocess.run(
+            ["git", "-C", str(root), "cat-file", "--batch"],
+            input=b"".join(f"HEAD:{relative}\n".encode("utf-8") for relative in ordered),
+            check=True, capture_output=True, timeout=15,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ordered
+    committed_files: dict[str, bytes | None] = {}
+    offset = 0
+    try:
+        for relative in ordered:
+            end = batch.index(b"\n", offset)
+            header = batch[offset:end].split()
+            offset = end + 1
+            if len(header) == 2 and header[1] == b"missing":
+                committed_files[relative] = None
+                continue
+            if len(header) != 3 or header[1] != b"blob":
+                raise ValueError("release source is not a committed blob")
+            size = int(header[2])
+            if size < 0 or batch[offset + size:offset + size + 1] != b"\n":
+                raise ValueError("invalid Git batch response")
+            committed_files[relative] = batch[offset:offset + size]
+            offset += size + 1
+        if offset != len(batch):
+            raise ValueError("unexpected Git batch output")
+    except (ValueError, IndexError, OverflowError):
+        return ordered
     changed: list[str] = []
-    for relative in sorted(source_paths):
+    for relative in ordered:
         path = root / relative
         if path.is_symlink() or not path.is_file():
             changed.append(relative)
             continue
         try:
             working = path.read_bytes()
-            committed = subprocess.run(
-                ["git", "-C", str(root), "show", f"HEAD:{relative}"],
-                check=True, capture_output=True, timeout=5,
-            ).stdout
-        except (OSError, subprocess.SubprocessError):
+            committed = committed_files[relative]
+        except OSError:
             changed.append(relative)
             continue
-        if working != committed:
+        if committed is None or working != committed:
             changed.append(relative)
     try:
         committed_version = subprocess.run(

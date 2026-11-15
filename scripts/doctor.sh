@@ -5,33 +5,36 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source "$ROOT/scripts/lib/common.sh"
 anvil_need python3
 
-expected_anvil="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").strip())' "$ROOT/VERSION")"
 observation="$(python3 "$ROOT/scripts/lifecycle_resolver.py")"
-lifecycle_json="$(python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["current"]["lifecycle"]))' <<<"$observation")"
-lifecycle_status="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["lifecycle"])' <<<"$lifecycle_json")"
 lifecycle_text="$(python3 -c 'import json,sys; sys.path.insert(0,sys.argv[1]); import lifecycle_state; print(lifecycle_state._human(json.load(sys.stdin)["current"]["lifecycle"]))' "$ROOT/scripts" <<<"$observation")"
-policy_json="$(python3 "$ROOT/scripts/runtime.py" policy)"
-policy_minimum="$(python3 - "$policy_json" <<'PY'
-import json,sys
-opencode=json.loads(sys.argv[1])["opencode"]
-print(opencode["minimum_versions"]["1"])
-PY
- )"
-binary="$(python3 -c 'import json,sys; runtime=json.load(sys.stdin)["current"]["active_runtime"].get("runtime") or {}; print(runtime.get("executable") or "")' <<<"$observation")"
 record_file="$ANVIL_DATA_DIR/installation.json"
-recorded_opencode=""
-recorded_anvil=""
-recorded_major=""
-if [[ -f "$record_file" ]]; then
-  IFS=$'\t' read -r recorded_opencode recorded_anvil recorded_major < <(python3 - "$record_file" <<'PY'
+summary="$(python3 - "$observation" "$ROOT" "$record_file" <<'PY'
 import json,sys
-try: value=json.load(open(sys.argv[1],encoding="utf-8"))
-except (OSError,ValueError): value={}
-if not isinstance(value,dict): value={}
-print(f"{value.get('version', '')}\t{value.get('anvil_version', '')}\t{value.get('runtime_major', value.get('generation', ''))}")
+from pathlib import Path
+root=Path(sys.argv[2]); sys.path.insert(0,str(root/'scripts'))
+import runtime
+current=json.loads(sys.argv[1])['current']
+selected=current['active_runtime'].get('runtime') or {}
+capability=runtime.capabilities(observed_runtime=selected)['runtime']
+try: record=json.loads(Path(sys.argv[3]).read_text(encoding='utf-8'))
+except (OSError,ValueError): record={}
+if not isinstance(record,dict): record={}
+policy=json.loads((root/'config/runtime-policy.json').read_text(encoding='utf-8'))['opencode']
+for value in (root.joinpath('VERSION').read_text(encoding='utf-8').strip(),
+              current['lifecycle']['lifecycle'], policy['minimum_versions']['1'],
+              selected.get('executable') or '', record.get('version') or '',
+              record.get('anvil_version') or '', record.get('runtime_major',record.get('generation')) or '',
+              capability.get('version') or 'unknown', capability.get('major') or '',
+              str(capability.get('supported')), capability.get('minimum_version') or '',
+              'yes' if selected.get('path_ready') else 'no'):
+    print(value)
 PY
-)
-fi
+)"
+mapfile -t fields <<<"$summary"
+expected_anvil="${fields[0]}" lifecycle_status="${fields[1]}" policy_minimum="${fields[2]}" binary="${fields[3]}"
+recorded_opencode="${fields[4]}" recorded_anvil="${fields[5]}" recorded_major="${fields[6]}"
+normalized="${fields[7]}" major="${fields[8]}" supported="${fields[9]}" minimum="${fields[10]}"
+runtime_path_ready="${fields[11]}"
 
 printf '%s\n' 'Anvil Doctor' '────────────'
 printf '%s\n' "$lifecycle_text"
@@ -88,13 +91,6 @@ if [[ -z "$binary" || ! -x "$binary" ]]; then
   esac
 fi
 
-capability_json="$(python3 -c 'import json,sys; sys.path.insert(0,sys.argv[1]); import runtime; selected=json.load(sys.stdin)["current"]["active_runtime"].get("runtime") or {}; print(json.dumps(runtime.capabilities(observed_runtime=selected)))' "$ROOT/scripts" <<<"$observation")"
-read -r normalized major supported minimum < <(python3 - "$capability_json" <<'PY'
-import json,sys
-d=json.loads(sys.argv[1]); r=d['runtime']
-print(r.get('version') or 'unknown', r.get('major') or '', str(r.get('supported')), r.get('minimum_version') or '')
-PY
-)
 printf 'OpenCode version        %s\n' "$normalized"
 printf 'OpenCode runtime        %s (%s)\n' "${major:-unknown}" "${major:+opencode-v$major}"
 printf 'Runtime policy          OpenCode 1.x (minimum %s)\n' "$policy_minimum"
@@ -198,7 +194,6 @@ if [[ -n "$path_binary" && "$path_binary" != "$ANVIL_INSTALLED_BINARY" && "$bina
   anvil_warn "PATH resolves OpenCode to $path_binary instead of the Anvil-managed executable"
   warning=1
 fi
-runtime_path_ready="$(python3 -c 'import json,sys; print("yes" if json.loads(sys.argv[1]).get("runtime", {}).get("path_ready") else "no")' "$(anvil_runtime_json)")"
 if [[ "$runtime_path_ready" == no ]]; then
   anvil_warn "OpenCode is usable through its validated absolute path but its directory is not in this session's PATH."
   warning=1

@@ -43,6 +43,9 @@ with tempfile.TemporaryDirectory() as name:
         plan_file = root / f"{executor}.json"
         persist(plan_file, accepted.as_dict())
         assert validate(plan_file, executor, runtime_major) == expected_profile
+        approved = validate(plan_file, executor, runtime_major, include_operations=True)
+        assert approved.split("\t", 1) == [expected_profile,
+               ",".join(sorted(item.kind.value for item in accepted.operations))]
 
     plan_file = root / "bad.json"
     persist(plan_file, plan(ready, DesiredState("update-runtime")).as_dict())

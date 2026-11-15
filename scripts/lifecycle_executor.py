@@ -39,7 +39,8 @@ ALLOWED = {
 }
 
 
-def validate(plan_path: Path, execution_operation: str, runtime_major: int | None = None) -> str:
+def validate(plan_path: Path, execution_operation: str, runtime_major: int | None = None,
+             *, include_operations: bool = False) -> str:
     expected_desired = PLAN_OPERATIONS.get(execution_operation)
     if expected_desired is None:
         raise ValueError(f"unsupported lifecycle executor operation: {execution_operation}")
@@ -70,9 +71,9 @@ def validate(plan_path: Path, execution_operation: str, runtime_major: int | Non
     if unexpected:
         raise ValueError("change plan contains operation(s) this executor cannot apply: "
                          + ", ".join(sorted(item.value for item in unexpected)))
-    if expected_desired == "rollback":
-        return "rollback"
-    return "config" if OperationKind.REPLACE_MANAGED in kinds else "runtime"
+    phase = ("rollback" if expected_desired == "rollback" else
+             "config" if OperationKind.REPLACE_MANAGED in kinds else "runtime")
+    return phase + ("\t" + ",".join(sorted(kind.value for kind in kinds)) if include_operations else "")
 
 
 def main() -> int:
@@ -80,8 +81,10 @@ def main() -> int:
     parser.add_argument("--operation", required=True, choices=PLAN_OPERATIONS)
     parser.add_argument("--plan-file", required=True, type=Path)
     parser.add_argument("--runtime-major", type=int, choices=(1,))
+    parser.add_argument("--operations", action="store_true", help="Return validated operation kinds with the phase")
     args = parser.parse_args()
-    print(validate(args.plan_file, args.operation, args.runtime_major))
+    print(validate(args.plan_file, args.operation, args.runtime_major,
+                   include_operations=args.operations))
     return 0
 
 

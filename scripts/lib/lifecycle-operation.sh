@@ -8,34 +8,29 @@ anvil_lifecycle_validate_plan() {
   local operation="$1" plan_file="$2" runtime_major="${3:-}"
   local args=(--operation "$operation" --plan-file "$plan_file")
   [[ -z "$runtime_major" ]] || args+=(--runtime-major "$runtime_major")
+  [[ "${4:-}" != operations ]] || args+=(--operations)
   python3 "$ANVIL_ROOT/scripts/lifecycle_executor.py" \
     "${args[@]}"
 }
 
 anvil_lifecycle_require_plan_operation() {
   local kind="$1"
-  python3 - "$ANVIL_LIFECYCLE_PLAN_FILE" "$kind" <<'PY'
-import json,sys
-try:
-    value=json.load(open(sys.argv[1],encoding="utf-8"))
-except (OSError,ValueError):
-    print("ERROR LIFECYCLE_EXECUTOR: the accepted ChangePlan is unavailable",file=sys.stderr)
-    raise SystemExit(2)
-if not any(isinstance(item,dict) and item.get("kind")==sys.argv[2]
-           for item in value.get("operations",[])):
-    print(f"ERROR LIFECYCLE_EXECUTOR: adapter requested unplanned operation {sys.argv[2]}",file=sys.stderr)
-    raise SystemExit(2)
-PY
+  case ",$ANVIL_APPROVED_OPERATIONS," in
+    *",$kind,"*) return 0 ;;
+    *) anvil_error "LIFECYCLE_EXECUTOR: adapter requested unplanned operation $kind"; return 2 ;;
+  esac
 }
 
 anvil_lifecycle_execute() {
   local operation="$1" backup="$2" source_version="$3" target_version="$4"
   local apply_fn="$5" verify_fn="$6" commit_fn="$7" rollback_fn="$8"
   local rollback_message="$9" failure_message="${10}" plan_file="${11:-}"
-  local runtime_major="${12:-}" stage_fn="${13:-}" preverify_fn="${14:-}" status phase_profile operation_id
+  local runtime_major="${12:-}" stage_fn="${13:-}" preverify_fn="${14:-}" status phase_profile operation_id validation
 
   [[ -n "$plan_file" ]] || { anvil_error 'Lifecycle executor requires the planned ChangePlan.'; return 2; }
-  phase_profile="$(anvil_lifecycle_validate_plan "$operation" "$plan_file" "$runtime_major")" || return $?
+  validation="$(anvil_lifecycle_validate_plan "$operation" "$plan_file" "$runtime_major" operations)" || return $?
+  IFS=$'\t' read -r phase_profile ANVIL_APPROVED_OPERATIONS <<<"$validation"
+  export ANVIL_APPROVED_OPERATIONS
   python3 "$ANVIL_ROOT/scripts/state.py" verify "$backup" >/dev/null
   operation_id="$(python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" begin \
     --operation "$operation" --backup "$backup" \

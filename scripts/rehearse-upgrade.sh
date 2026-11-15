@@ -104,10 +104,13 @@ if [[ "$anvil_only" == no ]]; then
   fi
 fi
 
-mkdir -p -- "$test_home/.opencode/bin"
-install -m 0755 -- "$candidate" "$test_home/.opencode/bin/opencode"
-test_binary="$test_home/.opencode/bin/opencode"
-"${rehearsal_env[@]}" python3 "$ROOT/scripts/memory.py" init >/dev/null
+if [[ "$anvil_only" == no ]]; then
+  mkdir -p -- "$test_home/.opencode/bin"
+  install -m 0755 -- "$candidate" "$test_home/.opencode/bin/opencode"
+  test_binary="$test_home/.opencode/bin/opencode"
+  "${rehearsal_env[@]}" python3 "$ROOT/scripts/memory.py" init >/dev/null
+fi
+if [[ "$anvil_only" == no ]]; then
 source_anvil_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
 import json,sys
 try:
@@ -135,22 +138,24 @@ with open(sys.argv[1],"w",encoding="utf-8") as stream:
   json.dump(record,stream,indent=2); stream.write("\n")
 PY
 chmod 600 -- "$test_data_home/anvil/installation.json"
+fi
 
 if [[ "${ANVIL_TEST_FAIL_REHEARSAL:-0}" == 1 ]]; then
   anvil_error 'Injected rehearsal failure before any live backup or mutation.'
   exit 1
 fi
 
- # OpenCode 1 exposes native text stats. Run it only against disposable
- # empty XDG directories; do not copy or inspect a user's database.
-"${rehearsal_env[@]}" "$test_binary" stats --days 30 > "$tmp_root/rehearsal-stats.txt"
-python3 - "$tmp_root/rehearsal-stats.txt" "$expected_version" <<'PY'
+if [[ "$anvil_only" == no ]]; then
+  # Runtime updates still exercise the staged binary against disposable data.
+  "${rehearsal_env[@]}" "$test_binary" stats --days 30 > "$tmp_root/rehearsal-stats.txt"
+  python3 - "$tmp_root/rehearsal-stats.txt" "$expected_version" <<'PY'
 import sys
 from pathlib import Path
 text=Path(sys.argv[1]).read_text(encoding="utf-8")
 assert "Sessions" in text and "Input" in text, "OpenCode 1 did not return its native stats summary"
 print(f"OpenCode {sys.argv[2]} stats passed against the isolated empty data store")
 PY
+fi
 
 if [[ "$anvil_only" == no ]]; then
   # Runtime operations must validate the staged profile. The Anvil-only path

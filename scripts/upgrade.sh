@@ -201,7 +201,6 @@ fi
 anvil_lifecycle_validate_plan "$operation" "$plan_file" "$target_major" >/dev/null
 backup_dir="$(ANVIL_PREVIOUS_ANVIL_VERSION="$old_anvil_version" PATH="$ANVIL_INSTALL_BIN:$PATH" \
   anvil_backup_create "$candidate_version" "$path_plan" | tail -n 1)"
-python3 "$ROOT/scripts/state.py" verify "$backup_dir"
 if [[ "${ANVIL_TEST_FAIL_AFTER_BACKUP:-0}" == 1 ]]; then
   anvil_error 'Injected failure after backup verification and before live mutation.'
   exit 1

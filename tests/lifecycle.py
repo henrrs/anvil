@@ -145,6 +145,7 @@ def read_only_and_upgrade_test(root: Path) -> None:
     env = environment(root)
     before = {name: tree(paths[name]) for name in
               ("config", "data_opencode", "state_opencode", "memory")}
+    initial_record = digest(paths["anvil_data"] / "installation.json")
     for command in (["inspect"], ["doctor"], ["capabilities", "FORMAT=json"]):
         run(["/usr/bin/make", "--no-print-directory", *command], env)
     after = {name: tree(paths[name]) for name in before}
@@ -154,6 +155,13 @@ def read_only_and_upgrade_test(root: Path) -> None:
     check(before == {name: tree(paths[name]) for name in before},
           "Anvil upgrade dry run changed config, credentials, runtime data or memory")
     check(not (paths["anvil_data"] / "backups").exists(), "dry run created a backup")
+
+    run(["/usr/bin/make", "--no-print-directory", "upgrade"],
+        environment(root, ANVIL_TEST_FAIL_AFTER_BACKUP="1"), expected=2)
+    check(before == {name: tree(paths[name]) for name in before},
+          "failure before activation changed installed user or managed files")
+    check(digest(paths["anvil_data"] / "installation.json") == initial_record,
+          "failure before activation changed installation metadata")
 
     initial_binary = digest(paths["install_bin"] / "opencode")
     preserved = {
@@ -186,8 +194,27 @@ def read_only_and_upgrade_test(root: Path) -> None:
           "upgrade did not record the current Anvil release on OpenCode 1")
     backup = Path(installed["migration"]["backup"])
     run([sys.executable, str(ROOT / "scripts/state.py"), "verify", str(backup)], env)
+    transaction = ROOT / "scripts/lifecycle_transaction.py"
+    run([sys.executable, str(transaction), "begin", "--operation", "anvil-upgrade",
+         "--backup", str(backup), "--source-version", ANVIL_VERSION,
+         "--target-version", ANVIL_VERSION, "--owner-pid", "999999"], env)
+    for phase in ("staging", "pre-activation-verification", "activating"):
+        run([sys.executable, str(transaction), "phase", phase], env)
+    (paths["config"] / "scripts/memory.py").write_text("# interrupted activation\n", encoding="utf-8")
+    run(["bash", "-c", 'source "$ANVIL_ROOT/scripts/lib/common.sh"; anvil_recover_pending'],
+        {**env, "ANVIL_ROOT": str(ROOT)})
+    check(before == {name: tree(paths[name]) for name in before},
+          "interrupted activation recovery did not restore the verified baseline")
+    check(digest(paths["anvil_data"] / "installation.json") == initial_record,
+          "interrupted activation recovery did not restore installation metadata")
+    check(not (paths["anvil_data"] / "lifecycle-transaction.json").exists(),
+          "recovered lifecycle journal was not cleared")
+    tampered = root / "tampered-snapshot"
+    shutil.copytree(backup, tampered)
+    (tampered / "config.tar.gz").write_bytes(b"altered snapshot")
+    run([sys.executable, str(ROOT / "scripts/state.py"), "verify", str(tampered)], env, expected=1)
     assert_network_clean(root)
-    print("PASS inspect/doctor/capabilities are read-only; Anvil upgrade preserves OpenCode 1, credentials, state, memory and user config")
+    print("PASS read-only commands, pre-activation failure, interrupted recovery, snapshot tamper, and Anvil upgrade preservation")
 
 
 def rollback_on_failure_test(root: Path) -> None:

@@ -101,6 +101,7 @@ anvil_recover_pending() {
   backup_valid="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("backup_valid",False))' "$transaction")"
   error="$(python3 -c 'import json,sys; v=json.loads(sys.argv[1]); print(v.get("backup_error") or v.get("error") or "")' "$transaction")"
   operation="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("operation") or "")' "$transaction")"
+  operation_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("operation_id") or "")' "$transaction")"
   if [[ -L "$ANVIL_CONFIG_DIR" || -L "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_BIN" ]]; then
     anvil_error 'A managed config or installer path became a symlink after interruption. Automatic recovery stopped for manual review.'
     return 1

@@ -45,10 +45,11 @@ if [[ -L "$ANVIL_CONFIG_DIR" || -L "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_B
 fi
 
 runtime_json="$(anvil_runtime_json)"
-IFS=$'\t' read -r binary runtime_version major adapter supported < <(python3 - "$runtime_json" <<'PY'
+IFS=$'\t' read -r binary runtime_version major adapter supported runtime_sha256 < <(python3 - "$runtime_json" <<'PY'
 import json,sys
 r=json.loads(sys.argv[1]).get("runtime") or {}
-print("\t".join(str(r.get(k) or "") for k in ("executable","version","generation","adapter","supported")))
+print("\t".join(str(r.get(k) or "") for k in ("executable","version","generation","adapter","supported"))
+      + "\t" + str((r.get("identity") or {}).get("sha256") or ""))
 PY
 )
 if [[ -z "$binary" || ! -x "$binary" ]]; then
@@ -59,6 +60,7 @@ if [[ "$supported" != True ]]; then
   anvil_error "OpenCode ${runtime_version:-unknown} is outside Anvil's supported OpenCode 1.x policy. No runtime was changed."
   exit 1
 fi
+[[ -n "$runtime_sha256" ]] || { anvil_error 'The OpenCode runtime identity is unavailable.'; exit 1; }
 
 if python3 "$ROOT/scripts/configure.py" audit-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc"; then
   from_generation=1
@@ -248,6 +250,10 @@ if [[ "${ANVIL_YES:-0}" != 1 ]]; then
 fi
 
 path_plan='{"file":"","line":"","added":false,"file_preexisted":false}'
+if [[ "$(anvil_sha256 "$binary")" != "$runtime_sha256" ]]; then
+  anvil_error 'The OpenCode executable changed after validation; upgrade stopped before live mutation.'
+  exit 1
+fi
 if ! python3 "$ROOT/scripts/runtime_quiesce.py" --binary "$binary" \
     --countdown "${ANVIL_UPGRADE_COUNTDOWN_SECONDS:-5}" \
     --grace-timeout "${ANVIL_OPEN_CODE_GRACE_SECONDS:-10}"; then
@@ -266,7 +272,6 @@ if [[ "$remaining_uncertain" == True || "$remaining_count" != 0 ]]; then
   exit 1
 fi
 backup_dir="$(ANVIL_PREVIOUS_ANVIL_VERSION="$old_anvil_version" anvil_backup_create "$runtime_version" "$path_plan" anvil | tail -n 1)"
-python3 "$ROOT/scripts/state.py" verify "$backup_dir" >/dev/null
 if [[ "${ANVIL_TEST_FAIL_AFTER_BACKUP:-0}" == 1 ]]; then
   anvil_error 'Injected failure after backup verification and before live mutation.'
   exit 1

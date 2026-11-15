@@ -229,7 +229,6 @@ if [[ "${DRY_RUN:-0}" == 1 ]]; then
 fi
 
 backup_dir="$(anvil_backup_create "$candidate_version" "$path_plan" "$backup_scope" | tail -n 1)"
-python3 "$ROOT/scripts/state.py" verify "$backup_dir"
 
 if [[ "${ANVIL_YES:-0}" != 1 ]]; then
   if [[ ! -t 0 ]]; then

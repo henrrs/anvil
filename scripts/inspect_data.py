@@ -5,11 +5,40 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 from configure import parse_jsonc
+
+
+def print_summary(observation: dict, *, root: Path, config: Path, data: Path, state: Path) -> None:
+    import lifecycle_state
+
+    current = observation["current"]
+    runtime = current["active_runtime"].get("runtime") or {}
+    def value(key: str) -> str:
+        return "" if runtime.get(key) is None else str(runtime[key])
+    print("Anvil Inspect (read-only)\n────────────────────────")
+    print(lifecycle_state._human(current["lifecycle"]))
+    print()
+    print(f"Anvil repository       {(root / 'VERSION').read_text(encoding='utf-8').strip()}")
+    print(f"Anvil installed        {current['persisted']['installation']['product_version'] or 'not recorded'}")
+    print(f"OpenCode installed     {value('installed') or 'False'}")
+    print(f"OpenCode usable        {value('usable') or 'False'}")
+    print(f"OpenCode executable    {value('executable') or 'not found'}")
+    print(f"OpenCode version       {value('version') or 'unknown'}")
+    print(f"OpenCode generation   {value('generation') or 'unknown'}")
+    print(f"Runtime adapter       {value('adapter') or 'unavailable'}")
+    print(f"Runtime compatibility {value('supported') or 'unknown'}")
+    print(f"PATH integration      {'READY' if runtime.get('path_ready') is True else 'NOT READY'}")
+    print("Network required      NO")
+    print(f"Global config          {config}")
+    print(f"CLI config             {config / 'cli.json'}")
+    print(f"Data directory         {data / 'opencode'}")
+    print(f"State directory        {state / 'opencode'}")
+    print()
 
 
 def config_data(path: Path) -> dict:
@@ -47,6 +76,10 @@ def main() -> int:
     parser.add_argument("--cwd", type=Path, required=True)
     parser.add_argument("--observation-stdin", action="store_true", help="reuse the local lifecycle snapshot")
     args = parser.parse_args()
+    observation = json.load(sys.stdin) if args.observation_stdin else None
+    if observation is not None:
+        print_summary(observation, root=Path(__file__).resolve().parents[1], config=args.config,
+                      data=args.data, state=args.state)
     config_dir: Path = args.config
     main_configs = [config_dir / name for name in ("config.json", "opencode.json", "opencode.jsonc")]
     parsed = [(path, config_data(path)) for path in main_configs if path.is_file() and not path.is_symlink()]
