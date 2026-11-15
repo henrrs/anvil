@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 import os
 import pathlib
@@ -22,14 +21,11 @@ sys.path.insert(0, str(ROOT / "evals/engineering"))
 
 from engineering.repository import identity, no_symlinks  # noqa: E402
 from harness import prepare_model  # noqa: E402
+import run as _run  # noqa: E402
 
-_run_spec = importlib.util.spec_from_file_location("anvil_engineering_run", ROOT / "evals/engineering/run.py")
-if _run_spec is None or _run_spec.loader is None:
-    raise RuntimeError("The existing engineering evaluator could not be loaded")
-_run = importlib.util.module_from_spec(_run_spec)
-_run_spec.loader.exec_module(_run)
+LIVE_FIXTURES = ("retry-policy", "refactor", "ingestion", "queue-preview", "long-horizon", "context-recovery", "fast-control")
+FAST_FIXTURE = "fast-control"
 
-LIVE_FIXTURES = (*_run.LIVE_FIXTURES, _run.FAST_FIXTURE)
 TREATMENTS = ("native-opencode", "anvil-active")
 DEFAULT_EVALUATION = "anvil-engineering-local-2026-11-14"
 DEFAULT_BUDGET = ROOT / "evals/engineering/live-local-2026-11-14/config.json"
@@ -233,7 +229,7 @@ def _permissions(project: pathlib.Path, agent: str, shell: pathlib.Path | None,
         "skill": {"*": "deny", "anvil-*": "allow"} if agent == "anvil" else "deny",
         "task": "deny", "question": "deny", "webfetch": "deny", "websearch": "deny",
         "todowrite": "deny", "todoread": "deny",
-        "anvil_memory_search": "deny", "anvil_analytics_*": "deny",
+        "anvil_memory_search": "deny",
     })
     agent_permission = dict(permission)
     config = {"$schema": "https://opencode.ai/config.json", "permission": permission,
@@ -347,7 +343,7 @@ def _verify_overlay(opencode: pathlib.Path, project: pathlib.Path, agent: str,
     if ("provider" in overlay or global_permission.get("*") != "deny" or
             permission.get("bash") != ("allow" if shell else "deny") or
             permission.get("*") != "deny" or permission.get("task") != "deny" or
-            permission.get("anvil_memory_search") != "deny" or permission.get("anvil_analytics_*") != "deny" or
+            permission.get("anvil_memory_search") != "deny" or
             not isinstance(external, dict) or external.get("*") != "deny" or
             not expected_rules.issubset(resolved_rules) or
             (agent == "anvil" and (not resolved_tools or active_anvil_tools)) or
@@ -456,7 +452,7 @@ def _require_minimal_challenge_passed(results_path: pathlib.Path, treatment: str
     if not results_path.is_file():
         raise EvaluationBlocked("Run and independently pass the disposable fast-control challenge before the full suite")
     report = json.loads(results_path.read_text(encoding="utf-8"))
-    passed = any(row.get("fixture") == _run.FAST_FIXTURE and row.get("treatment") == treatment and
+    passed = any(row.get("fixture") == FAST_FIXTURE and row.get("treatment") == treatment and
                  row.get("execution_status") == "COMPLETED" and row.get("acceptance") == "PASS"
                  for row in report.get("results", []))
     if not passed:
@@ -486,9 +482,16 @@ def _run_smoke(args, opencode: pathlib.Path) -> dict:
     prompt = "Reply with exactly READY. Do not call tools."
     argv = [str(opencode), "run", "--format", "json", "--agent", agent, "--model", args.model,
             "--variant", args.variant, "--title", f"{args.evaluation_id} local smoke", prompt]
+    diagnostic_since = time.time()
     metrics, code, elapsed = _run.run_cli_invocation(
-        args, [], argv, project, child_env(), min(args.timeout, 120), args.stdout_limit,
+        args, argv, project, child_env(), min(args.timeout, 120), args.stdout_limit,
         run_root / "trace-metadata.jsonl", "local-runtime-smoke", "smoke")
+    home = pathlib.Path(os.environ.get("HOME", pathlib.Path.home()))
+    xdg_data = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local/share"))
+    xdg_state = pathlib.Path(os.environ.get("XDG_STATE_HOME", home / ".local/state"))
+    xdg_cache = pathlib.Path(os.environ.get("XDG_CACHE_HOME", home / ".cache"))
+    _run.augment_runtime_diagnostics(metrics, home, xdg_data, xdg_state, xdg_cache,
+                                     since_epoch=diagnostic_since)
     usage = metrics.get("token_usage") or {}
     telemetry = bool(usage or metrics.get("reported_cost_telemetry") is not None)
     response = bool(metrics.get("text_chars_observed"))
@@ -498,7 +501,10 @@ def _run_smoke(args, opencode: pathlib.Path) -> dict:
               "telemetry_available": telemetry, "exit_code": code, "elapsed_seconds": elapsed,
               "event_types": metrics.get("event_types"), "token_usage": usage or None,
               "reported_cost_telemetry": metrics.get("reported_cost_telemetry"),
-              "failure_class": metrics.get("failure_class"), "safe_trace": str(run_root / "trace-metadata.jsonl"),
+              "failure_class": metrics.get("failure_class"), "failure_stage": metrics.get("failure_stage"),
+              "provider_category": metrics.get("provider_category"), "error_type": metrics.get("error_type"),
+              "error_code": metrics.get("error_code"), "http_status": metrics.get("http_status"),
+              "retry_count": metrics.get("retry_count"), "safe_trace": str(run_root / "trace-metadata.jsonl"),
               "private_reasoning_logged": False, "credentials_read_or_copied": False}
     return record
 
@@ -602,7 +608,7 @@ def _challenge(args, opencode: pathlib.Path, name: str, treatment: str) -> dict:
     trace_path = run_root / "trace-metadata.jsonl"
     interrupt_path = project if name == "context-recovery" else None
     metrics, code, elapsed = _run.run_cli_invocation(
-        args, [], argv, project, environment, args.timeout, args.stdout_limit,
+        args, argv, project, environment, args.timeout, args.stdout_limit,
         trace_path, f"{treatment}:{name}:1", "challenge", interrupt_path)
 
     resume = {"status": "NOT_REQUIRED"}
@@ -618,7 +624,7 @@ def _challenge(args, opencode: pathlib.Path, name: str, treatment: str) -> dict:
                            "--agent", agent, "--model", args.model, "--variant", args.variant, resume_prompt]
             resume_trace = run_root / "resume-trace-metadata.jsonl"
             resume_metrics, resume_code, resume_elapsed = _run.run_cli_invocation(
-                args, [], resume_argv, project, environment, args.timeout, args.stdout_limit,
+                args, resume_argv, project, environment, args.timeout, args.stdout_limit,
                 resume_trace, f"{treatment}:{name}:1", "resume")
             resume = {"status": "COMPLETED" if resume_code == 0 and session_id in resume_metrics.get("session_ids", []) else "FAILED",
                       "session_id_sha256": hashlib.sha256(session_id.encode()).hexdigest(),

@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import managed_config
-from lifecycle_contributors import AnalyticsContributor, MemoryContributor, OpenCodeContributor
+from lifecycle_contributors import MemoryContributor, OpenCodeContributor
 from semver import compare as compare_versions
 from public_errors import run_public
 
@@ -63,8 +63,7 @@ def verify(config: Path, memory: Path, binary: Path, *, product_version: str,
         import configure
         path = config / "opencode.jsonc"
         compatible = compare_versions(product_version, (Path(__file__).resolve().parents[1] / "VERSION").read_text().strip()) != 0
-        problems = (configure._audit_v1(path, source_compatible=compatible) if runtime_major == 1
-                    else configure.audit(path, source_compatible=compatible))
+        problems = configure._audit_v1(path, source_compatible=compatible)
         if problems:
             raise ValueError("managed runtime profile failed its audit")
 
@@ -76,25 +75,6 @@ def verify(config: Path, memory: Path, binary: Path, *, product_version: str,
     probe("opencode_runtime", runtime)
     probe("memory", memory_root)
 
-    lock = config / "runtime" / "analytics-requirements.lock"
-    operation_id = os.environ.get("ANVIL_LIFECYCLE_OPERATION_ID")
-    staged_runtime = False
-    if lock.is_file() and operation_id:
-        try:
-            import analytics_dependencies
-            marker = analytics_dependencies._operation_marker(
-                Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")), operation_id)
-            staged_runtime = marker.is_file() and not marker.is_symlink()
-        except (OSError, ValueError):
-            staged_runtime = False
-    if lock.is_file() and (not test_mode or staged_runtime):
-        analytics = AnalyticsContributor()
-        probe("analytics_dependencies", lambda: analytics.verify(config, memory))
-        analytics_home = Path(os.environ.get("HOME", str(Path.home()))).expanduser()
-        if phase == "pre-activation":
-            probe("analytics_service_candidate", lambda: analytics.verify_service_candidate(config, analytics_home))
-        elif not test_mode:
-            probe("analytics_service", lambda: analytics.verify_service(config, analytics_home))
     status = "PASS" if all(item.status == "PASS" for item in probes if item.required) else "FAIL"
     return VerificationResult(status, tuple(probes))
 
@@ -106,7 +86,7 @@ def main() -> int:
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--product-version", required=True)
     parser.add_argument("--runtime-version", required=True)
-    parser.add_argument("--runtime-major", type=int, choices=(1, 2), required=True)
+    parser.add_argument("--runtime-major", type=int, choices=(1,), required=True)
     parser.add_argument("--allow-repairable-drift", action="store_true",
                         help="Accept a verified pre-existing repairable Anvil-managed file during rollback")
     parser.add_argument("--phase", choices=("pre-activation", "post-activation"), default="post-activation")

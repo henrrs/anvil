@@ -21,7 +21,6 @@ PHASE_SEQUENCES = {
                       "post-activation-verification", "committing", "completed"),
     "reforge": ("applying-config", "config-applied", "before-installation-metadata", "postflight-validated"),
     "update-runtime": ("before-installation-metadata", "postflight-validated"),
-    "migrate-runtime": ("applying-config", "config-applied", "before-installation-metadata", "postflight-validated"),
     "rollback": ("restoring-snapshot", "restoring-config", "restoring-metadata",
                  "verifying-restored-state", "postflight-validated"),
 }

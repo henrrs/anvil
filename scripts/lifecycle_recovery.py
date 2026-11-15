@@ -5,18 +5,16 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
-from argparse import Namespace
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import lifecycle_baseline  # noqa: E402
 import lifecycle_state  # noqa: E402
 import managed_config  # noqa: E402
+import state as backup_state  # noqa: E402
 
 PRE_ACTIVATION = {"snapshot-verified", "staging", "pre-activation-verification",
                   "staging-failed", "pre-activation-failed"}
@@ -70,7 +68,7 @@ def classify(transaction: dict[str, Any], config: Path, installation: Path) -> d
         if _committed_target(transaction, config, installation):
             return {"state": "COMPLETED_BUT_NOT_FINALIZED", "action": "FINALIZE_TARGET",
                     "reason": "target config and installation record are already committed"}
-    if operation in {"upgrade", "reforge", "update-runtime", "migrate-runtime", "rollback"} \
+    if operation in {"upgrade", "reforge", "update-runtime", "rollback"} \
             and phase == "postflight-validated":
         if _committed_target(transaction, config, installation):
             return {"state": "COMPLETED_BUT_NOT_FINALIZED", "action": "FINALIZE_TARGET",
@@ -81,7 +79,7 @@ def classify(transaction: dict[str, Any], config: Path, installation: Path) -> d
     }:
         return {"state": "POST_ACTIVATION_RECOVERY", "action": "RESTORE_SNAPSHOT",
                 "reason": "activation did not reach a verified committed target"}
-    if operation in {"upgrade", "reforge", "migrate-runtime", "update-runtime", "rollback"} and phase in KNOWN_PHASES:
+    if operation in {"upgrade", "reforge", "update-runtime", "rollback"} and phase in KNOWN_PHASES:
         return {"state": "SNAPSHOT_RESTORE_REQUIRED", "action": "RESTORE_SNAPSHOT",
                 "reason": "a supported lifecycle operation was interrupted"}
     return {"state": "LEGACY_OR_UNKNOWN", "action": "BLOCK", "reason": "journal operation or phase is not recoverable"}
@@ -89,16 +87,25 @@ def classify(transaction: dict[str, Any], config: Path, installation: Path) -> d
 
 def verify_baseline(backup: Path) -> dict[str, Any]:
     paths = lifecycle_state.paths()
-    home = paths["home"]
-    anvil_home = Path(os.environ.get("ANVIL_HOME", str(home / ".anvil"))).expanduser().absolute()
-    config_home = Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config"))).expanduser().absolute()
-    args = Namespace(
-        backup=backup.absolute(), config_dir=paths["config"], home=home,
-        installation=paths["record"], analytics_runtime_state=anvil_home / "analytics" / "runtime.json",
-        systemd_dir=config_home / "systemd" / "user", binary=None,
-        operation_id="", port=int(os.environ.get("ANVIL_ANALYTICS_PORT", "8765")),
-    )
-    return lifecycle_baseline.verify(args, strict_configuration=True)
+    manifest = backup_state.verify(backup)
+    previous_record = backup / "previous-installation.json"
+    if previous_record.is_file():
+        expected = previous_record.read_bytes()
+        if not paths["record"].is_file() or paths["record"].read_bytes() != expected:
+            return {"status": "RESTORATION_FAILED", "reason": "installation record differs from verified snapshot"}
+        record = json.loads(expected)
+        if not isinstance(record, dict):
+            return {"status": "RESTORATION_FAILED", "reason": "snapshot installation record is invalid"}
+        if manifest.get("previous", {}).get("config_present"):
+            managed_config.validate_installed(
+                paths["config"], record.get("anvil_version"), record.get("anvil_version"),
+                record.get("managed_config_manifest_sha256"),
+            )
+    elif manifest.get("previous", {}).get("config_present"):
+        return {"status": "RESTORATION_FAILED", "reason": "snapshot has no installation record"}
+    elif paths["config"].exists() and any(paths["config"].iterdir()):
+        return {"status": "RESTORATION_FAILED", "reason": "Anvil config remains after restoring an absent baseline"}
+    return {"status": "RESTORED"}
 
 
 def main() -> int:

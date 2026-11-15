@@ -14,7 +14,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from lifecycle_contributors import AnalyticsContributor, DatabricksContributor, MemoryContributor, OpenCodeContributor
+from lifecycle_contributors import DatabricksContributor, MemoryContributor, OpenCodeContributor
 from lifecycle_resolver import CurrentState, resolve
 from public_errors import run_public
 
@@ -23,10 +23,6 @@ class OperationKind(str, Enum):
     SNAPSHOT = "CreateSnapshot"
     REPLACE_MANAGED = "ReplaceManagedArtifacts"
     INSTALL_RUNTIME = "InstallRuntimeArtifact"
-    MIGRATE_ADAPTER = "MigrateRuntimeAdapter"
-    SYNC_DEPENDENCIES = "InstallAnalyticsDependencies"
-    CAPTURE_ANALYTICS_STATE = "CaptureAnalyticsRollbackState"
-    ENSURE_SERVICE = "EnsureAnalyticsService"
     INITIALIZE_MEMORY = "InitializeMemory"
     VERIFY = "VerifyInstallation"
     COMMIT = "CommitInstallationRecord"
@@ -35,11 +31,8 @@ class OperationKind(str, Enum):
 
 
 ORDER = {OperationKind.SNAPSHOT: 0, OperationKind.REPLACE_MANAGED: 1,
-         OperationKind.CAPTURE_ANALYTICS_STATE: 1,
-         OperationKind.INSTALL_RUNTIME: 1, OperationKind.MIGRATE_ADAPTER: 2,
-         OperationKind.SYNC_DEPENDENCIES: 3, OperationKind.INITIALIZE_MEMORY: 3,
-         OperationKind.ENSURE_SERVICE: 4, OperationKind.VERIFY: 5,
-         OperationKind.COMMIT: 6, OperationKind.RESTORE: 1,
+         OperationKind.INSTALL_RUNTIME: 1, OperationKind.INITIALIZE_MEMORY: 2,
+         OperationKind.VERIFY: 3, OperationKind.COMMIT: 4, OperationKind.RESTORE: 1,
          OperationKind.DATABRICKS_SETUP: 1}
 
 
@@ -132,11 +125,11 @@ def _op(kind: OperationKind, scope: str, reason: str, *, idempotent: bool = True
 
 
 def plan(current: CurrentState, desired: DesiredState) -> ChangePlan:
-    """Decide only from the supplied snapshot; no discovery or mutation occurs."""
+    """Plan Anvil lifecycle actions for the OpenCode 1 profile."""
     state = current.lifecycle
     lifecycle = state["lifecycle"]
     source = current.persisted.installation.product_version
-    runtime_operation = desired.operation in {"update-runtime", "migrate-runtime"}
+    runtime_operation = desired.operation == "update-runtime"
     target = desired.product_version or (source if runtime_operation else state["repository"]["version"])
     blockers: list[str] = []
     operations: list[Operation] = []
@@ -146,28 +139,16 @@ def plan(current: CurrentState, desired: DesiredState) -> ChangePlan:
             blockers.append(state.get("recovery", {}).get("instruction") or "The installation needs review before upgrade.")
         elif lifecycle in {"REPOSITORY_ONLY", "PARTIALLY_INSTALLED"}:
             blockers.append("Run make reforge to complete first installation before upgrading.")
-        elif lifecycle in {"READY", "INSTALLED", "DEGRADED", "STALE", "MIGRATION_REQUIRED", "RECOVERABLE"}:
-            changed_release = source != target or lifecycle in {"RECOVERABLE", "STALE", "MIGRATION_REQUIRED"}
-            if changed_release or lifecycle == "DEGRADED" or lifecycle in {"READY", "INSTALLED"}:
-                schema_plan = current.analytics.get("schema_rollback")
-                if not isinstance(schema_plan, dict) or schema_plan.get("status") != "READY":
-                    blockers.append("Analytics persistent schema rollback compatibility could not be verified; inspect the context database before upgrading.")
-                else:
-                    operations.append(_op(OperationKind.SNAPSHOT, "anvil", "Preserve exact pre-upgrade state"))
-                    operations.extend(AnalyticsContributor().plan_rollback_state(schema_plan))
-                    operations.append(_op(OperationKind.REPLACE_MANAGED, "managed-config", "Converge target release artifacts"))
-                # The target release ships the pinned dependency lock and the
-                # product adapter converges it whenever present in staged config.
-                if not blockers:
-                    operations.extend(AnalyticsContributor().plan_product(True))
-                    operations.extend(MemoryContributor().plan_initialize(state["memory"]["present"]))
-                    operations.append(_op(OperationKind.ENSURE_SERVICE, "analytics",
-                                          "Validate the Analytics service candidate before activation; activate after config swap",
-                                          idempotent=False))
-                    operations.extend((_op(OperationKind.VERIFY, "installation", "Verify the target before metadata commit"),
-                                       _op(OperationKind.COMMIT, "installation", "Mark target release installed")))
+        elif lifecycle in {"READY", "INSTALLED", "DEGRADED", "STALE", "RECOVERABLE"}:
+            operations.extend((_op(OperationKind.SNAPSHOT, "anvil", "Preserve exact pre-upgrade state"),
+                               _op(OperationKind.REPLACE_MANAGED, "managed-config", "Converge target release artifacts"),
+                               *MemoryContributor().plan_initialize(state["memory"]["present"]),
+                               _op(OperationKind.VERIFY, "installation", "Verify target before metadata commit"),
+                               _op(OperationKind.COMMIT, "installation", "Mark target release installed")))
     elif desired.operation == "reforge":
-        if source and source != target:
+        if desired.runtime_major not in {None, 1}:
+            blockers.append("Anvil supports only OpenCode 1.x.")
+        elif source and source != target:
             blockers.append("Reforge rebuilds the installed release; run make upgrade for a release change.")
         elif lifecycle in {"UNSUPPORTED", "RECOVERY_REQUIRED", "TRANSITION_IN_PROGRESS"}:
             blockers.append("Resolve the lifecycle blocker before reforge.")
@@ -176,34 +157,24 @@ def plan(current: CurrentState, desired: DesiredState) -> ChangePlan:
         else:
             runtime = current.active_runtime.get("runtime") if isinstance(current.active_runtime, dict) else {}
             runtime = runtime if isinstance(runtime, dict) else {}
-            schema_plan = current.analytics.get("schema_rollback")
-            if not isinstance(schema_plan, dict) or schema_plan.get("status") != "READY":
-                blockers.append("Analytics persistent schema rollback compatibility could not be verified; inspect the context database before reforge.")
-            else:
-                operations.append(_op(OperationKind.SNAPSHOT, "anvil", "Preserve pre-reforge state"))
-                operations.extend(AnalyticsContributor().plan_rollback_state(schema_plan))
-                operations.append(_op(OperationKind.REPLACE_MANAGED, "managed-config", "Rebuild managed artifacts"))
+            operations.extend((_op(OperationKind.SNAPSHOT, "anvil", "Preserve pre-reforge state"),
+                               _op(OperationKind.REPLACE_MANAGED, "managed-config", "Rebuild managed artifacts")))
             if not runtime.get("usable"):
-                if not blockers:
-                    operations.append(_op(OperationKind.INSTALL_RUNTIME, "opencode",
-                                          "Provision the policy-selected runtime on first installation", idempotent=False))
-            if not blockers:
-                operations.extend(AnalyticsContributor().plan_product(True))
-                operations.extend(MemoryContributor().plan_initialize(state["memory"]["present"]))
-                operations.extend((_op(OperationKind.VERIFY, "installation", "Verify rebuilt artifacts"),
-                                   _op(OperationKind.COMMIT, "installation", "Record rebuilt installation")))
-    elif desired.operation in {"update-runtime", "migrate-runtime"}:
-        allowed = ({"READY", "INSTALLED", "DEGRADED"} if desired.operation == "migrate-runtime"
-                   else {"READY", "INSTALLED", "DEGRADED", "STALE", "MIGRATION_REQUIRED", "RECOVERABLE"})
+                operations.append(_op(OperationKind.INSTALL_RUNTIME, "opencode",
+                                      "Provision OpenCode 1 on first installation", idempotent=False))
+            operations.extend((*MemoryContributor().plan_initialize(state["memory"]["present"]),
+                               _op(OperationKind.VERIFY, "installation", "Verify rebuilt artifacts"),
+                               _op(OperationKind.COMMIT, "installation", "Record rebuilt installation")))
+    elif desired.operation == "update-runtime":
+        allowed = {"READY", "INSTALLED", "DEGRADED", "STALE", "RECOVERABLE"}
         if lifecycle not in allowed:
-            blockers.append("A current supported Anvil installation is required for runtime changes.")
-        elif desired.operation == "migrate-runtime" and desired.runtime_major not in {1, 2}:
-            blockers.append("Specify a supported target OpenCode major.")
+            blockers.append("A current supported Anvil installation is required for runtime updates.")
+        elif desired.runtime_major not in {None, 1}:
+            blockers.append("Anvil supports only OpenCode 1.x.")
         else:
-            operations.append(_op(OperationKind.SNAPSHOT, "runtime", "Preserve complete pre-runtime state"))
-            operations.extend(OpenCodeContributor().plan_runtime(
-                desired.operation, analytics_installed=bool(state["configuration"]["present"])))
-            operations.extend((_op(OperationKind.VERIFY, "runtime", "Verify runtime compatibility"),
+            operations.extend((_op(OperationKind.SNAPSHOT, "runtime", "Preserve complete pre-runtime state"),
+                               *OpenCodeContributor().plan_runtime(),
+                               _op(OperationKind.VERIFY, "runtime", "Verify OpenCode 1 compatibility"),
                                _op(OperationKind.COMMIT, "installation", "Record runtime provenance")))
     elif desired.operation == "rollback":
         if not state["backups"]["latest"]:
@@ -211,18 +182,6 @@ def plan(current: CurrentState, desired: DesiredState) -> ChangePlan:
         else:
             operations.extend((_op(OperationKind.RESTORE, "snapshot", "Restore exact recorded pre-operation snapshot"),
                                _op(OperationKind.VERIFY, "installation", "Verify restored state")))
-    elif desired.operation == "analytics":
-        if lifecycle in {"REPOSITORY_ONLY", "PARTIALLY_INSTALLED"}:
-            blockers.append("Analytics requires an installed Anvil workspace.")
-        elif lifecycle in {"CORRUPTED", "UNSUPPORTED", "RECOVERY_REQUIRED", "TRANSITION_IN_PROGRESS"}:
-            blockers.append(state.get("recovery", {}).get("instruction") or
-                            "Resolve the Anvil lifecycle blocker before starting Analytics.")
-        else:
-            contribution = AnalyticsContributor().plan_service(current.analytics)
-            if contribution:
-                operations.extend((_op(OperationKind.SNAPSHOT, "analytics", "Preserve service configuration"),
-                                   *contribution,
-                                   _op(OperationKind.VERIFY, "analytics", "Verify local service health")))
     elif desired.operation == "databricks-setup":
         contribution = DatabricksContributor().plan_setup(current.databricks)
         if contribution:
@@ -232,24 +191,18 @@ def plan(current: CurrentState, desired: DesiredState) -> ChangePlan:
     else:
         raise ValueError(f"unknown lifecycle operation: {desired.operation}")
 
-    plan_desired = desired
-    if runtime_operation:
-        observed_runtime = current.active_runtime.get("runtime") if isinstance(current.active_runtime, dict) else {}
-        observed_runtime = observed_runtime if isinstance(observed_runtime, dict) else {}
-        runtime_major = desired.runtime_major or observed_runtime.get("generation")
-        # Runtime changes explicitly target the installed product release and
-        # the currently selected or explicitly requested runtime major.
-        plan_desired = DesiredState(desired.operation, desired.product_version or source, runtime_major)
+    selected_runtime_major = 1 if runtime_operation or (
+        desired.operation == "reforge" and desired.runtime_major is not None) else None
+    plan_desired = DesiredState(desired.operation, desired.product_version, selected_runtime_major)
     result = ChangePlan(plan_desired, source, tuple(operations), tuple(blockers))
     result.validate()
     return result
-
 
 def render_text(result: ChangePlan) -> str:
     """Render a previously accepted plan without resolving or replanning state."""
     desired = result.desired
     target = desired.product_version
-    if target is None and desired.operation in {"update-runtime", "migrate-runtime"}:
+    if target is None and desired.operation == "update-runtime":
         target = result.source_product_version
     lines = [f"Anvil {desired.operation} plan",
              f"  installed release  {result.source_product_version or 'not recorded'}",
@@ -269,8 +222,8 @@ def render_text(result: ChangePlan) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("operation", nargs="?", choices=("upgrade", "reforge", "update-runtime", "migrate-runtime",
-                                                          "rollback", "analytics", "databricks-setup"))
+    parser.add_argument("operation", nargs="?", choices=("upgrade", "reforge", "update-runtime",
+                                                          "rollback", "databricks-setup"))
     parser.add_argument("--target-version")
     parser.add_argument("--runtime-major", type=int)
     parser.add_argument("--format", choices=("text", "json"), default="text")

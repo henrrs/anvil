@@ -3,15 +3,16 @@
 set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
-if [[ $# -lt 3 || $# -gt 4 ]]; then
-  printf 'usage: validate-candidate.sh CANDIDATE CONFIG_DIR VERSION [MAJOR]\n' >&2
+if [[ $# != 3 ]]; then
+  printf 'usage: validate-candidate.sh CANDIDATE CONFIG_DIR VERSION\n' >&2
   exit 2
 fi
 candidate="$1"
 config_source="$2"
 expected_version="${3#v}"
 expected_version="${expected_version#opencode }"
-runtime_major="${4:-${expected_version%%.*}}"
+runtime_major="${expected_version%%.*}"
+[[ "$runtime_major" == 1 ]] || { printf 'ERROR Anvil supports only OpenCode 1.x.\n' >&2; exit 2; }
 temp_root="$(mktemp -d "${TMPDIR:-/tmp}/anvil-opencode-smoke.XXXXXX")"
 service_started=0
 service_pid=""
@@ -97,12 +98,6 @@ normalize_version() {
   value="${value#v}"
   printf '%s\n' "$value"
 }
-run_isolated() {
-  (cd -- "$ROOT" && env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$home" \
-    XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" XDG_STATE_HOME="$state_home" \
-    TMPDIR="${TMPDIR:-/tmp}" LANG="${LANG:-C.UTF-8}" OPENCODE_DISABLE_AUTOUPDATE=1 \
-    OPENCODE_PASSWORD=anvil-isolated-smoke-only "$candidate" "$@")
-}
 actual_version="$(normalize_version "$(env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$home" \
   XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" XDG_STATE_HOME="$state_home" \
   "$candidate" --version 2>/dev/null | head -n 1)")"
@@ -115,16 +110,15 @@ if [[ "${ANVIL_TEST_MODE:-0}" == 1 && "${ANVIL_TEST_FAIL_CANDIDATE_VALIDATION:-0
   exit 1
 fi
 
-if [[ "$runtime_major" == 1 ]]; then
-  run_isolated() {
-    (cd -- "$ROOT" && env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$home" \
-      XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" XDG_STATE_HOME="$state_home" \
-      TMPDIR="${TMPDIR:-/tmp}" LANG="${LANG:-C.UTF-8}" OPENCODE_DISABLE_AUTOUPDATE=1 \
-      "$candidate" "$@")
-  }
-  run_isolated debug config > "$temp_root/config.json"
-  run_isolated debug skill > "$temp_root/skills.json"
-  python3 - "$temp_root" "$expected_version" "$config_source" <<'PY'
+run_isolated() {
+  (cd -- "$ROOT" && env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$home" \
+    XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" XDG_STATE_HOME="$state_home" \
+    TMPDIR="${TMPDIR:-/tmp}" LANG="${LANG:-C.UTF-8}" OPENCODE_DISABLE_AUTOUPDATE=1 \
+    "$candidate" "$@")
+}
+run_isolated debug config > "$temp_root/config.json"
+run_isolated debug skill > "$temp_root/skills.json"
+python3 - "$temp_root" "$expected_version" "$config_source" <<'PY'
 import json,sys
 from pathlib import Path
 root=Path(sys.argv[1])
@@ -145,93 +139,4 @@ expected={path.name for path in (config_root/"skills").iterdir() if path.is_dir(
 assert expected <= names, f"OpenCode 1 did not load configured skills: {sorted(expected-names)}"
 print(f"OpenCode {sys.argv[2]}: V1 config, agent, commands and skills validated")
 PY
-  exit 0
-fi
-
-port="$(python3 - <<'PY'
-import socket
-with socket.socket() as sock:
-    sock.bind(("127.0.0.1", 0))
-    print(sock.getsockname()[1])
-PY
-)"
-service_url="http://127.0.0.1:$port"
-(cd -- "$ROOT" && env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$home" XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" \
-  XDG_STATE_HOME="$state_home" TMPDIR="${TMPDIR:-/tmp}" LANG="${LANG:-C.UTF-8}" \
-  OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_PASSWORD=anvil-isolated-smoke-only \
-  "$candidate" serve --hostname 127.0.0.1 --port "$port" >"$temp_root/server.log" 2>&1) &
-service_pid=$!
-service_started=1
-run_isolated debug config > "$temp_root/config-sources.json"
-ready=0
-for _ in $(seq 1 60); do
-  if run_isolated api --server "$service_url" GET /api/command > "$temp_root/commands.json" 2>/dev/null && \
-     run_isolated api --server "$service_url" GET /api/skill > "$temp_root/skills.json" 2>/dev/null && \
-     run_isolated api --server "$service_url" GET /api/plugin > "$temp_root/plugins.json" 2>/dev/null && \
-     run_isolated api --server "$service_url" GET /api/reference > "$temp_root/references.json" 2>/dev/null && \
-     python3 - "$temp_root" "$config_source" <<'PY'
-import json, sys
-from pathlib import Path
-root=Path(sys.argv[1])
-config_root=Path(sys.argv[2])
-def names(file, key):
-    try:
-        value=json.loads((root/file).read_text(encoding="utf-8"))
-        return {item.get(key) for item in value.get("data", []) if isinstance(item, dict)}
-    except (OSError, ValueError):
-        return set()
-sources=json.loads((root/"config-sources.json").read_text(encoding="utf-8"))
-docs=[item.get("info") for item in sources if item.get("type")=="document" and isinstance(item.get("info"),dict)]
-config=next((item for item in docs if item.get("default_agent")=="anvil"),{})
-commands={path.stem for path in (config_root/"commands").glob("*.md")}
-skills={path.name for path in (config_root/"skills").iterdir() if path.is_dir() and (path/"SKILL.md").is_file()} if (config_root/"skills").is_dir() else set()
-plugins={"anvil-core"} if "./plugins/anvil-core" in config.get("plugins",[]) else set()
-references={"anvil-knowledge"} if "anvil-knowledge" in config.get("references",{}) else set()
-raise SystemExit(0 if commands <= names("commands.json","name")
-                 and skills <= names("skills.json","id")
-                 and plugins <= names("plugins.json","id")
-                 and references <= names("references.json","name") else 1)
-PY
-  then
-    ready=1
-    break
-  fi
-  kill -0 "$service_pid" 2>/dev/null || break
-  sleep 0.2
-done
-[[ "$ready" == 1 ]] || {
-  printf 'ERROR candidate did not register Anvil commands, skills, plugin and reference before the smoke-test timeout.\n' >&2
-  exit 1
-}
-
-python3 - "$temp_root" "$expected_version" "$config_source" <<'PY'
-import json, sys
-from pathlib import Path
-root=Path(sys.argv[1])
-config_root=Path(sys.argv[3])
-version=sys.argv[2]
-def load(name):
-    return json.loads((root/name).read_text(encoding="utf-8"))
-sources=load("config-sources.json")
-docs=[item.get("info") for item in sources if item.get("type")=="document" and isinstance(item.get("info"),dict)]
-config=next((item for item in docs if item.get("default_agent")=="anvil"),None)
-assert config, "candidate did not load the native Anvil config"
-assert config["default_agent"]=="anvil"
-assert config["agents"]["anvil"]["mode"]=="primary"
-assert not ({"model", "variant", "system", "prompt"} & set(config["agents"]["anvil"])), "Anvil pins a model or replaces the native system prompt"
-assert all(name=="anvil" or agent.get("disabled") is True for name,agent in config["agents"].items())
-commands=load("commands.json").get("data",[])
-command_names={item.get("name") for item in commands}
-expected_commands={path.stem for path in (config_root/"commands").glob("*.md")}
-assert expected_commands <= command_names, f"missing configured commands: {sorted(expected_commands-command_names)}"
-skills=load("skills.json").get("data",[])
-skill_ids={item.get("id") for item in skills}
-expected={path.name for path in (config_root/"skills").iterdir() if path.is_dir() and (path/"SKILL.md").is_file()} if (config_root/"skills").is_dir() else set()
-assert expected <= skill_ids, f"missing configured skills: {sorted(expected-skill_ids)}"
-plugins=load("plugins.json").get("data",[])
-core=[item for item in plugins if item.get("id")=="anvil-core" and item.get("state",{}).get("status")=="active"]
-assert core, "the Anvil V2 core plugin did not load"
-references=load("references.json").get("data",[])
-assert "anvil-knowledge" in {item.get("name") for item in references}, "Anvil's V2 knowledge reference did not load"
-print(f"OpenCode {version}: native config, Anvil primary agent, commands, skills, plugin and knowledge reference validated")
-PY
+exit 0

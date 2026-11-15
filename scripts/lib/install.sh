@@ -3,31 +3,25 @@
 # This library assumes common.sh and paths.sh have already been sourced.
 
 anvil_build_config() {
-  local destination="$1" prior_config="${2:-}" preserve_cli="${3:-no}" major="${4:-2}" source_version="${5:-}" recover_managed="${6:-no}" allow_repairable_drift="${7:-no}" source_manifest_sha256=""
+  local destination="$1" prior_config="${2:-}" preserve_cli="${3:-no}" source_version="${4:-}" recover_managed="${5:-no}" allow_repairable_drift="${6:-no}" source_manifest_sha256=""
   [[ -n "$destination" && "$destination" != / ]] || { anvil_error 'Invalid generated config destination.'; return 1; }
-  [[ "$major" == 1 || "$major" == 2 ]] || { anvil_error "Unsupported OpenCode runtime major: $major"; return 1; }
   mkdir -p -- "$destination"
   cp -R -- "$ANVIL_ROOT/config/AGENTS.md" "$destination/AGENTS.md"
   cp -R -- "$ANVIL_ROOT/config/commands" "$destination/commands"
   cp -R -- "$ANVIL_ROOT/config/skills" "$destination/skills"
-  if [[ "$major" == 2 ]]; then
-    cp -R -- "$ANVIL_ROOT/config/plugins" "$destination/plugins"
-  else
-    mkdir -p -- "$destination/plugins"
-    install -m 0600 -- "$ANVIL_ROOT/config/plugins-v1/anvil-core.ts" \
-      "$destination/plugins/anvil-core-v1.ts"
-  fi
-  local build_args=(build --source "$ANVIL_ROOT/config" --destination "$destination" --major "$major")
+  mkdir -p -- "$destination/plugins"
+  install -m 0600 -- "$ANVIL_ROOT/config/plugins-v1/anvil-core.ts" \
+    "$destination/plugins/anvil-core-v1.ts"
+  local build_args=(build --source "$ANVIL_ROOT/config" --destination "$destination")
   if [[ -n "$prior_config" ]]; then
     build_args+=(--prior-config-dir "$prior_config")
   fi
   if [[ "$preserve_cli" == yes ]]; then build_args+=(--preserve-cli); fi
   python3 "$ANVIL_ROOT/scripts/configure.py" "${build_args[@]}"
   mkdir -p -- "$destination/scripts"
-  mkdir -p -- "$destination/config" "$destination/runtime"
+  mkdir -p -- "$destination/config"
   install -m 0600 -- "$ANVIL_ROOT/VERSION" "$destination/VERSION"
   install -m 0600 -- "$ANVIL_ROOT/config/runtime-policy.json" "$destination/config/runtime-policy.json"
-  install -m 0600 -- "$ANVIL_ROOT/config/analytics-requirements.lock" "$destination/runtime/analytics-requirements.lock"
   install -m 0600 -- "$ANVIL_ROOT/scripts/memory.py" "$destination/scripts/memory.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/source_registry.py" "$destination/scripts/source_registry.py"
   install -m 0600 -- "$ANVIL_ROOT/scripts/runtime.py" "$destination/scripts/runtime.py"
@@ -59,14 +53,6 @@ anvil_build_config() {
   find "$destination/scripts/analysis" -type d -name __pycache__ -prune -exec rm -rf -- {} +
   find "$destination/scripts/analysis" -type f -name '*.pyc' -delete
   find "$destination/scripts/analysis" -type f -exec chmod 600 -- {} +
-  rm -rf -- "$destination/scripts/analytics" "$destination/web/analytics"
-  cp -R -- "$ANVIL_ROOT/scripts/analytics" "$destination/scripts/analytics"
-  mkdir -p -- "$destination/web"
-  mkdir -p -- "$destination/web/analytics"
-  find "$ANVIL_ROOT/web/analytics" -mindepth 1 -maxdepth 1 -type f -exec cp -- {} "$destination/web/analytics/" \;
-  find "$destination/scripts/analytics" "$destination/web/analytics" -type d -name __pycache__ -prune -exec rm -rf -- {} +
-  find "$destination/scripts/analytics" "$destination/web/analytics" -type f -name '*.pyc' -delete
-  find "$destination/scripts/analytics" "$destination/web/analytics" -type f -exec chmod 600 -- {} +
   if [[ -z "$source_version" && -f "$ANVIL_DATA_DIR/installation.json" ]]; then
     source_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
 import json,sys
@@ -165,40 +151,8 @@ if findings:
   )
 }
 
-anvil_print_analytics_plan() {
-  local config="$1"
-  local lock="$config/runtime/analytics-requirements.lock"
-  [[ -f "$lock" ]] || return 0
-  python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" plan \
-    --lock "$lock" --data-root "$ANVIL_DATA_HOME"
-}
-
-anvil_converge_analytics_runtime() {
-  local config_dir="$1" lock="$1/runtime/analytics-requirements.lock"
-  [[ -f "$lock" ]] || return 0
-  [[ "${ANVIL_TEST_MODE:-0}" != 1 ]] || return 0
-  if [[ "${ANVIL_ANALYTICS_RUNTIME_STAGED:-0}" == 1 ]]; then
-    python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" resolve \
-      --lock "$lock" --data-root "$ANVIL_DATA_HOME" >/dev/null || {
-        anvil_error 'The staged Analytics runtime failed its final pre-activation check.'
-        return 1
-      }
-  else
-    python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" prepare \
-      --lock "$lock" --data-root "$ANVIL_DATA_HOME" \
-      --operation-id "${ANVIL_LIFECYCLE_OPERATION_ID:-}" >/dev/null || {
-        anvil_error 'Analytics runtime dependency convergence failed before service activation.'
-        return 1
-      }
-  fi
-  local systemd_dir="${XDG_CONFIG_HOME:-$ANVIL_HOME_DIR/.config}/systemd/user"
-  python3 "$ANVIL_ROOT/scripts/analytics_service.py" sync \
-    --config-dir "$config_dir" --home "$ANVIL_HOME_DIR" --systemd-dir "$systemd_dir" \
-    --port "${ANVIL_ANALYTICS_PORT:-8765}"
-}
-
 anvil_apply_config() {
-  local source_config="$1" allow_user_only="${2:-no}" defer_analytics_service="${3:-no}"
+  local source_config="$1" allow_user_only="${2:-no}"
   [[ -d "$source_config" ]] || { anvil_error "Generated Anvil config is missing: $source_config"; return 1; }
   mkdir -p -- "$(dirname -- "$ANVIL_CONFIG_DIR")"
   local parent stage previous managed_script managed_tree
@@ -214,30 +168,8 @@ anvil_apply_config() {
     anvil_error 'Anvil global config staging copy is incomplete.'
     return 1
   fi
-  if [[ -f "$stage/runtime/analytics-requirements.lock" && "${ANVIL_TEST_MODE:-0}" != 1 &&
-        "${ANVIL_ANALYTICS_RUNTIME_STAGED:-0}" != 1 && "${ANVIL_ROLLBACK_RESTORE:-0}" != 1 ]]; then
-    python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" prepare \
-      --lock "$stage/runtime/analytics-requirements.lock" --data-root "$ANVIL_DATA_HOME" \
-      --operation-id "${ANVIL_LIFECYCLE_OPERATION_ID:-}" >/dev/null || {
-        rm -rf -- "$stage"
-        anvil_error 'Analytics runtime dependency staging failed before configuration activation.'
-        return 1
-      }
-  fi
   previous="$parent/.anvil-config-previous-$$"
   [[ ! -e "$previous" && ! -L "$previous" ]] || { rm -rf -- "$stage"; anvil_error 'A prior config swap needs manual review.'; return 1; }
-  if [[ -f "$stage/runtime/analytics-requirements.lock" && "${ANVIL_TEST_MODE:-0}" != 1 &&
-        "${ANVIL_ANALYTICS_RUNTIME_STAGED:-0}" == 1 && "${ANVIL_ROLLBACK_RESTORE:-0}" != 1 ]]; then
-    python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" activate \
-      --lock "$stage/runtime/analytics-requirements.lock" --data-root "$ANVIL_DATA_HOME" \
-      --operation-id "$ANVIL_LIFECYCLE_OPERATION_ID" >/dev/null || {
-        rm -rf -- "$stage"
-        anvil_error 'The verified Analytics runtime could not be activated; the snapshot restoration path will run.'
-        return 1
-      }
-    ANVIL_ANALYTICS_RUNTIME_ACTIVATED=1
-    export ANVIL_ANALYTICS_RUNTIME_ACTIVATED
-  fi
   if [[ -e "$ANVIL_CONFIG_DIR" || -L "$ANVIL_CONFIG_DIR" ]]; then
     mv -- "$ANVIL_CONFIG_DIR" "$previous"
   fi
@@ -254,32 +186,12 @@ anvil_apply_config() {
   for managed_script in memory.py source_registry.py runtime.py runtime_state.py databricks.py databricks_finops.py artifacts.py engineering.py public_errors.py analyze.py; do
     [[ ! -f "$ANVIL_CONFIG_DIR/scripts/$managed_script" ]] || chmod 700 -- "$ANVIL_CONFIG_DIR/scripts/$managed_script"
   done
-  for managed_tree in communication databricks_providers engineering analysis analytics; do
+  for managed_tree in communication databricks_providers engineering analysis; do
     if [[ -d "$ANVIL_CONFIG_DIR/scripts/$managed_tree" ]]; then
       find "$ANVIL_CONFIG_DIR/scripts/$managed_tree" -type f -exec chmod 600 -- {} +
     fi
   done
-  if [[ -d "$ANVIL_CONFIG_DIR/web/analytics" ]]; then
-    find "$ANVIL_CONFIG_DIR/web/analytics" -type f -exec chmod 600 -- {} +
-  fi
-  if [[ "${ANVIL_ROLLBACK_RESTORE:-0}" == 1 && "$defer_analytics_service" != yes ]]; then
-    anvil_error 'Rollback config restoration must defer Analytics service activation to the captured baseline restorer.'
-    return 1
-  fi
-  if [[ "${ANVIL_TEST_MODE:-0}" != 1 && "$defer_analytics_service" != yes && -f "$ANVIL_ROOT/scripts/analytics_service.py" ]]; then
-    local systemd_dir="${XDG_CONFIG_HOME:-$ANVIL_HOME_DIR/.config}/systemd/user"
-    if [[ -f "$ANVIL_CONFIG_DIR/runtime/analytics-requirements.lock" ]]; then
-      if ! anvil_converge_analytics_runtime "$ANVIL_CONFIG_DIR"; then
-        anvil_error 'Analytics service convergence failed after target activation; the lifecycle operation must restore its baseline.'
-        return 1
-      fi
-    elif ! python3 "$ANVIL_ROOT/scripts/analytics_service.py" sync \
-          --config-dir "$ANVIL_CONFIG_DIR" --home "$ANVIL_HOME_DIR" --systemd-dir "$systemd_dir" \
-          --port "${ANVIL_ANALYTICS_PORT:-8765}"; then
-      anvil_error 'Analytics service convergence failed after target activation; the lifecycle operation must restore its baseline.'
-      return 1
-    fi
-  fi
+
 }
 
 anvil_offer_databricks_setup() {

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""The shared executor consumes, validates and gates on the planned ChangePlan."""
+"""The shared executor validates the exact lifecycle plan before applying it."""
 
 from __future__ import annotations
 
 import copy
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -26,57 +27,39 @@ def persist(path: Path, payload: dict) -> None:
 with tempfile.TemporaryDirectory() as name:
     root = Path(name)
     persisted = resolve_persisted(root / "home", root / "config", root / "data")
-    base = {"repository": {"version": "2.17.0"}, "configuration": {"present": True},
+    base = {"repository": {"version": "2.20.1"}, "configuration": {"present": True},
             "memory": {"present": True}, "backups": {"latest": str(root / "snapshot")},
             "recovery": {"applicable": True}}
     runtime = {"runtime": {"usable": True, "generation": 1, "executable": "/fixture/opencode"}}
-    analytics = {"schema_rollback": {"status": "READY", "policy": "NO_MIGRATION",
-                                     "schema_version": 3, "target_schema_version": 3}}
-    ready = CurrentState(persisted, dict(base, lifecycle="READY"), runtime, analytics, {})
+    ready = CurrentState(persisted, dict(base, lifecycle="READY"), runtime, {"overall": "READY"})
 
-    for desired, executor_name, expected_profile, runtime_major in (
-        (DesiredState("upgrade", "2.17.0"), "anvil-upgrade", "config", None),
-        (DesiredState("reforge", "2.17.0", 1), "reforge", "config", 1),
+    for desired, executor, expected_profile, runtime_major in (
+        (DesiredState("upgrade", "2.20.1"), "anvil-upgrade", "config", None),
+        (DesiredState("reforge", "2.20.1"), "reforge", "config", None),
         (DesiredState("update-runtime"), "update-runtime", "runtime", 1),
-        (DesiredState("migrate-runtime", runtime_major=2), "migrate-runtime", "config", 2),
         (DesiredState("rollback"), "rollback", "rollback", None),
     ):
         accepted = plan(ready, desired)
-        plan_file = root / f"{executor_name}.json"
+        plan_file = root / f"{executor}.json"
         persist(plan_file, accepted.as_dict())
-        assert validate(plan_file, executor_name, runtime_major) == expected_profile
+        assert validate(plan_file, executor, runtime_major) == expected_profile
 
     plan_file = root / "bad.json"
-    wrong_operation = plan(ready, DesiredState("update-runtime")).as_dict()
-    persist(plan_file, wrong_operation)
+    persist(plan_file, plan(ready, DesiredState("update-runtime")).as_dict())
     try:
         validate(plan_file, "anvil-upgrade")
     except ValueError as exc:
         assert "does not match" in str(exc)
     else:
-        raise AssertionError("executor accepted a ChangePlan for a different operation")
+        raise AssertionError("executor accepted a plan for another operation")
 
-    update_plan = plan(ready, DesiredState("update-runtime")).as_dict()
-    persist(plan_file, update_plan)
+    persist(plan_file, plan(ready, DesiredState("update-runtime")).as_dict())
     try:
-        validate(plan_file, "update-runtime", 2)
+        validate(plan_file, "update-runtime", 99)
     except ValueError as exc:
-        assert "runtime major" in str(exc)
+        assert "OpenCode 1.x" in str(exc)
     else:
-        raise AssertionError("executor accepted a plan for a different runtime major")
-
-    migration_ready = CurrentState(
-        persisted, dict(base, lifecycle="READY"), runtime,
-        {"schema_rollback": {"status": "READY", "policy": "BACKUP_RESTORE_REQUIRED",
-                             "schema_version": 2, "target_schema_version": 3,
-                             "restore_required": True}}, {},
-    )
-    for desired, operation in ((DesiredState("upgrade", "2.17.0"), "anvil-upgrade"),
-                               (DesiredState("reforge", "2.17.0", 1), "reforge")):
-        migration_plan = plan(migration_ready, desired)
-        assert OperationKind.CAPTURE_ANALYTICS_STATE in {item.kind for item in migration_plan.operations}
-        persist(plan_file, migration_plan.as_dict())
-        assert validate(plan_file, operation, desired.runtime_major) == "config"
+        raise AssertionError("executor accepted an unsupported runtime major")
 
     incomplete = copy.deepcopy(plan(ready, DesiredState("update-runtime")).as_dict())
     incomplete["operations"] = [item for item in incomplete["operations"]
@@ -87,9 +70,9 @@ with tempfile.TemporaryDirectory() as name:
     except ValueError as exc:
         assert "omits required" in str(exc)
     else:
-        raise AssertionError("executor accepted a plan with a missing runtime operation")
+        raise AssertionError("executor accepted a plan missing runtime installation")
 
-    blocked = copy.deepcopy(plan(ready, DesiredState("upgrade", "2.17.0")).as_dict())
+    blocked = copy.deepcopy(plan(ready, DesiredState("upgrade", "2.20.1")).as_dict())
     blocked["blockers"] = ["review required"]
     persist(plan_file, blocked)
     try:
@@ -97,7 +80,7 @@ with tempfile.TemporaryDirectory() as name:
     except ValueError as exc:
         assert "blocked" in str(exc)
     else:
-        raise AssertionError("executor accepted a blocked ChangePlan")
+        raise AssertionError("executor accepted a blocked plan")
 
     plan_file.chmod(0o644)
     try:
@@ -107,4 +90,4 @@ with tempfile.TemporaryDirectory() as name:
     else:
         raise AssertionError("executor accepted a world-readable plan file")
 
-print("PASS shared lifecycle executor validates the exact serialized plan before applying adapters")
+print("PASS lifecycle executor validates the planned operation and protects private plan files")

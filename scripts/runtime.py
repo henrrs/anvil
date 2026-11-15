@@ -29,18 +29,6 @@ FEATURES = {
         "native_tool_output_limits": False,
         "native_compaction_configuration": True,
     },
-    2: {
-        "native_plugins": True,
-        "anvil_core_plugin": True,
-        "native_references": True,
-        "native_memory_search": True,
-        "native_stats": True,
-        "structured_stats": True,
-        "ordered_permissions": True,
-        "native_subagent_policy": True,
-        "native_tool_output_limits": True,
-        "native_compaction_configuration": True,
-    },
 }
 
 
@@ -53,8 +41,8 @@ def policy() -> dict[str, Any]:
         raise ValueError("runtime policy is missing opencode settings")
     supported = opencode.get("supported_majors")
     default = opencode.get("default_major")
-    if not isinstance(supported, list) or not supported or any(item not in FEATURES for item in supported):
-        raise ValueError("runtime policy supported_majors must be a non-empty list containing supported adapters")
+    if supported != [1]:
+        raise ValueError("Anvil supports only OpenCode 1.x")
     if default not in supported:
         raise ValueError("runtime policy default_major must be supported")
     for major in supported:
@@ -98,7 +86,7 @@ def inspect_binary(binary: str | None = None) -> tuple[str | None, str | None, i
     return selected, normalized, parsed[0] if parsed else None
 
 
-def capabilities(binary: str | None = None, requested_major: int | None = None,
+def capabilities(binary: str | None = None,
                  observed_runtime: dict[str, Any] | None = None) -> dict[str, Any]:
     release = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     configured = policy()["opencode"]
@@ -108,7 +96,7 @@ def capabilities(binary: str | None = None, requested_major: int | None = None,
         detected = observed_runtime.get("generation")
     else:
         path, version, detected = inspect_binary(binary)
-    major = requested_major if requested_major is not None else detected
+    major = detected
     installed = bool(path and version and detected is not None)
     supported = configured["supported_majors"]
     supported_runtime = major in supported if major is not None else None
@@ -132,7 +120,6 @@ def capabilities(binary: str | None = None, requested_major: int | None = None,
         "policy": {
             "supported_majors": supported,
             "default_major": configured["default_major"],
-            "allow_automatic_major_upgrade": configured["allow_automatic_major_upgrade"],
         },
         "core": {
             "anvil_agent": major in FEATURES if major is not None else unavailable,
@@ -171,7 +158,6 @@ def main() -> int:
     sub = parser.add_subparsers(dest="action", required=True)
     p_caps = sub.add_parser("capabilities")
     p_caps.add_argument("--binary")
-    p_caps.add_argument("--major", type=int)
     p_caps.add_argument("--format", choices=("json", "text"), default="json")
     sub.add_parser("policy")
     args = parser.parse_args()
@@ -179,7 +165,7 @@ def main() -> int:
         if args.action == "policy":
             print(json.dumps(policy(), indent=2))
             return 0
-        result = capabilities(args.binary, args.major)
+        result = capabilities(args.binary)
         if args.format == "json":
             print(json.dumps(result, indent=2))
             return 0

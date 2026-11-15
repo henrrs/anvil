@@ -7,9 +7,9 @@ source "$ROOT/scripts/lib/common.sh"
 usage() {
   cat <<'EOF'
 Internal OpenCode release helper:
-  install-opencode.sh resolve [MAJOR]
-  install-opencode.sh stage VERSION DIRECTORY [MAJOR]
-  install-opencode.sh install CANDIDATE_BINARY VERSION [MAJOR]
+  install-opencode.sh resolve
+  install-opencode.sh stage VERSION DIRECTORY
+  install-opencode.sh install CANDIDATE_BINARY VERSION
 EOF
 }
 
@@ -42,24 +42,17 @@ PY
 case "${1:-}" in
   resolve)
     anvil_need python3
-    major="${2:-$(python3 "$ROOT/scripts/runtime.py" policy | python3 -c 'import json,sys; print(json.load(sys.stdin)["opencode"]["default_major"])')}"
-    case "$major" in
-      1) python3 "$ROOT/scripts/opencode_v1_release.py" resolve ;;
-      2) python3 "$ROOT/scripts/opencode_release.py" resolve ;;
-      *) anvil_error "Unsupported OpenCode runtime major: $major"; exit 2 ;;
-    esac
+    [[ $# == 1 ]] || { usage >&2; exit 2; }
+    python3 "$ROOT/scripts/opencode_v1_release.py" resolve
     ;;
   stage)
-    [[ $# -ge 3 && $# -le 4 ]] || { usage >&2; exit 2; }
+    [[ $# == 3 ]] || { usage >&2; exit 2; }
     anvil_need python3 tar
     version="$(candidate_version "$2")"
     stage_dir="$3"
-    major="${4:-${version%%.*}}"
-    [[ "${version%%.*}" == "$major" ]] || { anvil_error "OpenCode $version does not belong to requested major $major."; exit 2; }
+    [[ "${version%%.*}" == 1 ]] || { anvil_error "Anvil supports only OpenCode 1.x, not $version."; exit 2; }
     [[ -n "$stage_dir" && "$stage_dir" != / ]] || { anvil_error 'Invalid staging directory.'; exit 2; }
     mkdir -p -- "$stage_dir"
-    case "$major" in
-      1)
         archive="$stage_dir/opencode-${version}.archive"
         python3 "$ROOT/scripts/opencode_v1_release.py" download --version "$version" --destination "$archive" > "$stage_dir/release.json"
         python3 - "$archive" "$stage_dir/opencode" <<'PY'
@@ -81,20 +74,6 @@ else:
 target.write_bytes(data)
 os.chmod(target,0o755)
 PY
-        ;;
-      2)
-        archive="$stage_dir/opencode-${version}.tgz"
-        python3 "$ROOT/scripts/opencode_release.py" download --version "$version" --destination "$archive" > "$stage_dir/release.json"
-        tar -xzf "$archive" -C "$stage_dir" package/bin/opencode
-        [[ -f "$stage_dir/package/bin/opencode" ]] || {
-          anvil_error 'Official npm package did not contain package/bin/opencode.'
-          exit 1
-        }
-        mv -- "$stage_dir/package/bin/opencode" "$stage_dir/opencode"
-        rm -rf -- "$stage_dir/package"
-        ;;
-      *) anvil_error "Unsupported OpenCode runtime major: $major"; exit 2 ;;
-    esac
     chmod 755 -- "$stage_dir/opencode"
     candidate="$stage_dir/opencode"
     [[ -f "$candidate" && -x "$candidate" ]] || {
@@ -109,11 +88,10 @@ PY
     printf '%s\n' "$candidate"
     ;;
   install)
-    [[ $# -ge 3 && $# -le 4 ]] || { usage >&2; exit 2; }
+    [[ $# == 3 ]] || { usage >&2; exit 2; }
     candidate="$2"
     version="$(candidate_version "$3")"
-    major="${4:-${version%%.*}}"
-    [[ "${version%%.*}" == "$major" ]] || { anvil_error "OpenCode $version does not belong to requested major $major."; exit 2; }
+    [[ "${version%%.*}" == 1 ]] || { anvil_error "Anvil supports only OpenCode 1.x, not $version."; exit 2; }
     [[ -f "$candidate" && -x "$candidate" ]] || { anvil_error 'Validated candidate binary is unavailable.'; exit 1; }
     actual="$(candidate_version "$(isolated_version "$candidate")")"
     [[ "$actual" == "$version" ]] || { anvil_error "Refusing to install $actual; validated release was $version."; exit 1; }

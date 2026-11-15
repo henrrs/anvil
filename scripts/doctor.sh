@@ -11,12 +11,12 @@ lifecycle_json="$(python3 -c 'import json,sys; print(json.dumps(json.load(sys.st
 lifecycle_status="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["lifecycle"])' <<<"$lifecycle_json")"
 lifecycle_text="$(python3 -c 'import json,sys; sys.path.insert(0,sys.argv[1]); import lifecycle_state; print(lifecycle_state._human(json.load(sys.stdin)["current"]["lifecycle"]))' "$ROOT/scripts" <<<"$observation")"
 policy_json="$(python3 "$ROOT/scripts/runtime.py" policy)"
-read -r policy_major policy_majors automatic_major_upgrade < <(python3 - "$policy_json" <<'PY'
+policy_minimum="$(python3 - "$policy_json" <<'PY'
 import json,sys
 opencode=json.loads(sys.argv[1])["opencode"]
-print(opencode["default_major"], ",".join(map(str,opencode["supported_majors"])), str(opencode["allow_automatic_major_upgrade"]))
+print(opencode["minimum_versions"]["1"])
 PY
-)
+ )"
 binary="$(python3 -c 'import json,sys; runtime=json.load(sys.stdin)["current"]["active_runtime"].get("runtime") or {}; print(runtime.get("executable") or "")' <<<"$observation")"
 record_file="$ANVIL_DATA_DIR/installation.json"
 recorded_opencode=""
@@ -52,11 +52,9 @@ fi
 
 if [[ -z "$binary" || ! -x "$binary" ]]; then
   printf 'OpenCode runtime       not installed\n'
-  printf 'Approved policy major  %s\n' "$policy_major"
-  printf 'Supported majors       %s\n' "$policy_majors"
-  printf 'Major auto-upgrade     %s\n' "$( [[ "$automatic_major_upgrade" == True ]] && printf 'YES' || printf 'NO')"
+  printf 'Runtime policy         OpenCode 1.x (minimum %s)\n' "$policy_minimum"
   if python3 "$ROOT/scripts/version_docs.py" >/dev/null 2>&1; then
-    printf 'Version documentation  valid\n'
+    printf 'Release artifacts      valid\n'
   else
     anvil_warn 'Release documentation does not match this checkout.'
   fi
@@ -99,9 +97,7 @@ PY
 )
 printf 'OpenCode version        %s\n' "$normalized"
 printf 'OpenCode runtime        %s (%s)\n' "${major:-unknown}" "${major:+opencode-v$major}"
-printf 'Approved policy major   %s\n' "$policy_major"
-printf 'Supported majors        %s\n' "$policy_majors"
-printf 'Major auto-upgrade      %s\n' "$( [[ "$automatic_major_upgrade" == True ]] && printf 'YES' || printf 'NO')"
+printf 'Runtime policy          OpenCode 1.x (minimum %s)\n' "$policy_minimum"
 if [[ "$lifecycle_status" == UNSUPPORTED ]]; then
   anvil_error 'Installed Anvil/runtime state is outside the supported migration policy; automatic downgrade or migration is blocked.'
   printf '\nStatus: UNSUPPORTED\n'
@@ -150,12 +146,10 @@ fi
 config_major=""
 audit_suffix=""
 if [[ "$recorded_anvil" != "$expected_anvil" ]]; then audit_suffix="-compatible"; fi
-if python3 "$ROOT/scripts/configure.py" "audit-v1${audit_suffix}" "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
+if python3 "$ROOT/scripts/configure.py" "audit${audit_suffix}" "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
   config_major=1
-elif python3 "$ROOT/scripts/configure.py" "audit${audit_suffix}" "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
-  config_major=2
 else
-  anvil_error 'Global config is neither a valid Anvil OpenCode 1 profile nor a valid OpenCode 2 profile.'
+  anvil_error 'Global config is not a valid Anvil OpenCode 1 profile.'
   broken=1
 fi
 if [[ -n "$config_major" && "$config_major" != "$major" ]]; then
@@ -190,7 +184,7 @@ fi
 if (( broken == 0 )); then
   data_status=0
   python3 "$ROOT/scripts/doctor_data.py" --config-dir "$ANVIL_CONFIG_DIR" \
-    --data-dir "$ANVIL_DATA_HOME" --cwd "$PWD" --runtime-major "$major" \
+    --data-dir "$ANVIL_DATA_HOME" --cwd "$PWD" \
     --observation-stdin <<<"$observation" || data_status=$?
   case "$data_status" in
     1) broken=1 ;;
@@ -212,7 +206,7 @@ fi
 
 if (( broken == 0 )) && [[ "${ANVIL_SKIP_RUNTIME_PROBE:-0}" != 1 ]]; then
   printf '\nRuntime smoke test\n'
-  if bash "$ROOT/scripts/validate-candidate.sh" "$binary" "$ANVIL_CONFIG_DIR" "$normalized" "$major"; then
+  if bash "$ROOT/scripts/validate-candidate.sh" "$binary" "$ANVIL_CONFIG_DIR" "$normalized"; then
     printf '  runtime adapter       active\n'
   else
     anvil_error "OpenCode $major could not load the configured Anvil profile, commands and skills."

@@ -20,8 +20,8 @@ Load `anvil-engineering` before implementation when the requested work has depen
 ## Runtime and memory
 
 - Keep one model-neutral primary agent. Do not pin a model, add subagents, or require MCP.
-- Check `make capabilities` before claiming a runtime-native feature. Anvil must remain usable on both supported OpenCode generations without implicit major migration.
-- On OpenCode 2 use the `anvil-knowledge` Reference. On OpenCode 1 read only clearly relevant knowledge files under `${XDG_DATA_HOME:-$HOME/.local/share}/anvil/knowledge/`; do not enumerate the directory.
+- Check `make capabilities` before claiming a runtime-native feature. Anvil supports OpenCode 1.x only.
+- Read only clearly relevant knowledge files under `${XDG_DATA_HOME:-$HOME/.local/share}/anvil/knowledge/`; do not enumerate the directory.
 - On runtimes without native Anvil memory search, use the installed `memory.py recall` helper. Search memory only when prior decisions or verified lessons could change the answer; source evidence takes precedence. Preserve provenance and uncertainty.
 
 ## Finish

@@ -121,7 +121,7 @@ def inspect_candidate(path: Path, source: str, minimums: dict[str, str], support
     version_supported = bool(minimum and parsed >= minimum)
     item.update({
         "usable": True, "version": version, "generation": generation,
-        "adapter": f"opencode-v{generation}" if generation in (1, 2) else "unavailable",
+        "adapter": "opencode-v1" if generation == 1 else "unavailable",
         "supported": policy_supported and version_supported,
         "minimum_version": minimum_text, "path_ready": in_path(path),
         "identity": {"size": path.stat().st_size, "mtime_ns": path.stat().st_mtime_ns,

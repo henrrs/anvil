@@ -46,32 +46,30 @@ anvil_lifecycle_execute() {
   ANVIL_LIFECYCLE_PLAN_FILE="$plan_file"
   export ANVIL_LIFECYCLE_PLAN_FILE
 
-  if [[ -n "$stage_fn" ]]; then
+  if [[ -n "$stage_fn" || -n "$preverify_fn" ]]; then
     python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase staging
-    if "$stage_fn"; then
-      :
-    else
-      status=$?
-      python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" abort \
-        --data-root "$ANVIL_DATA_HOME" --operation-id "$operation_id" >/dev/null 2>&1 || true
-      python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase staging-failed || true
-      if python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" clear; then
-        anvil_error "Upgrade failed during staging (operation $operation_id). The active installation was not changed; installed release remains $source_version."
+    if [[ -n "$stage_fn" ]]; then
+      if "$stage_fn"; then
+        :
       else
-        anvil_error "Upgrade failed during staging (operation $operation_id). Active files were not changed; pre-activation journal cleanup failed and will be handled on the next lifecycle command. Snapshot: $backup"
+        status=$?
+        python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase staging-failed || true
+        if python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" clear; then
+          anvil_error "Upgrade failed during staging (operation $operation_id). The active installation was not changed; installed release remains $source_version."
+        else
+          anvil_error "Upgrade failed during staging (operation $operation_id). Active files were not changed; pre-activation journal cleanup failed and will be handled on the next lifecycle command. Snapshot: $backup"
+        fi
+        transaction_active=0
+        return "$status"
       fi
-      transaction_active=0
-      return "$status"
     fi
-    ANVIL_ANALYTICS_RUNTIME_STAGED=1
-    export ANVIL_ANALYTICS_RUNTIME_STAGED
+  fi
+  if [[ -n "$preverify_fn" ]]; then
     python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase pre-activation-verification
     if "$preverify_fn"; then
       :
     else
       status=$?
-      python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" abort \
-        --data-root "$ANVIL_DATA_HOME" --operation-id "$operation_id" >/dev/null 2>&1 || true
       python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase pre-activation-failed || true
       if python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" clear; then
         anvil_error "Upgrade pre-activation verification failed (operation $operation_id). The active installation was not changed; installed release remains $source_version."
@@ -81,10 +79,12 @@ anvil_lifecycle_execute() {
       transaction_active=0
       return "$status"
     fi
+  fi
+  if [[ -n "$stage_fn" || -n "$preverify_fn" ]]; then
     python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase activating
   fi
 
-  if [[ "$phase_profile" == config && -z "$stage_fn" ]]; then
+  if [[ "$phase_profile" == config && -z "$stage_fn" && -z "$preverify_fn" ]]; then
     python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase applying-config
   fi
   "$apply_fn" || {
@@ -92,12 +92,12 @@ anvil_lifecycle_execute() {
     anvil_lifecycle_fail "$status" "$backup" "$rollback_fn" "$rollback_message" "$failure_message"
     return "$status"
   }
-  if [[ "$phase_profile" == config && -n "$stage_fn" ]]; then
+  if [[ "$phase_profile" == config && ( -n "$stage_fn" || -n "$preverify_fn" ) ]]; then
     python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase activation-completed
   elif [[ "$phase_profile" == config ]]; then
     python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase config-applied
   fi
-  if [[ -n "$stage_fn" ]]; then
+  if [[ -n "$stage_fn" || -n "$preverify_fn" ]]; then
     python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase post-activation-verification
   else
     python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase before-installation-metadata
@@ -110,7 +110,7 @@ anvil_lifecycle_execute() {
     return "$status"
   }
   anvil_lifecycle_require_plan_operation CommitInstallationRecord || return $?
-  if [[ -n "$stage_fn" ]]; then
+  if [[ -n "$stage_fn" || -n "$preverify_fn" ]]; then
     python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase committing
   fi
   "$commit_fn" || {
@@ -119,7 +119,7 @@ anvil_lifecycle_execute() {
     return "$status"
   }
 
-  if [[ -n "$stage_fn" ]]; then
+  if [[ -n "$stage_fn" || -n "$preverify_fn" ]]; then
     python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase completed
   else
     python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" phase postflight-validated

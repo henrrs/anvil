@@ -19,9 +19,8 @@ def _installation_1_to_2(value: dict[str, Any]) -> dict[str, Any]:
 def _installation_2_to_3(value: dict[str, Any]) -> dict[str, Any]:
     result = dict(value)
     result["schema_version"] = 3
-    major = result.get("runtime_major")
-    if type(major) is int and major in (1, 2):
-        result.setdefault("runtime_profile", f"opencode-v{major}")
+    if result.get("runtime_major", result.get("generation")) == 1:
+        result.setdefault("runtime_profile", "opencode-v1")
     return result
 
 

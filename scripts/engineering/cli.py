@@ -1,4 +1,4 @@
-"""A small explicit engineering-state interface for both OpenCode generations."""
+"""A small explicit engineering-state interface for OpenCode 1.x."""
 
 from __future__ import annotations
 

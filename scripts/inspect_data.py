@@ -5,14 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import sqlite3
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 from configure import parse_jsonc
-from analytics.diagnostics import collect as collect_analytics_readiness
 
 
 def config_data(path: Path) -> dict:
@@ -40,49 +37,6 @@ def safe_names(values: list[str]) -> str:
     return ", ".join(values) if values else "none"
 
 
-def analytics_workspace(config_dir: Path, home: Path, readiness: dict | None = None) -> dict:
-    package = config_dir / "scripts" / "analytics"
-    web_root = config_dir / "web" / "analytics"
-    root = home / ".anvil"
-    state = root / "analytics"
-    database = state / "context.db"
-    try:
-        port = int(os.environ.get("ANVIL_ANALYTICS_PORT", "8765"))
-        if not 1 <= port <= 65535:
-            port = 8765
-    except ValueError:
-        port = 8765
-    readiness = readiness if readiness is not None else collect_analytics_readiness(config_dir, home, port)
-    service = readiness.get("service", {})
-    assets_ready = all((web_root / name).is_file() and not (web_root / name).is_symlink()
-                       for name in ("index.html", "app.js", "styles.css"))
-    print("Analytics Workspace")
-    print(f"  installed             {'YES' if package.is_dir() and not package.is_symlink() else 'NO'}")
-    print(f"  UI assets             {'READY' if assets_ready else 'MISSING'}")
-    print(f"  unit installed        {'YES' if service.get('unit_installed') else 'NO'}")
-    print(f"  service enabled       {'YES' if service.get('enabled') else 'NO'}")
-    print(f"  service active        {'YES' if service.get('active') else 'NO'} (MainPID {service.get('main_pid', 0)})")
-    print(f"  service health        {readiness.get('service', {}).get('status', 'NOT_READY')}")
-    print(f"  configured URL        http://anvil.localhost:{port}")
-    print(f"  workspace             {root / 'workspaces' / 'analytics'}")
-    print(f"  Context Store         {'SQLite WAL' if database.is_file() and not database.is_symlink() else 'NOT CREATED'}")
-    opencode = readiness.get("opencode", readiness.get("runtime", {}))
-    print(f"  OpenCode runtime      {opencode.get('status', 'NOT_CHECKED')} (generation {opencode.get('generation') or 'unknown'})")
-    canonical = readiness.get("canonical_session", {})
-    print(f"  canonical session     {canonical.get('status', 'NOT_CHECKED')}")
-    print(f"  SQLite module         {'AVAILABLE' if sqlite3.sqlite_version else 'UNAVAILABLE'}")
-    for name in ("duckdb", "pyarrow"):
-        dependency = readiness.get(name, {})
-        print(f"  {name.capitalize():21} {dependency.get('status', 'NOT_CHECKED')}"
-              + (f" · {dependency.get('message')}" if dependency.get('message') else ""))
-    catalog = readiness.get("catalog", {})
-    print(f"  catalog metadata      {catalog.get('catalogs', 0)} catalogs · {catalog.get('schemas', 0)} schemas · "
-          f"{catalog.get('objects', 0)} tables/views · {catalog.get('status', 'NOT_CHECKED')}")
-    if any(readiness.get(name, {}).get("status") != "READY" for name in ("duckdb", "pyarrow")):
-        print("  recovery              make upgrade")
-    print("  WSL host reachability NOT_CHECKED (requires a Windows browser-side check)")
-    return readiness
-
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -93,13 +47,6 @@ def main() -> int:
     parser.add_argument("--cwd", type=Path, required=True)
     parser.add_argument("--observation-stdin", action="store_true", help="reuse the local lifecycle snapshot")
     args = parser.parse_args()
-    observed_analytics = None
-    if args.observation_stdin:
-        incoming = json.load(__import__("sys").stdin)
-        observed_analytics = incoming.get("current", {}).get("analytics")
-        if not isinstance(observed_analytics, dict):
-            observed_analytics = {}
-
     config_dir: Path = args.config
     main_configs = [config_dir / name for name in ("config.json", "opencode.json", "opencode.jsonc")]
     parsed = [(path, config_data(path)) for path in main_configs if path.is_file() and not path.is_symlink()]
@@ -137,8 +84,6 @@ def main() -> int:
     print(f"  legacy root plugins  {safe_names(legacy_plugins)}")
     print(f"  Claude-compatible skills {safe_names(claude_skills)}")
     print()
-    analytics_workspace(config_dir, args.home, observed_analytics)
-
     project_root = args.cwd.resolve()
     git_root = next((parent for parent in (project_root, *project_root.parents) if (parent / ".git").exists()), None)
     stop = git_root or project_root

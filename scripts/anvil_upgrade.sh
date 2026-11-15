@@ -8,7 +8,7 @@ source "$ROOT/scripts/lib/backup.sh"
 source "$ROOT/scripts/lib/lifecycle-operation.sh"
 anvil_need python3 tar cp mv install chmod date
 
-[[ $# == 0 ]] || { anvil_error 'make upgrade accepts DRY_RUN=1 only; use make update-runtime or make migrate-runtime for OpenCode changes.'; exit 2; }
+[[ $# == 0 ]] || { anvil_error 'make upgrade accepts DRY_RUN=1 only; use make update-runtime for a supported OpenCode 1 update.'; exit 2; }
 ANVIL_VERSION="$(cat "$ROOT/VERSION")"
 
 anvil_recover_pending
@@ -56,18 +56,14 @@ if [[ -z "$binary" || ! -x "$binary" ]]; then
   exit 1
 fi
 if [[ "$supported" != True ]]; then
-  anvil_error "OpenCode ${runtime_version:-unknown} is outside the supported runtime policy. Use make update-runtime for a supported version in the same major, or make migrate-runtime OPENCODE_MAJOR=N for a major change."
+  anvil_error "OpenCode ${runtime_version:-unknown} is outside Anvil's supported OpenCode 1.x policy. No runtime was changed."
   exit 1
 fi
 
-if python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
+if python3 "$ROOT/scripts/configure.py" audit-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc"; then
   from_generation=1
-  python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null
-elif python3 "$ROOT/scripts/configure.py" audit-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
-  from_generation=2
-  python3 "$ROOT/scripts/configure.py" audit-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null
 else
-  anvil_error 'Current global config is not a supported Anvil OpenCode profile; use make reforge to rebuild it.'
+  anvil_error 'Current global config is not a supported Anvil OpenCode 1 profile; use make reforge to rebuild it.'
   exit 1
 fi
 old_anvil_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
@@ -145,7 +141,7 @@ PY
 trap on_error ERR INT TERM
 trap cleanup EXIT
 
-anvil_build_config "$ready_config/generated" "$ANVIL_CONFIG_DIR" yes "$major" "$old_anvil_version" no yes
+anvil_build_config "$ready_config/generated" "$ANVIL_CONFIG_DIR" yes "$old_anvil_version" no yes
 manifest_sha256="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
 import json,sys
 try: value=json.load(open(sys.argv[1],encoding="utf-8"))
@@ -181,12 +177,8 @@ for item in json.load(open(sys.argv[1],encoding="utf-8")).get("findings",[]):
                           "target_hash":item.get("target_hash")},sort_keys=True))
 PY
 fi
-if [[ "$major" == 1 ]]; then
-  python3 "$ROOT/scripts/configure.py" audit-v1 "$ready_config/generated/opencode.jsonc" >/dev/null
-else
-  python3 "$ROOT/scripts/configure.py" audit "$ready_config/generated/opencode.jsonc" >/dev/null
-fi
-bash "$ROOT/scripts/rehearse-upgrade.sh" "$binary" "$runtime_version" "$major" "$major" no "$ready_config/generated" yes
+python3 "$ROOT/scripts/configure.py" audit "$ready_config/generated/opencode.jsonc" >/dev/null
+bash "$ROOT/scripts/rehearse-upgrade.sh" "$binary" "$runtime_version" no "$ready_config/generated" yes
 
 # Check backup prerequisites before interrupting the user's runtime. This is
 # read-only: backup creation itself remains after quiescence and final approval.
@@ -233,7 +225,6 @@ printf '  countdown           %ss\n' "${ANVIL_UPGRADE_COUNTDOWN_SECONDS:-5}"
 printf '  graceful shutdown   enabled (SIGTERM first)\n'
 printf '  force termination   fallback only\n'
 anvil_print_config_plan "$ANVIL_CONFIG_DIR" "$ready_config/generated" "$old_anvil_version" "$ANVIL_VERSION" no yes
-anvil_print_analytics_plan "$ready_config/generated"
 
 if [[ "${DRY_RUN:-0}" == 1 ]]; then
   python3 "$ROOT/scripts/lifecycle_plan.py" --render-file "$plan_file"
@@ -295,26 +286,7 @@ PY
   fi
 }
 
-stage_upgrade() {
-  local target_lock="$ready_config/generated/runtime/analytics-requirements.lock"
-  [[ -f "$target_lock" ]] || return 0
-  anvil_lifecycle_require_plan_operation InstallAnalyticsDependencies || return $?
-  if [[ "${ANVIL_TEST_MODE:-0}" == 1 && -z "${ANVIL_TEST_FAIL_ANALYTICS_PACKAGE:-}" ]]; then
-    anvil_log 'Offline lifecycle fixture: Analytics packages are represented by the staged release lock.'
-    return 0
-  fi
-  python3 "$ROOT/scripts/analytics_dependencies.py" stage \
-    --lock "$target_lock" --data-root "$ANVIL_DATA_HOME" \
-    --operation-id "$ANVIL_LIFECYCLE_OPERATION_ID" >/dev/null
-}
-
 preverify_upgrade() {
-  python3 "$ROOT/scripts/lifecycle_baseline.py" verify-plan \
-    --backup "$backup_dir" --target-config "$ready_config/generated" >/dev/null
-  if [[ -f "$ready_config/generated/runtime/analytics-requirements.lock" ]]; then
-    anvil_lifecycle_require_plan_operation InstallAnalyticsDependencies || return $?
-    anvil_lifecycle_require_plan_operation EnsureAnalyticsService || return $?
-  fi
   python3 "$ROOT/scripts/lifecycle_verify.py" --phase pre-activation \
     --config "$ready_config/generated" --memory "$ANVIL_DATA_DIR/memory" --binary "$binary" \
     --product-version "$ANVIL_VERSION" --runtime-version "$runtime_version" --runtime-major "$major"
@@ -322,10 +294,6 @@ preverify_upgrade() {
 
 apply_upgrade() {
   anvil_lifecycle_require_plan_operation ReplaceManagedArtifacts || return $?
-  if [[ -f "$ready_config/generated/runtime/analytics-requirements.lock" ]]; then
-    anvil_lifecycle_require_plan_operation InstallAnalyticsDependencies || return $?
-    anvil_lifecycle_require_plan_operation EnsureAnalyticsService || return $?
-  fi
   if (( drift_count > 0 )); then
     printf 'Repairing %s Anvil-managed drifted artifact(s)...\n' "$drift_count"
     python3 - "$drift_file" <<'PY' >&2
@@ -338,14 +306,6 @@ for item in json.load(open(sys.argv[1],encoding="utf-8")).get("findings",[]):
 PY
   fi
   anvil_apply_config "$ready_config/generated" || return $?
-  if [[ "${ANVIL_TEST_MIGRATE_CONTEXT_DB:-0}" == 1 ]]; then
-    [[ "${ANVIL_TEST_MODE:-0}" == 1 ]] || {
-      anvil_error 'Context database migration injection is reserved for isolated lifecycle tests.'
-      return 2
-    }
-    PYTHONPATH="$ANVIL_CONFIG_DIR" python3 -c \
-      'from scripts.analytics.store import ContextStore; ContextStore()' || return $?
-  fi
   if [[ "${ANVIL_TEST_FAIL_AFTER_CONFIG:-0}" == 1 ]]; then
     anvil_error 'Injected failure after Anvil config replacement.'
     return 1
@@ -375,11 +335,7 @@ commit_upgrade() {
     --opencode-major "$major" --binary "$binary" --anvil-only \
     --migration-status anvil-upgrade --previous-anvil-version "$old_anvil_version" --backup "$backup_dir" || return $?
   python3 "$ROOT/scripts/runtime_state.py" record >/dev/null || return $?
-  if [[ -f "$ready_config/generated/runtime/analytics-requirements.lock" &&
-        "${ANVIL_TEST_MODE:-0}" != 1 ]]; then
-    python3 "$ROOT/scripts/analytics_dependencies.py" finalize \
-      --data-root "$ANVIL_DATA_HOME" --operation-id "$ANVIL_LIFECYCLE_OPERATION_ID" >/dev/null || return $?
-  fi
+
 }
 
 rollback_upgrade() {
@@ -390,7 +346,7 @@ rollback_upgrade() {
 anvil_lifecycle_execute anvil-upgrade "$backup_dir" "$old_anvil_version" "$ANVIL_VERSION" \
   apply_upgrade verify_upgrade commit_upgrade rollback_upgrade \
   'Automatic Anvil rollback completed; the OpenCode runtime and data were preserved.' \
-  'Anvil upgrade failed after activation' "$plan_file" "" stage_upgrade preverify_upgrade
+  'Anvil upgrade failed after activation' "$plan_file" "" "" preverify_upgrade
 anvil_ok "Anvil $ANVIL_VERSION installed; OpenCode $runtime_version was preserved exactly."
 anvil_ok "Anvil-only rollback snapshot: $backup_dir"
 if (( drift_count > 0 )); then

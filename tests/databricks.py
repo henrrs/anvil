@@ -1963,27 +1963,23 @@ def test_repository_harness_and_legacy_scan() -> None:
         check("use" in desc or "when" in desc, f"skill does not explain when to use it: {skill_path.parent.name}")
         check("do not use" in desc, f"skill does not explain when not to use it: {skill_path.parent.name}")
 
-    config = json.loads((ROOT / "config" / "opencode.jsonc").read_text(encoding="utf-8"))
-    check("model" not in config and "small_model" not in config, "default OpenCode profile pins a model")
-    check(set(config["agents"]) == {"anvil", "build", "plan", "general", "explore"}, "unexpected agent set changed")
-    check(config.get("mcp", {}).get("servers") == {}, "default config made MCP mandatory")
+    config = json.loads((ROOT / "config" / "runtimes" / "opencode-v1.jsonc").read_text(encoding="utf-8"))
+    check(config["default_agent"] == "anvil" and "model" not in config["agent"]["anvil"],
+          "OpenCode 1 profile pins a model or omits the Anvil agent")
+    check(set(config["agent"]) == {"anvil", "build", "plan", "general", "explore"},
+          "unexpected OpenCode 1 agent set")
+    check(config.get("mcp") == {}, "default config made MCP mandatory")
+    policy = json.loads((ROOT / "config" / "runtime-policy.json").read_text(encoding="utf-8"))
+    check(policy["opencode"]["supported_majors"] == [1], "runtime policy includes a retired major")
     adapter = (ROOT / "scripts" / "databricks.py").read_text(encoding="utf-8")
     check("databricks" in adapter.casefold() and "runtime.py" not in adapter and "opencode" not in adapter.casefold(), "Databricks adapter depends on OpenCode runtime internals")
     check("mcp" not in adapter.casefold(), "Databricks adapter has an MCP dependency")
     check("--sensitive" not in adapter and "auth token" not in adapter.casefold() and "auth env" not in adapter.casefold(), "Databricks adapter requests sensitive credential output")
 
-    prior_release = (ROOT / "docs" / "versions" / "v2.2.md").read_text(encoding="utf-8")
+    inventory = json.loads((ROOT / "config" / "managed-inventory.json").read_text(encoding="utf-8"))
     release_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-    release_path = ROOT / "docs" / "versions" / f"v{release_version}.md"
-    if not release_path.is_file():
-        release_path = ROOT / "docs" / "versions" / f"v{release_version.rsplit('.', 1)[0]}.md"
-    current_release = release_path.read_text(encoding="utf-8")
-    check("| Anvil 2.1 `AGENTS.md` | 4,790 | 1,198 | Baseline |" in prior_release, "old harness size is missing from the release report")
-    check("| Anvil 2.2 `AGENTS.md` | 3,710 | 928 | 22.5% fewer bytes |" in prior_release, "historical 2.2 harness size is missing from its release report")
-    historical_release = (ROOT / "docs/versions/v2.6.0.md").read_text(encoding="utf-8")
-    check("| Anvil 2.6 | 3,724 | 931 |" in historical_release, "historical kernel measurement changed")
-    check(f"| Anvil {release_version} | {agents_size:,} | {round(agents_size / 4):,} |" in current_release,
-          "current harness size/token estimate does not match the release report")
+    check(inventory["managed_artifacts"]["release"] == release_version,
+          "managed artifact inventory release differs from VERSION")
 
 
 def main() -> int:

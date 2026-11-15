@@ -9,16 +9,11 @@ source "$ROOT/scripts/lib/lifecycle-operation.sh"
 anvil_need python3 tar cp mv install chmod date
 
 ANVIL_VERSION="$(cat "$ROOT/VERSION")"
-operation=""
-if [[ "${1:-}" == --migrate-runtime ]]; then
-  operation="migrate-runtime"
-elif [[ "${1:-}" == --update-runtime ]]; then
-  operation="update-runtime"
-else
-  anvil_error "Unknown upgrade operation: $1"
+[[ "${1:-}" == --update-runtime && $# == 1 ]] || {
+  anvil_error 'Use make update-runtime to update within supported OpenCode 1.x releases.'
   exit 2
-fi
-[[ $# == 1 ]] || { anvil_error 'Specify only one runtime lifecycle operation.'; exit 2; }
+}
+operation="update-runtime"
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/anvil-upgrade.XXXXXX")"
 chmod 700 -- "$tmp_root"
 backup_dir=""
@@ -28,8 +23,7 @@ candidate_version=""
 old_version=""
 old_binary=""
 old_anvil_version=""
-from_generation=0
-target_major=""
+target_major=1
 
 cleanup_temp() {
   local base canonical
@@ -42,7 +36,7 @@ on_error() {
   local status=$?
   trap - ERR INT TERM
   if (( transaction_active )) && [[ -n "$backup_dir" ]]; then
-    anvil_error "Upgrade failed after live migration started (exit $status); restoring the verified pre-upgrade runtime snapshot."
+    anvil_error "Upgrade failed after the runtime update started (exit $status); restoring the verified pre-update runtime snapshot."
     if ANVIL_INTERNAL_MODE=1 bash "$ROOT/scripts/rollback.sh" --backup "$backup_dir" --internal; then
       python3 "$ROOT/scripts/lifecycle_transaction.py" clear || anvil_error 'Automatic rollback completed, but the recovery journal could not be cleared.'
       anvil_ok 'Automatic rollback completed; Anvil memory remains in place.'
@@ -57,17 +51,11 @@ trap on_error ERR INT TERM
 trap cleanup_temp EXIT
 
 anvil_recover_pending
-if [[ "$operation" == migrate-runtime ]]; then
-  anvil_lifecycle_state require-current
-else
-  anvil_require_installed
-fi
-plan_args=()
-if [[ "$operation" == migrate-runtime && -n "${OPENCODE_MAJOR:-}" ]]; then plan_args+=(--runtime-major "$OPENCODE_MAJOR"); fi
+anvil_require_installed
 plan_file="$tmp_root/change-plan.json"
-if ! python3 "$ROOT/scripts/lifecycle_plan.py" "$operation" "${plan_args[@]}" \
+if ! python3 "$ROOT/scripts/lifecycle_plan.py" "$operation" \
   --format json --json-output "$plan_file" >/dev/null; then
-  python3 "$ROOT/scripts/lifecycle_plan.py" "$operation" "${plan_args[@]}" --format text || true
+  python3 "$ROOT/scripts/lifecycle_plan.py" "$operation" --format text || true
   exit 2
 fi
 anvil_lifecycle_validate_plan "$operation" "$plan_file" >/dev/null
@@ -87,17 +75,10 @@ if ! python3 "$ROOT/scripts/active-opencode.py"; then
 fi
 
 old_config="$ANVIL_CONFIG_DIR/opencode.jsonc"
-if python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$old_config" >/dev/null 2>&1; then
-  from_generation=1
-  python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$old_config"
-elif python3 "$ROOT/scripts/configure.py" audit-compatible "$old_config" >/dev/null 2>&1; then
-  from_generation=2
-  python3 "$ROOT/scripts/configure.py" audit-compatible "$old_config"
-else
-  anvil_error 'Current global config is neither the supported Anvil V1 baseline nor a valid Anvil V2 config.'
+python3 "$ROOT/scripts/configure.py" audit-compatible "$old_config" || {
+  anvil_error 'Current global config is not a supported Anvil OpenCode 1 profile.'
   exit 1
-fi
-
+}
 runtime_json="$(anvil_runtime_json)"
 IFS=$'\t' read -r old_binary old_version old_major runtime_supported < <(python3 - "$runtime_json" <<'PY'
 import json,sys
@@ -105,78 +86,37 @@ r=json.loads(sys.argv[1]).get("runtime") or {}
 print("\t".join(str(r.get(k) or "") for k in ("executable","version","generation","supported")))
 PY
 )
-if [[ -z "$old_binary" || ! -x "$old_binary" || ( "$old_major" != 1 && "$old_major" != 2 ) || -z "$old_version" ]]; then
-  anvil_error 'A usable OpenCode executable with a known supported major was not found. Install one with make reforge before updating or migrating it.'
+if [[ -z "$old_binary" || ! -x "$old_binary" || "$old_major" != 1 || -z "$old_version" || "$runtime_supported" != True ]]; then
+  anvil_error 'A usable, supported OpenCode 1 runtime is required; no runtime files were changed.'
   exit 1
 fi
-if [[ "$from_generation" == 1 && "$old_major" != 1 ]]; then
-  anvil_error "Anvil V1 config reports an OpenCode $old_major executable; refusing a mismatched migration."
-  exit 1
-elif [[ "$from_generation" == 2 && "$old_major" != 2 ]]; then
-  anvil_error "Anvil V2 config reports an OpenCode $old_major executable; refusing a mismatched update."
-  exit 1
-fi
-if [[ "$old_major" != 1 && "$old_major" != 2 ]]; then
-  anvil_error "OpenCode $old_version is outside the supported 1.x/2.x runtime policy."
-  exit 1
-fi
-if [[ "$operation" == migrate-runtime ]]; then
-  target_major="${OPENCODE_MAJOR:-}"
-  if [[ "$target_major" != 1 && "$target_major" != 2 ]]; then
-    anvil_error 'Runtime migration requires OPENCODE_MAJOR=1 or OPENCODE_MAJOR=2.'
-    exit 2
-  fi
-  if [[ "$target_major" == "$old_major" ]]; then
-    anvil_error "OpenCode $old_major is already installed; use 'make update-runtime' to update it within the current major."
-    exit 2
-  fi
-elif [[ "$operation" == update-runtime ]]; then
-  target_major="$old_major"
-fi
-if ! python3 "$ROOT/scripts/runtime.py" capabilities --major "$target_major" | python3 -c 'import json,sys; raise SystemExit(0 if json.load(sys.stdin)["runtime"]["supported"] else 1)'; then
-  anvil_error "OpenCode $target_major is not supported by this Anvil runtime policy."
-  exit 1
-fi
-policy_major="$(python3 "$ROOT/scripts/runtime.py" policy | python3 -c 'import json,sys; print(json.load(sys.stdin)["opencode"]["default_major"])')"
-
-old_anvil_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" "$from_generation" <<'PY'
+old_anvil_version="$(python3 - "$ANVIL_DATA_DIR/installation.json" <<'PY'
 import json,sys
 try:
     value=json.load(open(sys.argv[1],encoding="utf-8"))
 except (OSError,ValueError):
     value={}
 if not isinstance(value,dict): value={}
-recorded=value.get("anvil_version")
-print(recorded or ("version not recorded" if sys.argv[2] == "1" else "unknown"))
+print(value.get("anvil_version") or "unknown")
 PY
 )"
 
-if [[ "$operation" == update-runtime ]]; then
-  printf '%s\n' 'OpenCode Runtime Update' '───────────────────────'
-else
-  printf '%s\n' 'OpenCode Runtime Migration' '──────────────────────────'
-fi
-printf 'Anvil release             %s (preserved on same-major update)\n' "${old_anvil_version:-unknown}"
+printf '%s\n' 'OpenCode 1 Runtime Update' '──────────────────────────'
+printf 'Anvil release             %s (preserved)\n' "${old_anvil_version:-unknown}"
 printf 'Current OpenCode          %s\n' "$old_version"
 printf 'OpenCode executable       %s\n' "$old_binary"
-printf 'Target OpenCode major     %s (%s)\n' "$target_major" "$([[ "$old_major" == "$target_major" ]] && printf 'same-major update' || printf 'explicit migration')"
+printf 'Target OpenCode           %s.x\n' "$target_major"
 printf 'Managed configuration     %s\n' "$ANVIL_CONFIG_DIR"
 
 if [[ "${DRY_RUN:-0}" == 1 ]]; then
   python3 "$ROOT/scripts/lifecycle_plan.py" --render-file "$plan_file"
   printf '\nOpenCode Runtime Plan\n────────────────────────────────\n'
-  printf 'Anvil                    %s (preserved on same-major update)\n' "${old_anvil_version:-unknown}"
-  printf 'OpenCode                 %s → OpenCode %s.x\n' "$old_version" "$target_major"
-  printf 'Current runtime major    %s\n' "$old_major"
-  printf 'Policy default major     %s\n' "$policy_major"
-  printf 'Major migration          %s\n' "$([[ "$old_major" == "$target_major" ]] && printf 'NO' || printf 'YES (explicit)')"
-  printf 'Runtime adapter          opencode-v%s → opencode-v%s\n' "$old_major" "$target_major"
+  printf 'Anvil                    %s (preserved)\n' "${old_anvil_version:-unknown}"
+  printf 'OpenCode                 %s → latest supported 1.x\n' "$old_version"
   printf 'Backup                   complete config/runtime/data/state snapshot before any live changes\n'
   printf 'Rehearsal                isolated copy of config, data, state and Markdown memory\n'
   printf '\nCurrent runtime capabilities\n'
   python3 "$ROOT/scripts/runtime.py" capabilities --binary "$old_binary" --format text
-  printf '\nTarget runtime profile capabilities\n'
-  python3 "$ROOT/scripts/runtime.py" capabilities --major "$target_major" --format text
 fi
 
 release_json="$tmp_root/release.json"
@@ -195,12 +135,12 @@ with open(sys.argv[1],"w",encoding="utf-8") as stream:
     json.dump({"version":sys.argv[2],"channel":"latest","published_at":None,"release_url":"isolated test candidate","asset":{"name":"fixture","integrity":"sha512-fixture"}},stream)
 PY
 else
-  if ! bash "$ROOT/scripts/install-opencode.sh" resolve "$target_major" > "$release_json"; then
+  if ! bash "$ROOT/scripts/install-opencode.sh" resolve > "$release_json"; then
     anvil_error 'OpenCode runtime release lookup failed. Anvil and the installed OpenCode runtime remain unchanged; this affects only the explicitly requested runtime operation.'
     exit 1
   fi
   candidate_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["version"])' "$release_json")"
-  if ! candidate="$(bash "$ROOT/scripts/install-opencode.sh" stage "$candidate_version" "$tmp_root/candidate" "$target_major")"; then
+  if ! candidate="$(bash "$ROOT/scripts/install-opencode.sh" stage "$candidate_version" "$tmp_root/candidate")"; then
     anvil_error 'OpenCode runtime download/validation failed. Anvil and the installed runtime remain unchanged; retry when the release source is reachable.'
     exit 1
   fi
@@ -229,34 +169,14 @@ fi
 anvil_ok "Resolved and staged exact stable OpenCode $candidate_version"
 
 ready_config="$tmp_root/staged-config"
-if [[ "$operation" == update-runtime ]]; then
-  cp -R -- "$ANVIL_CONFIG_DIR" "$ready_config"
-else
-  anvil_build_config "$ready_config" "$ANVIL_CONFIG_DIR" yes "$target_major"
-  anvil_print_config_plan "$ANVIL_CONFIG_DIR" "$ready_config" "$old_anvil_version" "$ANVIL_VERSION"
-fi
-anvil_print_analytics_plan "$ready_config"
-if [[ "$operation" == update-runtime ]]; then
-  if [[ "$target_major" == 1 ]]; then
-    python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$ready_config/opencode.jsonc"
-  else
-    python3 "$ROOT/scripts/configure.py" audit-compatible "$ready_config/opencode.jsonc"
-  fi
-elif [[ "$target_major" == 1 ]]; then
-  python3 "$ROOT/scripts/configure.py" audit-v1 "$ready_config/opencode.jsonc"
-else
-  python3 "$ROOT/scripts/configure.py" audit "$ready_config/opencode.jsonc"
-fi
-if [[ "$operation" == update-runtime ]]; then
-  bash "$ROOT/scripts/rehearse-upgrade.sh" "$candidate" "$candidate_version" "$old_major" "$target_major" yes
-else
-  bash "$ROOT/scripts/rehearse-upgrade.sh" "$candidate" "$candidate_version" "$old_major" "$target_major"
-fi
+cp -R -- "$ANVIL_CONFIG_DIR" "$ready_config"
+python3 "$ROOT/scripts/configure.py" audit-compatible "$ready_config/opencode.jsonc"
+bash "$ROOT/scripts/rehearse-upgrade.sh" "$candidate" "$candidate_version" yes
 
 if [[ "${DRY_RUN:-0}" == 1 ]]; then
   printf '\nCandidate                OpenCode %s\n' "$candidate_version"
   printf 'Config                   %s runtime profile staged and audited\n' "opencode-v$target_major"
-  printf 'Migration rehearsal      passed with disposable OpenCode data/state; user state was not copied\n'
+  printf 'Runtime rehearsal        passed with disposable OpenCode data/state\n'
   printf '\nDry run complete. No backup was created and no live files were changed.\n'
   exit 0
 fi
@@ -289,16 +209,7 @@ fi
 
 apply_runtime_change() {
   anvil_lifecycle_require_plan_operation InstallRuntimeArtifact || return $?
-  if [[ "$operation" == migrate-runtime ]]; then
-    anvil_lifecycle_require_plan_operation MigrateRuntimeAdapter || return $?
-    anvil_log "Applying the staged OpenCode $target_major Anvil profile and exact tested binary."
-    anvil_apply_config "$ready_config" no yes || return $?
-    if [[ "${ANVIL_TEST_FAIL_AFTER_CONFIG:-0}" == 1 ]]; then
-      anvil_error 'Injected failure after config replacement.'
-      return 1
-    fi
-  fi
-  bash "$ROOT/scripts/install-opencode.sh" install "$candidate" "$candidate_version" "$target_major" || return $?
+  bash "$ROOT/scripts/install-opencode.sh" install "$candidate" "$candidate_version" || return $?
   path_result="$(python3 "$ROOT/scripts/path_edit.py" apply \
     --home "$ANVIL_HOME_DIR" --xdg-config-home "$ANVIL_CONFIG_HOME" \
     --install-dir "$ANVIL_INSTALL_BIN" --shell "${SHELL:-bash}" --path "$PATH")" || return $?
@@ -307,14 +218,6 @@ apply_runtime_change() {
     return 1
   fi
   export PATH="$ANVIL_INSTALL_BIN:$PATH"
-  if [[ "$operation" == migrate-runtime ]]; then
-    XDG_DATA_HOME="$ANVIL_DATA_HOME" python3 "$ANVIL_CONFIG_DIR/scripts/memory.py" init >/dev/null || return $?
-  fi
-  if [[ -f "$ANVIL_CONFIG_DIR/runtime/analytics-requirements.lock" ]]; then
-    anvil_lifecycle_require_plan_operation InstallAnalyticsDependencies || return $?
-    anvil_log 'Revalidating the existing Analytics environment and service against the updated OpenCode runtime.'
-    anvil_converge_analytics_runtime "$ANVIL_CONFIG_DIR" || return $?
-  fi
   if [[ "${ANVIL_TEST_FAIL_POSTFLIGHT:-0}" == 1 ]]; then
     anvil_error 'Injected postflight failure after the runtime upgrade.'
     return 1
@@ -330,8 +233,7 @@ verify_runtime_change() {
     anvil_error 'Injected post-apply verification failure.'
     return 1
   fi
-  verify_product_version="$ANVIL_VERSION"
-  if [[ "$operation" == update-runtime ]]; then verify_product_version="$old_anvil_version"; fi
+  verify_product_version="$old_anvil_version"
   python3 "$ROOT/scripts/lifecycle_verify.py" \
     --config "$ANVIL_CONFIG_DIR" --memory "$ANVIL_DATA_DIR/memory" --binary "$ANVIL_INSTALLED_BINARY" \
     --product-version "$verify_product_version" --runtime-version "$candidate_version" --runtime-major "$target_major"
@@ -344,12 +246,12 @@ commit_runtime_change() {
     --opencode-version "$candidate_version" --anvil-version "$ANVIL_VERSION" \
     --opencode-major "$target_major" \
     --binary "$ANVIL_INSTALLED_BINARY" --release-json "$release_json" \
-    --migration-status "$([[ "$operation" == update-runtime ]] && printf runtime-update || printf completed)" \
+    --migration-status runtime-update \
     --previous-anvil-version "$old_anvil_version" \
-    --previous-opencode-version "$old_version" --from-generation "$from_generation" \
+    --previous-opencode-version "$old_version" --from-generation 1 \
     --backup "$backup_dir"
   )
-  if [[ "$operation" == update-runtime ]]; then installation_args+=(--runtime-only); fi
+  installation_args+=(--runtime-only)
   python3 "$ROOT/scripts/installation.py" "${installation_args[@]}" || return $?
   python3 "$ROOT/scripts/runtime_state.py" record --binary "$ANVIL_INSTALLED_BINARY" >/dev/null || return $?
 }
@@ -362,11 +264,7 @@ anvil_lifecycle_execute "$operation" "$backup_dir" "$old_anvil_version" "$ANVIL_
   apply_runtime_change verify_runtime_change commit_runtime_change rollback_runtime_change \
   'Automatic rollback completed; Anvil memory remains in place.' \
   'OpenCode runtime operation failed after live mutation' "$plan_file" "$target_major"
-if [[ "$operation" == update-runtime ]]; then
-  anvil_ok "OpenCode $candidate_version is installed; Anvil ${old_anvil_version:-unknown} was preserved."
-else
-  anvil_ok "Anvil $ANVIL_VERSION with OpenCode $candidate_version is installed."
-fi
+anvil_ok "OpenCode $candidate_version is installed; Anvil ${old_anvil_version:-unknown} was preserved."
 anvil_ok "Rollback snapshot: $backup_dir"
 if [[ "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("added",False))' "$path_result")" == True ]]; then
   anvil_log "Added $ANVIL_INSTALL_BIN to the selected shell startup file; open a new shell to refresh PATH."

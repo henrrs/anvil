@@ -58,12 +58,10 @@ def _audit_config(path: Path, *, allow_older_skill_set: bool = False) -> int | N
     if not path.is_file():
         return None
     suffix = "-compatible" if allow_older_skill_set else ""
-    for command, major in ((f"audit-v1{suffix}", 1), (f"audit{suffix}", 2)):
-        result = subprocess.run([sys.executable, str(ROOT / "scripts" / "configure.py"), command, str(path)],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        if result.returncode == 0:
-            return major
-    return 0
+    result = subprocess.run([sys.executable, str(ROOT / "scripts" / "configure.py"),
+                             f"audit{suffix}", str(path)], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, check=False)
+    return 1 if result.returncode == 0 else 0
 
 
 def _profile_major(path: Path) -> int | None:
@@ -75,11 +73,7 @@ def _profile_major(path: Path) -> int | None:
         return None
     if not isinstance(config, dict):
         return None
-    if isinstance(config.get("agent"), dict) and "anvil" in config["agent"]:
-        return 1
-    if isinstance(config.get("agents"), dict) and "anvil" in config["agents"]:
-        return 2
-    return None
+    return 1 if isinstance(config.get("agent"), dict) and "anvil" in config["agent"] else None
 
 
 def _backup_inventory(root: Path) -> dict[str, Any]:
@@ -131,7 +125,7 @@ def evaluate(runtime_result: dict[str, Any] | None = None,
     runtime_usable = bool(runtime.get("usable") and runtime.get("supported"))
     runtime_major = runtime.get("generation")
     config_present = locations["config"].exists() or locations["config"].is_symlink()
-    config_valid = config_major in {1, 2}
+    config_valid = config_major == 1
     managed_binary_present = locations["managed_binary"].exists() or locations["managed_binary"].is_symlink()
     managed_binary_usable = (managed_binary_present
                              and os.access(locations["managed_binary"], os.X_OK)

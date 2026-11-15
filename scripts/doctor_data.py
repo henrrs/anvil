@@ -10,12 +10,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from configure import _audit_v1, audit, parse_jsonc
+from configure import _audit_v1, parse_jsonc
 import memory
 import managed_config
 import runtime
 import source_registry
-from analytics.diagnostics import collect as collect_analytics_readiness
 
 
 EXPECTED_SKILLS = {
@@ -66,33 +65,23 @@ def main() -> int:
     parser.add_argument("--config-dir", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True, help="XDG data home")
     parser.add_argument("--cwd", type=Path, required=True)
-    parser.add_argument("--runtime-major", type=int, choices=(1, 2), required=True)
     parser.add_argument("--observation-stdin", action="store_true", help="reuse the local lifecycle snapshot")
     args = parser.parse_args()
-    observation = json.load(sys.stdin)["current"] if args.observation_stdin else None
+    observation = json.load(sys.stdin) if args.observation_stdin else None
 
     config_path = args.config_dir / "opencode.jsonc"
     config = read_config(config_path)
-    runtime_major = args.runtime_major
-    config_audit = _audit_v1 if runtime_major == 1 else audit
+    config_audit = _audit_v1
     problems = config_audit(config_path) if config else ["Anvil runtime config is missing or invalid"]
     warnings: list[str] = []
-    agents_key = "agent" if runtime_major == 1 else "agents"
-    agents = config.get(agents_key, {}) if isinstance(config.get(agents_key), dict) else {}
+    agents = config.get("agent", {}) if isinstance(config.get("agent"), dict) else {}
     anvil = agents.get("anvil", {}) if isinstance(agents.get("anvil"), dict) else {}
-    if runtime_major == 1:
-        legacy_permissions = anvil.get("permission", {}) if isinstance(anvil.get("permission"), dict) else {}
-        rules = {
-            (action, resource): effect
-            for action, rule in legacy_permissions.items()
-            for resource, effect in (rule.items() if isinstance(rule, dict) else [("*", rule)])
-        }
-    else:
-        permissions = anvil.get("permissions", []) if isinstance(anvil.get("permissions"), list) else []
-        rules = {
-            (rule.get("action"), rule.get("resource")): rule.get("effect")
-            for rule in permissions if isinstance(rule, dict)
-        }
+    legacy_permissions = anvil.get("permission", {}) if isinstance(anvil.get("permission"), dict) else {}
+    rules = {
+        (action, resource): effect
+        for action, rule in legacy_permissions.items()
+        for resource, effect in (rule.items() if isinstance(rule, dict) else [("*", rule)])
+    }
     skills_dir = args.config_dir / "skills"
     skills = {
         path.name for path in skills_dir.iterdir()
@@ -100,20 +89,12 @@ def main() -> int:
     } if skills_dir.is_dir() else set()
     commands_dir = args.config_dir / "commands"
     commands = {path.stem for path in commands_dir.glob("*.md")} if commands_dir.is_dir() else set()
-    plugin_dir = args.config_dir / "plugins" / "anvil-core"
-    plugin_file = plugin_dir / "index.ts"
-    plugin_key = "plugin" if runtime_major == 1 else "plugins"
-    plugin_entries = config.get(plugin_key, []) if isinstance(config.get(plugin_key), list) else []
-    expected_plugin = "./plugins/anvil-core" if runtime_major == 2 else None
-    unexpected_plugins = [item for item in plugin_entries if item != expected_plugin]
+    plugin_entries = config.get("plugin", []) if isinstance(config.get("plugin"), list) else []
+    unexpected_plugins = list(plugin_entries)
     mcp_config = config.get("mcp", {}) if isinstance(config.get("mcp"), dict) else {}
     mcp_servers = mcp_config.get("servers", {}) if isinstance(mcp_config.get("servers"), dict) else {}
     compaction = config.get("compaction", {}) if isinstance(config.get("compaction"), dict) else {}
     output = config.get("tool_output", {}) if isinstance(config.get("tool_output"), dict) else {}
-    reference_config = config.get("references", {}) if runtime_major == 2 else {}
-    reference = reference_config.get("anvil-knowledge", {}) if isinstance(reference_config, dict) else {}
-    reference_path = reference.get("path") if isinstance(reference, dict) else None
-    knowledge_root = Path(reference_path) if isinstance(reference_path, str) and reference_path else None
     data_root = args.data_dir / "anvil"
     memory_root = data_root / "memory"
     memory_audit = memory.audit()
@@ -125,7 +106,7 @@ def main() -> int:
         migration = {}
     overrides = project_overrides(args.cwd)
     selected_runtime = (observation.get("active_runtime", {}).get("runtime") or {}) if observation else None
-    capabilities = runtime.capabilities(requested_major=runtime_major, observed_runtime=selected_runtime)
+    capabilities = runtime.capabilities(observed_runtime=selected_runtime)
     release_check = subprocess.run(
         [sys.executable, str(Path(__file__).resolve().with_name("version_docs.py"))],
         capture_output=True, text=True, check=False,
@@ -145,21 +126,16 @@ def main() -> int:
             )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             problems.append(f"managed configuration integrity check failed: {exc}")
-    if runtime_major == 2 and (not plugin_file.is_file() or "anvil_memory_search" not in plugin_file.read_text(encoding="utf-8", errors="replace")):
-        problems.append("anvil-core memory search plugin entrypoint is missing")
     v1_plugin = args.config_dir / "plugins" / "anvil-core-v1.ts"
     installed_version = managed_config.parse_version(installation.get("anvil_version"))
-    if (runtime_major == 1 and installed_version is not None
-            and installed_version >= managed_config.ANALYTICS_WORKSPACE_VERSION and not v1_plugin.is_file()):
-        problems.append("Anvil 1.x-compatible tool plugin entrypoint is missing")
+    if installed_version is not None and not v1_plugin.is_file():
+        problems.append("Anvil OpenCode 1 tool plugin entrypoint is missing")
     if memory_audit["invalid"]:
         warnings.append(f"invalid Markdown memory files: {memory_audit['invalid']}")
     if registry_audit["invalid"]:
         warnings.append(f"invalid source registry records: {registry_audit['invalid']}")
     if registry_audit["drifted"]:
         warnings.append(f"source files changed or are missing since distillation: {registry_audit['drifted']}")
-    if runtime_major == 2 and (knowledge_root is None or not knowledge_root.is_dir()):
-        warnings.append("anvil-knowledge reference root is missing or inaccessible")
     if not memory_root.is_dir() or not os.access(memory_root, os.R_OK | os.X_OK | os.W_OK):
         problems.append("Anvil memory root is missing or inaccessible")
     if overrides:
@@ -169,22 +145,21 @@ def main() -> int:
         warnings.append(f"release documentation check failed: {detail}")
 
     print("Harness")
-    print(f"OpenCode {runtime_major} configuration")
+    print("OpenCode 1 configuration")
     print(f"  runtime config         {'valid' if not config_audit(config_path) else 'invalid'}")
     print(f"  default agent          {config.get('default_agent', 'missing')}")
     print(f"  model pinned           {'yes' if anvil.get('model') or anvil.get('variant') else 'no'}")
     print(f"  user model preference  {'set' if config.get('model') else 'not set'}")
-    denied_subagents = rules.get(("task", "*")) == "deny" if runtime_major == 1 else rules.get(("subagent", "*")) == "deny"
+    denied_subagents = rules.get(("task", "*")) == "deny"
     print(f"  subagents denied       {'yes' if denied_subagents else 'no'}")
     print(f"  primary agents         {1 if anvil.get('mode') == 'primary' else 0}")
-    configured_plugin = (runtime_major == 2 and './plugins/anvil-core' in plugin_entries and plugin_file.is_file()) or (runtime_major == 1 and v1_plugin.is_file())
+    configured_plugin = v1_plugin.is_file()
     print(f"  anvil-core configured  {'yes' if configured_plugin else 'no (runtime fallback)'}")
     print("Capabilities")
     print(f"  /remember              {'YES' if commands >= {'remember'} else 'NO'}")
     print(f"  /recall                {'YES' if commands >= {'recall'} else 'NO'}")
     print(f"  /distill               {'YES' if commands >= {'distill'} else 'NO'}")
     print(f"  memory search backend  {capabilities['memory']['search_backend']}")
-    print(f"  native References      {'YES' if capabilities['knowledge']['native_references'] else 'NO'}")
     print("Stats")
     print(f"  native stats           {'YES' if capabilities['stats']['native_stats'] else 'NO'}")
     print(f"  structured stats       {'YES' if capabilities['stats']['structured_native_stats'] else 'NO'}")
@@ -199,47 +174,14 @@ def main() -> int:
     print(f"  search backend         {capabilities['memory']['search_backend']}")
     print(f"  source registry        {registry_audit['sources']} records, {registry_audit['invalid']} invalid, {registry_audit['drifted']} drifted")
     print("Knowledge")
-    if runtime_major == 2:
-        print(f"  native References      {'active' if capabilities['knowledge']['native_references'] else 'unavailable'}")
-        print(f"  knowledge reference    {knowledge_root or 'missing'} ({'present' if knowledge_root and knowledge_root.is_dir() else 'missing'})")
-    else:
-        print("  native References      unavailable")
-        print("  fallback               direct file paths")
+    print("  knowledge access      direct file paths")
     print("Migration and workspace")
     print(f"  previous Anvil version {installation.get('previous_anvil_version') or migration.get('from_anvil') or 'unknown'}")
     print(f"  migration state        {migration.get('status', 'not recorded')}")
     print()
-    try:
-        analytics_port = int(os.environ.get("ANVIL_ANALYTICS_PORT", "8765"))
-        if not 1 <= analytics_port <= 65535:
-            analytics_port = 8765
-    except ValueError:
-        analytics_port = 8765
-    analytics = (observation.get("analytics") if observation else None)
-    if not isinstance(analytics, dict):
-        analytics = collect_analytics_readiness(args.config_dir, Path.home(), analytics_port)
-    analytics_installed = (args.config_dir / "scripts/analytics/server.py").is_file()
-    print("Analytics Workspace")
-    print(f"  installed             {'YES' if analytics_installed else 'NO'}")
-    print(f"  service health        {analytics.get('service', {}).get('status', 'NOT_CHECKED')}")
-    print(f"  OpenCode runtime      {analytics.get('opencode', {}).get('status', 'NOT_CHECKED')}")
-    print(f"  canonical session     {analytics.get('canonical_session', {}).get('status', 'NOT_CHECKED')}")
-    if analytics_installed and os.environ.get("ANVIL_REHEARSAL") != "1" and os.environ.get("ANVIL_TEST_MODE") != "1":
-        unmet = []
-        for dependency in ("duckdb", "pyarrow"):
-            if analytics.get(dependency, {}).get("status") != "READY":
-                unmet.append(dependency)
-        if analytics.get("service", {}).get("status") != "READY":
-            unmet.append("Analytics service")
-        if analytics.get("opencode", analytics.get("runtime", {})).get("status") != "READY":
-            unmet.append("OpenCode Analytics runtime")
-        if analytics.get("canonical_session", {}).get("status") != "READY":
-            unmet.append("canonical Analytics session")
-        if unmet:
-            warnings.append("Analytics capabilities are degraded: " + ", ".join(unmet) + ". Run make upgrade to converge the supported runtime.")
     print("Project overrides")
     print(f"  active                 {', '.join(overrides) if overrides else 'none'}")
-    print("Version documentation")
+    print("Release artifacts")
     print(f"  release consistency    {'valid' if release_check.returncode == 0 else 'check failed'}")
     for problem in problems:
         print(f"ERROR {problem}")

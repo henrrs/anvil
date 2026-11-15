@@ -73,10 +73,8 @@ cleanup_temp() {
 }
 trap cleanup_temp EXIT
 plan_file="$tmp_root/change-plan.json"
-if python3 "$ROOT/scripts/configure.py" audit-v1-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
+if python3 "$ROOT/scripts/configure.py" audit-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
   from_generation=1
-elif python3 "$ROOT/scripts/configure.py" audit-compatible "$ANVIL_CONFIG_DIR/opencode.jsonc" >/dev/null 2>&1; then
-  from_generation=2
 fi
 
 backup_dir=""
@@ -118,16 +116,12 @@ PY
 )
 if [[ "$usable" == True || "$installed" == True ]]; then
   if [[ "$supported" != True ]]; then
-    if [[ "$usable" == True && "$major" =~ ^[12]$ ]]; then
-      anvil_error "OpenCode ${version:-unknown} is installed but not policy-compliant. Run make update-runtime to update within OpenCode $major, or make migrate-runtime OPENCODE_MAJOR=N for an explicit major change."
-    else
-      anvil_error 'An OpenCode executable exists but is unhealthy or unsupported. Repair or remove it explicitly before provisioning another runtime.'
-    fi
+    anvil_error "OpenCode ${version:-unknown} is not a supported Anvil 1.x runtime. Reforge will not replace an existing executable automatically."
     exit 1
   fi
   candidate="$binary"
   candidate_version="$version"
-  target_major="$major"
+  target_major=1
   python3 "$ROOT/scripts/lifecycle_plan.py" reforge --runtime-major "$target_major" \
     --format text --json-output "$plan_file" || exit 2
   anvil_lifecycle_validate_plan reforge "$plan_file" "$target_major" >/dev/null
@@ -135,7 +129,7 @@ if [[ "$usable" == True || "$installed" == True ]]; then
   anvil_log "Reforge will reuse the exact validated OpenCode $version runtime at $binary."
 else
   runtime_action="install"
-  target_major="$(python3 "$ROOT/scripts/runtime.py" policy | python3 -c 'import json,sys; print(json.load(sys.stdin)["opencode"]["default_major"])')"
+  target_major=1
   python3 "$ROOT/scripts/lifecycle_plan.py" reforge --runtime-major "$target_major" \
     --format text --json-output "$plan_file" || exit 2
   anvil_lifecycle_validate_plan reforge "$plan_file" "$target_major" >/dev/null
@@ -157,12 +151,12 @@ with open(sys.argv[1],"w",encoding="utf-8") as stream:
                "release_url":"isolated test fixture","asset":{"name":"fixture","integrity":"sha512-fixture"}},stream)
 PY
   else
-    if ! bash "$ROOT/scripts/install-opencode.sh" resolve "$target_major" > "$release_json"; then
+    if ! bash "$ROOT/scripts/install-opencode.sh" resolve > "$release_json"; then
       anvil_error 'Fresh OpenCode provisioning could not resolve an approved release. No Anvil or runtime files were changed; check access to the official release source and retry.'
       exit 1
     fi
     candidate_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["version"])' "$release_json")"
-    if ! candidate="$(bash "$ROOT/scripts/install-opencode.sh" stage "$candidate_version" "$tmp_root/candidate" "$target_major")"; then
+    if ! candidate="$(bash "$ROOT/scripts/install-opencode.sh" stage "$candidate_version" "$tmp_root/candidate")"; then
       anvil_error 'Fresh OpenCode download/validation failed. No Anvil or runtime files were changed; retry when the official release source is reachable.'
       exit 1
     fi
@@ -185,7 +179,7 @@ printf 'Runtime action         %s\n' "$( [[ "$runtime_action" == reuse ]] && pri
 bash "$ROOT/scripts/inspect.sh"
 
 ready_config="$tmp_root/global-config"
-anvil_build_config "$ready_config" "$ANVIL_CONFIG_DIR" yes "$target_major" "$previous_anvil_version" yes
+anvil_build_config "$ready_config" "$ANVIL_CONFIG_DIR" yes "$previous_anvil_version" yes
 if [[ -d "$ANVIL_CONFIG_DIR" ]]; then
   anvil_print_config_plan "$ANVIL_CONFIG_DIR" "$ready_config" "$previous_anvil_version" "$ANVIL_VERSION" yes
 elif [[ "${DRY_RUN:-0}" == 1 ]]; then
@@ -193,12 +187,7 @@ elif [[ "${DRY_RUN:-0}" == 1 ]]; then
 else
   anvil_log 'No existing OpenCode config directory was found; reforge will install Anvil-owned profile files and a pre-mutation snapshot.'
 fi
-anvil_print_analytics_plan "$ready_config"
-if [[ "$target_major" == 1 ]]; then
-  python3 "$ROOT/scripts/configure.py" audit-v1 "$ready_config/opencode.jsonc"
-else
-  python3 "$ROOT/scripts/configure.py" audit "$ready_config/opencode.jsonc"
-fi
+python3 "$ROOT/scripts/configure.py" audit "$ready_config/opencode.jsonc"
 if [[ "$runtime_action" == install && -n "$candidate" ]]; then
   candidate_state="$(python3 "$ROOT/scripts/runtime_state.py" discover --binary "$candidate" --format json)"
   if ! python3 - "$candidate_state" <<'PY'
@@ -212,9 +201,9 @@ PY
   fi
 fi
 if [[ "$runtime_action" == reuse ]]; then
-  bash "$ROOT/scripts/validate-candidate.sh" "$candidate" "$ready_config" "$candidate_version" "$target_major"
+  bash "$ROOT/scripts/validate-candidate.sh" "$candidate" "$ready_config" "$candidate_version"
 elif [[ -n "$candidate" ]]; then
-  bash "$ROOT/scripts/validate-candidate.sh" "$candidate" "$ready_config" "$candidate_version" "$target_major"
+  bash "$ROOT/scripts/validate-candidate.sh" "$candidate" "$ready_config" "$candidate_version"
 fi
 if [[ "$runtime_action" == install ]]; then
   path_plan="$(python3 "$ROOT/scripts/path_edit.py" plan \
@@ -264,22 +253,18 @@ if [[ "$runtime_action" == install ]]; then recorded_binary="$ANVIL_INSTALLED_BI
 
 apply_reforge() {
   anvil_lifecycle_require_plan_operation ReplaceManagedArtifacts || return $?
-  if [[ -f "$ready_config/runtime/analytics-requirements.lock" ]]; then
-    anvil_lifecycle_require_plan_operation InstallAnalyticsDependencies || return $?
-  fi
   if [[ "$runtime_action" == install ]]; then
     anvil_lifecycle_require_plan_operation InstallRuntimeArtifact || return $?
-    anvil_apply_config "$ready_config" no yes || return $?
+    anvil_apply_config "$ready_config" || return $?
   else
     anvil_apply_config "$ready_config" || return $?
   fi
   if [[ "$runtime_action" == install ]]; then
-    bash "$ROOT/scripts/install-opencode.sh" install "$candidate" "$candidate_version" "$target_major" || return $?
+    bash "$ROOT/scripts/install-opencode.sh" install "$candidate" "$candidate_version" || return $?
     path_result="$(python3 "$ROOT/scripts/path_edit.py" apply \
       --home "$ANVIL_HOME_DIR" --xdg-config-home "$ANVIL_CONFIG_HOME" \
       --install-dir "$ANVIL_INSTALL_BIN" --shell "${SHELL:-bash}" --path "$PATH")" || return $?
     export PATH="$ANVIL_INSTALL_BIN:$PATH"
-    anvil_converge_analytics_runtime "$ANVIL_CONFIG_DIR" || return $?
   fi
   XDG_DATA_HOME="$ANVIL_DATA_HOME" python3 "$ANVIL_CONFIG_DIR/scripts/memory.py" init >/dev/null || return $?
 }

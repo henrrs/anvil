@@ -1,159 +1,64 @@
 # Anvil
 
-Current repository release: **Anvil 2.20.1**. See the [2.20.1 patch notes](docs/versions/v2.20.1.md) and [live engineering evaluation](docs/engineering-live-evaluation-v2.20.1.md).
-
-> **Anvil — A lean, model-agnostic OpenCode harness designed to maximize reliable task completion while minimizing unnecessary context and token usage.**
->
-> **Better harness. Better execution.**
-
-Anvil 2.17.0 hardens the default-installed Analytics Workspace: release-pinned local dependencies, converged service and OpenCode startup, complete Unity Catalog metadata hydration, remote warehouse lifecycle, and a resizable SQL workspace. The feature remains outside traditional Anvil core dependencies.
-
-```bash
-# First installation
-make reforge
-make doctor
-
-# Upgrade Anvil only; preserve the exact installed OpenCode runtime
-git pull
-make test
-make upgrade DRY_RUN=1
-make upgrade
-
-# Offline Analytics Workspace certification
-make eval-analytics
-
-# Existing Anvil installs receive Analytics through the normal upgrade
-make upgrade DRY_RUN=1
-make upgrade
-make analytics-status
-
-# Offline analytical evaluation; model-backed evaluation is optional
-make eval-analytical
-make eval-analytical-semantic
-make eval-analytical-model MODEL=provider/model RUNS=3
-
-# Configure Databricks; default output guides setup in plain language
-make databricks-setup
-
-# Preview local provider/auth strategy without changes or network access
-make databricks-setup DRY_RUN=1
-
-# Request machine-readable results or provider diagnostics
-make databricks-setup OUTPUT=json
-make databricks-setup VERBOSE=1
-
-# Explicit same-major runtime update
-make update-runtime DRY_RUN=1
-make update-runtime
-
-# Explicitly migrate runtime major when approved
-make migrate-runtime OPENCODE_MAJOR=2 DRY_RUN=1
-make migrate-runtime OPENCODE_MAJOR=2
-```
-
-Use `make inspect` to review the current setup before changing it. Use `make capabilities` to see local runtime features and Databricks Supported / Available / Verified status; it does not contact a workspace. `make doctor` revalidates a configured Databricks profile with read-only identity, cluster-list, and warehouse-list calls. With no Anvil profile, doctor remains local and reports Databricks as not configured. Use `make rollback` to restore the latest verified snapshot according to its recorded scope. `make upgrade` upgrades Anvil without changing the OpenCode executable/version. Use `make update-runtime` for an explicit same-major runtime update and `make migrate-runtime OPENCODE_MAJOR=N` for an explicit major change.
-
 **Anvil — A lean, model-agnostic OpenCode harness designed to maximize reliable task completion while minimizing unnecessary context and token usage.**
 
-For a shorter headline: **Anvil — Better harness. Better execution.**
+*Better harness. Better execution.*
 
-Anvil is a lean, model-agnostic harness and lifecycle layer for OpenCode 1.x and 2.x. Anvil's release version is independent from the OpenCode major. OpenCode owns model/provider authentication, sessions, its native tools, and runtime state. Anvil supplies a focused behavioral environment: compact instructions, one primary agent, a small set of skills, explicit file memory, evidence-driven workflows, safe upgrade and recovery operations, optional Databricks integration, and communication/artifact intelligence.
+Anvil provides the working environment around an existing model: focused instructions, skills, memory, tools, and execution rules. It does not create or route models. The model can change; the harness remains the stable surface on which work is shaped and verified.
 
-## Why Anvil?
-
-Anvil means a blacksmith's anvil: the stable base on which material is shaped, refined, and made useful. The anvil is not the material and does not supply all the energy; it provides a dependable surface for the work. **Forge better performance from every model.**
-
-Anvil plays that role for language models. It does not create or route models. It gives the selected model disciplined context, useful skills and memory, clear execution rules, and verification. Models may change; the harness remains the foundation.
+The name refers to a blacksmith's anvil: the base that supports shaping and refining material. Anvil applies that idea to model-assisted engineering: **less noise → better context → disciplined execution → verification.**
 
 ```text
-Luna / Terra / Sol / Astra / Sonnet / other models
-                         │
-                         ▼
-                   Anvil harness
-       context · skills · memory · tools · rules
-                         │
-                         ▼
-              reliable, verified execution
+                 LLM
+                  │
+                  ▼
+            Anvil harness
+   context · skills · memory · tools
+                  │
+                  ▼
+      more reliable task completion
 ```
 
-## Install and upgrade
+Anvil currently supports **OpenCode 1.x**, with a minimum version defined in [runtime policy](config/runtime-policy.json). OpenCode remains responsible for models, providers, authentication, sessions, and runtime data. Databricks integration is optional.
 
-Prerequisites: Linux or macOS, Bash, Python 3.11+, and `tar`. A fresh install may need access to the official OpenCode release source. Existing supported runtimes can be reused without downloading OpenCode. Windows users can run Anvil under WSL. Databricks is optional and does not affect the rest of Anvil.
+## Install
 
-`make inspect` reads local runtime and provider state without changing it, including whether Anvil is not installed, partially installed, ready, degraded, or corrupted. `make test` validates both runtime profiles, memory behavior, lifecycle, rollback, failure recovery, Databricks providers, the offline analytical and engineering evaluation harnesses, and fresh HOME/XDG command journeys with local fixtures. The suite isolates all user/XDG roots, constrains `PATH`, and blocks external network connections in lifecycle checks while allowing loopback for isolated runtime fixtures.
+Requirements: Linux or WSL, Bash, Make, Python 3.11+, and `tar`.
 
-`make eval-analytical` runs versioned synthetic fixtures, deterministic L1/L2 scoring, communication trap tests, FAST/STANDARD/DEEP performance measurements, and an isolated 2.13 comparison when available. `make eval-analytical-semantic` adds the 24-case adversarial semantic certification and compares candidate performance with the immutable 2.14 baseline. `make eval-analytical-model MODEL=provider/model RUNS=3` uses the installed Anvil agent through OpenCode for blind repeated runs; it may use a configured model provider. `make eval-engineering` runs deterministic protocol and independent acceptance fixtures for engineering correctness and recovery. `make eval-engineering-model MODEL=provider/model OPENCODE=/absolute/path` is an opt-in live run against isolated fixtures. Artifacts are stored privately under `${XDG_STATE_HOME:-~/.local/state}/anvil/evaluations/` or the explicit `REPORT` path. Read the [analytical evaluation guide](docs/analytical-intelligence-evaluation.md) and [engineering evaluation report](docs/engineering-harness-report-v2.20.0.md) for methods and limitations.
+```bash
+git clone https://github.com/henrrs/anvil.git
+cd anvil
+make inspect
+make reforge
+make doctor
+```
 
-For a first installation, run `make inspect` to review the environment, then `make reforge` and `make doctor`. Before reforge, inventory commands remain useful; commands that require an installed Anvil report that prerequisite and point to reforge. Rollback reports when no verified snapshot exists. If a healthy supported OpenCode runtime is already installed, reforge rebuilds Anvil around that exact executable without contacting a release service. If no runtime exists, reforge provisions the version selected by `config/runtime-policy.json` and may need network access.
+After pulling a new Anvil release, review and apply it with:
 
-`make upgrade` upgrades Anvil only. It uses the local validated OpenCode executable for rehearsal and preserves its exact path, bytes, and version. `make upgrade DRY_RUN=1` works offline, reports active OpenCode processes, and does not signal them or change live state. A real upgrade checks the backup destination first, warns before stopping only the exact runtime processes using the configured data paths, prefers graceful shutdown, and uses SIGKILL only after the bounded wait. Start OpenCode normally when the upgrade finishes. Use `make update-runtime` for an explicit same-major OpenCode update. Use `make migrate-runtime OPENCODE_MAJOR=N` for an explicit major migration.
+```bash
+make inspect
+make upgrade DRY_RUN=1
+make upgrade
+```
 
-Use `make migrate-runtime OPENCODE_MAJOR=2` only when a move to OpenCode 2 is explicitly approved. The command requires the requested major, rehearses against copied user state, backs up the current runtime/config/data/state, and rolls back on a post-mutation failure. `make migrate-runtime OPENCODE_MAJOR=1` provides the reverse migration path when OpenCode 1 is approved and supported.
+`make upgrade` updates Anvil-owned files and preserves the installed OpenCode executable, authentication, session data, shared settings, and user-owned configuration. `make update-runtime` is the explicit command for updating OpenCode within supported 1.x releases. `make rollback` restores the latest verified lifecycle snapshot.
 
-`make reforge` rebuilds Anvil config with an existing healthy supported runtime without resolving or replacing OpenCode. If no OpenCode runtime exists, reforge may access the official release source to provision the policy-selected first runtime. An existing unhealthy or unsupported runtime is reported for explicit repair/update rather than silently replaced.
+## Everyday commands
 
-## Databricks
+| Command | Purpose |
+| --- | --- |
+| `make inspect` | Read-only summary of installed runtime and Anvil state |
+| `make doctor` | Check Anvil, OpenCode, memory, and local Databricks readiness |
+| `make capabilities` | Show available Anvil and provider capabilities |
+| `make stats` | Show native OpenCode usage statistics when available |
+| `make databricks-setup` | Set up Anvil-owned Databricks CLI authentication and readiness |
+| `make rollback` | Restore the latest verified lifecycle snapshot |
+| `make test` | Run the offline test suite in temporary HOME/XDG directories |
 
-Databricks is optional. Normal `make reforge` and `make upgrade` do not install Databricks tools or contact a workspace. Run `make databricks-setup` when you explicitly want Anvil to configure Databricks. Anvil creates its own profile, such as `anvil-dev`, in `${XDG_CONFIG_HOME:-~/.config}/anvil/databricks/databrickscfg`. Existing user profiles are left untouched and are not adopted. The CLI is installed under Anvil's user-local data directory with SHA-256 verification; an isolated Python SDK fallback is prepared when needed.
+See [capabilities](docs/capabilities.md), [lifecycle and recovery](docs/lifecycle.md), [architecture](docs/architecture.md), and [development and tests](docs/development.md).
 
-Use `make databricks-setup DRY_RUN=1` to inspect the proposed actions and local auth/provider discovery without network access or state changes. Setup asks for a workspace URL and environment label, then selects authentication from workspace cloud and terminal topology. It reuses a valid Azure CLI session, supports Azure device-code login remotely and Azure interactive login locally, and uses Databricks OAuth U2M where appropriate. The CLI and SDK use the same Anvil-owned config. External `DATABRICKS_*` overrides are removed from Anvil child processes; Anvil reports variable names without revealing their values. Use `make databricks-setup RESET=1` to replace only Anvil-owned config after validation; a private backup is retained. Doctor reports external profiles separately and never uses them. The optional SQL Connector and Databricks Connect remain specialized providers; VS Code is assisted only, never automated through private IDE APIs.
+## Safety and ownership
 
-Human-readable output is the default for setup, doctor, and capabilities. Use `make databricks-setup OUTPUT=json` for the full structured result or `VERBOSE=1` for local provider diagnostics. Provider installation and workspace authentication happen only after explicitly running `make databricks-setup`.
+Anvil keeps OpenCode authentication and sessions in OpenCode's existing data paths. Lifecycle operations take verified snapshots before applying managed changes. Shared user settings and files outside Anvil's managed ownership are preserved; unsafe ownership conflicts stop the operation for review.
 
-Anvil discovers a previously verified CLI by its absolute path even if a later shell has a different `PATH`. `make doctor` reports live provider health and its last validation; `make capabilities` reports local inventory and cached capability evidence, which becomes stale after 15 minutes. Databricks setup reaches READY only after a production-path current-user check and verified cluster and warehouse list calls. Empty lists are valid; setup does not need running compute or SQL access. The wrapper keeps bounded Python/SQL results, system-table read-only behavior, and no-silent-mutation rules. See [Databricks setup, readiness, and provider docs](docs/databricks/README.md).
-
-## Analytics Workspace
-
-Analytics is included by `make reforge` and `make upgrade`; no separate installer or manual dependency installation is needed. Upgrade stages the release-pinned DuckDB/PyArrow runtime and validates it before switching the active config or starting the service. A configured corporate Python package registry is authoritative by default; public PyPI fallback is disabled unless `ANVIL_ALLOW_PUBLIC_PYPI=true` is set. Anvil reads existing pip configuration without changing it. `make upgrade DRY_RUN=1` shows pins and source policy without downloading packages. `make analytics` idempotently reuses or starts the managed service and prints its URL; use `make analytics-dev` only for foreground development. Open **http://anvil.localhost:8765**. Set `ANALYTICS_PORT=...` on a Make command or `ANVIL_ANALYTICS_PORT` in the environment to choose another local port.
-
-The workspace is global, independent of the current Git repository, and stores its private control state under `~/.anvil/analytics/` and workspace files under `~/.anvil/workspaces/analytics/`. It uses the existing Anvil-owned Databricks profile and auth provider. The catalog first renders cached metadata, then refreshes catalogs, schemas and table/view metadata in the background; table columns and previews remain lazy. SQL warehouses are discovered into a selector; remote queries and an explicit Make local transfer can start a stopped warehouse and wait for it to become ready. SQL query results are read-only and bounded. `LOCAL` and `AUTO` prove coverage before any Databricks discovery; fully covered queries run through DuckDB even when Databricks is degraded. Coverage checks query requirements (columns, predicates and row population), and a local copy is READY only when metadata, Parquet and DuckDB schemas agree. Existing Parquet copies are reconciled automatically after upgrade. Anvil keeps one logical local copy per workspace/table, reuses broader coverage when it can prove that safe, and lets users remove the copy from Home or the table's Local data tab. The table action reflects real coverage and active writes. Form errors stay in the dialog; all-column selection has no redundant confirmation. All rows has no hidden row ceiling: transfers checkpoint each chunk, retry transient failures, and resume a still-valid remote result after process restart. Different tables can materialize concurrently while each table retains a single writer. CURRENT remains usable until a fully verified replacement is published. See the [Analytics correctness and recovery notes](docs/analytics-local-correctness-hardening.md).
-
-Ask Anvil uses the same OpenCode runtime with a separate canonical Analytics session, plus child sessions for deep investigations. The logical `anvil-analytics` policy prefers Luna 6 through GitHub Copilot and resolves exact provider/model IDs from OpenCode's live `/provider` catalog before each prompt. Discovery failures are surfaced; there is no invalid hardcoded fallback. The workspace shows the model and provider after validation, persists visible chat history across reloads, and rotates the canonical session when Clear conversation is confirmed. The header uses the authenticated Databricks identity, with its last verified value during a provider outage. Assistant replies render safe Markdown, including scrollable keyboard-accessible tables. The OpenCode 1 and 2 plugins expose the same bounded Analytics tools through their respective plugin APIs. No OpenCode API or Databricks credential is exposed to the browser. DuckDB and PyArrow are required for the default local SQL and materialization capabilities and are installed into the service's isolated release-pinned environment. Use `make doctor` and `make capabilities` for status. See [Analytics user guide](docs/analytics-workspace.md), [architecture](docs/analytics-workspace-architecture.md), [operations](docs/analytics-workspace-operations.md), and [data plane](docs/analytics-workspace-data-plane.md).
-
-To preview the frontend from a checkout without Anvil, OpenCode, or Databricks installed, run `make analytics-ui-mock SCENARIO=healthy`; the development server is local and isolated from production packaging. See the [mock scenario guide](docs/analytics-workspace.md#developer-mock-preview).
-
-If the installed CLI times out on a provider-specific read-only health check, explicit `make databricks-setup` can prepare Anvil's isolated SDK fallback and repeat validation. Shared authentication, workspace-network, permission, and argument failures do not trigger provider cycling. The 45-second metadata-list timeout is unchanged; see the [provider fallback and timeout policy](docs/databricks/readiness.md).
-
-Backups live under `$XDG_DATA_HOME/anvil/backups/` (default `~/.local/share/anvil/backups/`). Each snapshot records its scope. An Anvil-only backup restores config and Anvil metadata while preserving OpenCode executable/data/state; a runtime backup also includes OpenCode config, executable, data, and state. Runtime archives may contain sensitive session or authentication state.
-
-## Memory and knowledge
-
-Anvil keeps Markdown memory under `$XDG_DATA_HOME/anvil/memory/`. Existing V1 entries remain readable without rewriting. Search is lexical, accent-insensitive, bounded, and can use aliases for multilingual retrieval. Memory is not a database, vector index, or automatic transcript store.
-
-- `/remember` saves a specific fact or decision the user explicitly wants retained.
-- `/recall` searches existing entries and returns a small relevant set.
-- `/distill` turns explicitly named documents, pasted content, or evidence into a small set of reusable memories with provenance. It checks duplicates, preserves historical or conflicting claims, and detects unchanged sources so they are not reprocessed unnecessarily.
-
-Persistent writes require explicit `/remember`, `/distill`, or direct user intent. Knowledge documents remain the source material; memory contains compact derived claims. The `anvil-knowledge` OpenCode Reference points to the separate `$XDG_DATA_HOME/anvil/knowledge/` directory.
-
-On OpenCode 1 and 2, Anvil's local `anvil-core` plugin exposes bounded memory search and Analytics tools through the runtime-specific plugin API. Neither adapter rewrites prompts, routes models, or writes memories implicitly. Native `anvil-knowledge` References are available on OpenCode 2; OpenCode 1 accesses explicitly named knowledge files through normal file reads.
-
-## Models, agents, and skills
-
-Anvil configures one model-neutral `anvil` primary agent. No model is pinned; select models through OpenCode as usual. The four built-in user-facing agents are disabled, subagents are denied, and no MCP servers are enabled by default. Allowlisted skills cover memory, Spark performance, Delta Lake, Databricks, data ingestion, communication artifacts, engineering continuity and system design.
-
-## Adaptive engineering depth
-
-Anvil judges the requested change, not the size or complexity of its repository. A local fix stays in the direct loop even when a long project is active; unrelated Work Model state remains dormant. Anvil expands into the relevant requirement, architecture, state, or domain evidence when uncertainty or meaningful risk changes the next safe action, then narrows again when that decision is resolved. No `/fast`, `/deep`, or other user mode is required.
-
-For genuine multi-milestone work, `anvil-engineering` retains separate Requirements, Architecture, and Work models, crash-safe resume, and completion gates. When OpenCode 2 invokes its documented compaction hook, Anvil can supply a bounded, transcript-free checkpoint from the active repository task; OpenCode 1 continues to use explicit resume after compaction. Hook registration and live behavior depend on the installed OpenCode build. Architecture checks reuse valid evidence and run only for the affected boundary at a completed milestone. `anvil-system-design`, language-specific references, and Spark internals remain lazy. See [adaptive engineering](docs/adaptive-engineering.md), [the engineering guide](docs/engineering.md), [engineering quality guidance](config/skills/anvil-engineering/references/quality.md), [evaluation evidence](docs/engineering-evaluation.md), and the [2.20 harness evolution report](docs/engineering-harness-report-v2.20.0.md).
-
-## Communication and artifacts
-
-Use natural language with the Anvil agent, for example: “Analyze these named files and prepare an executive report,” “Prepare exactly five slides from this evidence,” or “Review this Markdown artifact against its plan.” The `anvil-communication` skill guides source inventory, targeted extraction, evidence provenance, quantitative interpretation, six audience lenses, editorial selection, semantic visual intent, and review. `/review PATH` is the generic command for reviewing an explicitly named artifact.
-
-The local core is also available at `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/scripts/artifacts.py` after installation. It provides bounded `discover` and `extract`, deterministic `quantify`, hard-constraint checks, `critique PLAN.json`, Markdown report/slide-outline materialization, semantic architecture-to-SVG rendering, and deterministic review. `make capabilities` lists its supported inputs and renderers.
-
-Supported source extraction includes Markdown/text, CSV/TSV, JSON/JSONC text, common source/config files, and text/value extraction from DOCX/PPTX/XLSX. PDF text extraction is optional and requires `pdftotext`. Embedded images, charts, speaker notes, scanned pages, workbook formulas, and media are not interpreted. Available artifact outputs are Markdown and accessible architecture SVG; binary PPTX/DOCX/PDF, quantitative chart rendering, OCR, and animation are not available in this release.
-
-Numerical values remain tied to evidence IDs. The deterministic core separates absolute change, relative change, and percentage-point change; preserves missing values and zero/negative baseline limitations; supports measured normalization and distribution summaries; and keeps estimates, scenarios, and annualized projections labeled. It recalculates derived values before materialization. Executive, financial, technical-leadership, engineering, technical, and mixed audiences receive different emphasis and presentation detail without altering the underlying measurements. Structural and arithmetic PASS results do not prove that a narrative claim is true; semantic review remains required.
-
-## Recovery and status
-
-`make rollback` restores the latest verified snapshot by scope. An Anvil-only snapshot restores Anvil config/metadata and preserves the OpenCode executable/data/state; a runtime snapshot restores those runtime files as well. Current Anvil Markdown memory is archived separately before rollback and remains portable.
-
-`make doctor` checks the shared lifecycle state as well as the selected config adapter and agent policy, commands and skills, runtime support, memory, knowledge access, source registry, migration metadata, and visible workspace overrides. It reports `HEALTHY`, `WARNING`, `PARTIALLY INSTALLED`, `BROKEN`, or `NOT INSTALLED`; exit codes are `0` for a completed healthy/informational check, `2` for warnings or partial installs, and `1` for corrupted state or failed checks. A supported installation on an older Anvil release is reported as `UPGRADE AVAILABLE` with exit code `0`. `make stats` uses OpenCode 2's structured JSON report or OpenCode 1's native text report; unavailable metrics are reported without invented values.
-
-## Version history
-
-Anvil 2.20.0 adds optional OpenCode 2 compaction continuity for active engineering tasks, focused quality guidance, and deterministic plus opt-in live engineering evaluation. See the [2.20.0 release notes](docs/versions/v2.20.0.md), [migration guide](docs/migrations/v2.19.0-to-v2.20.0.md), and [engineering harness report](docs/engineering-harness-report-v2.20.0.md). Anvil 2.19.0 adds legacy LocalDataset reconciliation, full-row materialization, resumable transfers, parallel scheduling, authenticated identity and persistent Ask Anvil history. See the [2.19.0 release notes](docs/versions/v2.19.0.md), [migration guide](docs/migrations/v2.18.0-to-v2.19.0.md), and [engineering report](docs/analytics-local-reliability-report.md). Anvil 2.18.0 strengthens Analytics query correctness, materialization recovery, Databricks service trust and Ask Anvil model resolution. See the [Anvil 2.18.0 release notes](docs/versions/v2.18.0.md), [Analytics engineering report](docs/analytics-workspace-report-v2.18.0.md), [2.17.1-to-2.18.0 migration guide](docs/migrations/v2.17.1-to-v2.18.0.md), and [Analytics correctness and recovery notes](docs/analytics-local-correctness-hardening.md). Anvil 2.17.1 hardens convergence and recovery on installed machines; see its [release notes](docs/versions/v2.17.1.md), [installed-state convergence report](docs/analytics-workspace-report-v2.17.1.md), and [migration guide](docs/migrations/v2.17.0-to-v2.17.1.md). Earlier references include the [2.17.0 Analytics engineering report](docs/analytics-workspace-report-v2.17.0.md), [Analytics Workspace guide](docs/analytics-workspace.md), [architecture](docs/analytics-workspace-architecture.md), [operations](docs/analytics-workspace-operations.md), [data plane](docs/analytics-workspace-data-plane.md), [Analytics certification](artifacts/analytics-certification/summary.md), [Anvil quality audit](docs/quality-audit.md), [analytical intelligence guide](docs/analytical-intelligence.md), [system map](docs/system-map.md), [runtime capability matrix](docs/versions/README.md), [Databricks readiness contract](docs/databricks/readiness.md), [runtime compatibility](docs/runtime-compatibility.md), and the [changelog](CHANGELOG.md).
+Databricks setup writes only Anvil-owned configuration and uses its isolated CLI installation. It does not adopt or rewrite external profiles.

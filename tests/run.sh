@@ -2,20 +2,14 @@
 
 set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-if [[ $# -ne 7 ]]; then
-  printf 'usage: tests/run.sh OPENCODE_2_CANDIDATE VERSION_2 OPENCODE_1_CANDIDATE VERSION_1 OPENCODE_1_MINIMUM VERSION_1_MINIMUM TEMP_ROOT\n' >&2
+if [[ $# -ne 3 ]]; then
+  printf 'usage: tests/run.sh OPENCODE_1_CANDIDATE VERSION_1 TEMP_ROOT\n' >&2
   exit 2
 fi
-candidate_v2="$1"
-version_v2="${2#opencode }"
-version_v2="${version_v2#v}"
-candidate_v1="$3"
-version_v1="${4#opencode }"
+candidate_v1="$1"
+version_v1="${2#opencode }"
 version_v1="${version_v1#v}"
-candidate_v1_min="$5"
-version_v1_min="${6#opencode }"
-version_v1_min="${version_v1_min#v}"
-tmp_root="$7"
+tmp_root="$3"
 test_phase="${ANVIL_TEST_PHASE:-all}"
 case "$test_phase" in
   all|core|lifecycle) ;;
@@ -74,19 +68,14 @@ for folder in (root/"scripts",root/"tests"):
 PY
 pass 'Shell and Python syntax'
 
-python3 - "$ROOT/scripts/version_docs.py" <<'PY' || fail 'release documentation requirement map'
+python3 - "$ROOT/scripts/version_docs.py" <<'PY' || fail 'release documentation contract'
 import ast,sys
 tree=ast.parse(open(sys.argv[1],encoding="utf-8").read())
-assignment=next(
-    node for node in ast.walk(tree)
-    if isinstance(node,ast.Assign)
-    and any(isinstance(target,ast.Name) and target.id=="required" for target in node.targets)
-    and isinstance(node.value,ast.Dict)
-)
-keys=[key.value for key in assignment.value.keys if isinstance(key,ast.Constant) and isinstance(key.value,str)]
-assert len(keys)==len(set(keys)), "scripts/version_docs.py contains duplicate requirement paths"
+docs=next(node.value for node in tree.body if isinstance(node,ast.Assign)
+          and any(isinstance(target,ast.Name) and target.id=="DOCS" for target in node.targets))
+assert len(docs.elts)==len({item.value for item in docs.elts})
 PY
-pass 'Release documentation requirements cannot silently overwrite one another'
+pass 'Core release documentation contract is unique'
 
 python3 - "$ROOT" <<'PY' || fail 'runtime independence boundary or repository identifier hygiene'
 import re,subprocess,sys
@@ -102,7 +91,7 @@ for relative in filter(None,tracked):
 makefile=(root/"Makefile").read_text(encoding="utf-8")
 upgrade=(root/"scripts/anvil_upgrade.sh").read_text(encoding="utf-8")
 assert "@bash scripts/anvil_upgrade.sh" in makefile, "make upgrade does not use the Anvil-only lifecycle"
-assert "@bash scripts/upgrade.sh --update-runtime" in makefile, "same-major runtime update target is missing"
+assert "@bash scripts/upgrade.sh --update-runtime" in makefile, "OpenCode 1 runtime update target is missing"
 for forbidden in ("install-opencode.sh", "opencode_release.py", "opencode_v1_release.py", "latest-version"):
     assert forbidden not in upgrade, f"Anvil-only upgrade imports runtime resolver/installer: {forbidden}"
 doctor=(root/"scripts/doctor.sh").read_text(encoding="utf-8")
@@ -124,7 +113,7 @@ rollback=(root/"scripts/rollback.sh").read_text(encoding="utf-8")
 assert "lifecycle_plan.py" in rollback and "lifecycle_verify.py" in rollback, \
     "rollback does not plan the selected snapshot and structurally verify the restored state"
 makefile=(root/"Makefile").read_text(encoding="utf-8")
-for target in ("analytics", "databricks-setup"):
+for target in ("databricks-setup",):
     recipe=makefile.split(f"{target}:\n",1)[1].split("\n\n",1)[0]
     assert "lifecycle_plan.py" in recipe, f"{target} bypasses the lifecycle contributor planner"
 assert "ANVIL_DOCTOR_LOCAL=1" in (root/"scripts/rehearse-upgrade.sh").read_text(encoding="utf-8"), \
@@ -146,32 +135,6 @@ assert not module._local("api.github.com") and not module._local("203.0.113.1")
 PY
 pass 'Offline lifecycle guard blocks external endpoints and permits loopback fixtures'
 
-python3 - "$ROOT" <<'PY' || fail 'npm registry error diagnostics'
-import importlib.util,sys,urllib.error
-from pathlib import Path
-path=Path(sys.argv[1]) / "scripts" / "opencode_release.py"
-spec=importlib.util.spec_from_file_location("anvil_opencode_release",path)
-module=importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-original=module.urllib.request.urlopen
-def forbidden(request,timeout):
-    raise urllib.error.HTTPError(request.full_url,403,"Forbidden",None,None)
-module.urllib.request.urlopen=forbidden
-try:
-    try:
-        module.request_json("https://registry.npmjs.org/@opencode%2fcli")
-    except RuntimeError as exc:
-        message=str(exc)
-        assert "HTTP 403" in message
-        assert "https://registry.npmjs.org/@opencode%2fcli" in message
-        assert "proxy/firewall" in message
-    else:
-        raise AssertionError("HTTP 403 was not reported")
-finally:
-    module.urllib.request.urlopen=original
-PY
-pass 'npm registry HTTP errors include the endpoint and network guidance'
-
 # The repository template contains a path placeholder; validate the generated
 # native config so the audit sees the absolute knowledge Reference path used
 # by an installation.
@@ -180,13 +143,8 @@ env HOME="$tmp_root/audit-home" XDG_CONFIG_HOME="$tmp_root/audit-config" \
   XDG_DATA_HOME="$tmp_root/audit-data" XDG_STATE_HOME="$tmp_root/audit-state" ANVIL_ROOT="$ROOT" \
   bash -c 'source "$ANVIL_ROOT/scripts/lib/common.sh"; source "$ANVIL_ROOT/scripts/lib/install.sh"; anvil_build_config "$1" ""' \
   _ "$tmp_root/config-audit-ready" || fail 'build isolated config for audit'
-python3 "$ROOT/scripts/configure.py" audit "$tmp_root/config-audit-ready/opencode.jsonc" || fail 'V2 native config audit'
-env HOME="$tmp_root/audit-home" XDG_CONFIG_HOME="$tmp_root/audit-config" \
-  XDG_DATA_HOME="$tmp_root/audit-data" XDG_STATE_HOME="$tmp_root/audit-state" ANVIL_ROOT="$ROOT" \
-  bash -c 'source "$ANVIL_ROOT/scripts/lib/common.sh"; source "$ANVIL_ROOT/scripts/lib/install.sh"; anvil_build_config "$1" "" no 1' \
-  _ "$tmp_root/config-audit-v1-ready" || fail 'build isolated OpenCode 1 config'
-python3 "$ROOT/scripts/configure.py" audit-v1 "$tmp_root/config-audit-v1-ready/opencode.jsonc" || fail 'OpenCode 1 runtime config audit'
-python3 "$ROOT/scripts/configure.py" audit-v1 "$ROOT/tests/fixtures/v1/opencode.jsonc" || fail 'V1 regression config fixture'
+python3 "$ROOT/scripts/configure.py" audit "$tmp_root/config-audit-ready/opencode.jsonc" || fail 'OpenCode 1 runtime config audit'
+python3 "$ROOT/scripts/configure.py" audit "$ROOT/tests/fixtures/v1/opencode.jsonc" || fail 'V1 regression config fixture'
 python3 "$ROOT/scripts/version_docs.py" || fail 'release documentation consistency'
 python3 - "$ROOT/scripts/runtime.py" <<'PY' || fail 'runtime policy/capability adapters'
 import importlib.util,sys
@@ -194,16 +152,10 @@ spec=importlib.util.spec_from_file_location("anvil_runtime",sys.argv[1])
 module=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 policy=module.policy()["opencode"]
-assert policy["supported_majors"]==[1,2] and policy["default_major"]==1
-v1=module.capabilities(requested_major=1)
-v2=module.capabilities(requested_major=2)
-assert v1["core"]["distill"] and v1["memory"]["source_registry"] and not v1["memory"]["native_search_tool"]
-assert not v1["knowledge"]["native_references"] and v1["stats"]["native_stats"] and not v1["stats"]["structured_native_stats"]
-assert v1["runtime_features"]["native_plugins"] and not v1["runtime_features"]["anvil_core_plugin"]
-assert v2["memory"]["native_search_tool"] and v2["knowledge"]["native_references"] and v2["stats"]["structured_native_stats"]
-assert v2["runtime_features"]["native_plugins"] and v2["runtime_features"]["anvil_core_plugin"]
+assert policy["supported_majors"]==[1] and policy["default_major"]==1
+assert set(module.FEATURES)=={1}
 PY
-pass 'Runtime policy exposes independent OpenCode 1/2 adapters and capability profiles'
+pass 'Runtime policy contains only the OpenCode 1 adapter'
 python3 "$ROOT/tests/databricks.py" || fail 'Databricks offline integration and FinOps scenarios'
 pass 'Databricks profiles, bounded execution, no-mutation policy, and FinOps evidence scenarios'
 env ANVIL_DATABRICKS_CLI=/nonexistent/anvil-test-databricks \
@@ -222,52 +174,39 @@ assert data["databricks"]["overall"] == "NOT_CONFIGURED"
 assert data["databricks"]["profile_configured"] is False
 PY
 pass 'make capabilities emits one combined machine-readable JSON document'
-python3 - "$ROOT" <<'PY' || fail 'V1/V2 baseline, model neutrality, plugin scope, or secret scan'
+python3 - "$ROOT" "$tmp_root/config-audit-ready/opencode.jsonc" <<'PY' || fail 'OpenCode 1 profile invariants or secret scan'
 import json,sys
 from pathlib import Path
 root=Path(sys.argv[1])
-config=json.loads((root/"config/opencode.jsonc").read_text(encoding="utf-8"))
+config=json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+agent=config["agent"]["anvil"]
 assert config["default_agent"]=="anvil"
-assert "model" not in config and "small_model" not in config
-assert config["agents"]["anvil"]["mode"]=="primary"
-assert all(config["agents"][name]["disabled"] is True for name in ("build","plan","general","explore"))
-assert config["agents"]["anvil"]["permissions"][-2]["action"]=="subagent"
-assert config["mcp"]["servers"]=={}
-assert config["plugins"]==["./plugins/anvil-core"]
+assert "model" not in agent and "small_model" not in agent
+assert agent["mode"]=="primary" and agent["permission"]["*"]=="deny"
+assert config["mcp"]=={} and config["plugin"]==[]
+assert (Path(sys.argv[2]).parent/"plugins/anvil-core-v1.ts").is_file()
 assert {p.stem for p in (root/"config/commands").glob("*.md")}=={"remember","recall","distill","review"}
 assert {p.name for p in (root/"config/skills").iterdir()}=={"anvil-memory","anvil-spark-performance","anvil-delta-lake","anvil-databricks","anvil-data-ingestion","anvil-communication","anvil-engineering","anvil-system-design"}
-plugin=(root/"config/plugins/anvil-core/index.ts").read_text(encoding="utf-8")
-assert "anvil_memory_search" in plugin and "ctx.tool.transform" in plugin
-assert plugin.count('ctx.session.hook("compaction"') == 1
-assert '"compaction-context"' in plugin and "engineering.py" in plugin
-assert "ctx.session.hook(" not in (root/"config/plugins-v1/anvil-core.ts").read_text(encoding="utf-8")
-for forbidden in ("chat.message", "session.created", "tool.execute", "provider.transform", "system.prompt", "session.compacting"):
-    assert forbidden not in plugin, f"unexpected hook/routing behavior {forbidden}"
+plugin=(root/"config/plugins-v1/anvil-core.ts").read_text(encoding="utf-8")
+assert "anvil_memory_search" in plugin and "ctx.tool.transform" not in plugin
 for path in root.rglob("*"):
     if not path.is_file() or ".git" in path.parts or path.suffix in {".pyc", ".db", ".sqlite"}: continue
     content=path.read_bytes()
     assert b"-----BEGIN " + b"PRIVATE KEY-----" not in content, f"possible private key in {path}"
     assert b"gh" + b"p_" not in content, f"possible GitHub token in {path}"
 PY
-pass 'V1 invariants, V2 model-neutral config, single plugin/tool scope, and secret scan'
+pass 'OpenCode 1 profile invariants, model neutrality, scoped plugin, and secret scan'
 
-# Construct the native config with a temporary data root, then load the local
-# OpenCode contract fixture under a clean HOME/XDG environment.
+# Build the OpenCode 1 config and load the local runtime fixture under a clean
+# HOME/XDG environment.
 mkdir -p -- "$tmp_root/smoke-home" "$tmp_root/smoke-config" "$tmp_root/smoke-data" "$tmp_root/smoke-state"
 env HOME="$tmp_root/smoke-home" XDG_CONFIG_HOME="$tmp_root/smoke-config" \
   XDG_DATA_HOME="$tmp_root/smoke-data" XDG_STATE_HOME="$tmp_root/smoke-state" ANVIL_ROOT="$ROOT" \
   bash -c 'source "$ANVIL_ROOT/scripts/lib/common.sh"; source "$ANVIL_ROOT/scripts/lib/install.sh"; anvil_build_config "$1" ""' \
   _ "$tmp_root/smoke-config-ready" || fail 'build isolated OpenCode config'
-bash "$ROOT/scripts/validate-candidate.sh" "$candidate_v2" "$tmp_root/smoke-config-ready" "$version_v2" 2 || fail 'exact OpenCode 2 candidate runtime smoke test'
-pass "Offline OpenCode 2 profile fixture $version_v2 loads Anvil config, agent, commands, skills, plugin and knowledge reference"
-env HOME="$tmp_root/smoke-home" XDG_CONFIG_HOME="$tmp_root/smoke-config" \
-  XDG_DATA_HOME="$tmp_root/smoke-data" XDG_STATE_HOME="$tmp_root/smoke-state" ANVIL_ROOT="$ROOT" \
-  bash -c 'source "$ANVIL_ROOT/scripts/lib/common.sh"; source "$ANVIL_ROOT/scripts/lib/install.sh"; anvil_build_config "$1" "" no 1' \
-  _ "$tmp_root/smoke-config-v1-ready" || fail 'build isolated OpenCode 1 config'
-bash "$ROOT/scripts/validate-candidate.sh" "$candidate_v1" "$tmp_root/smoke-config-v1-ready" "$version_v1" 1 || fail 'OpenCode 1 candidate runtime smoke test'
-pass "Offline OpenCode 1 profile fixture $version_v1 loads Anvil config, agent, commands and skills"
-bash "$ROOT/scripts/validate-candidate.sh" "$candidate_v1_min" "$tmp_root/smoke-config-v1-ready" "$version_v1_min" 1 || fail 'minimum supported OpenCode 1 runtime smoke test'
-pass "OpenCode 1 compatibility floor profile fixture $version_v1_min loads Anvil config, agent, commands and skills"
+python3 "$ROOT/scripts/configure.py" audit "$tmp_root/smoke-config-ready/opencode.jsonc" || fail 'OpenCode 1 profile config smoke audit'
+bash "$ROOT/scripts/validate-candidate.sh" "$candidate_v1" "$tmp_root/smoke-config-ready" "$version_v1" || fail 'OpenCode 1 candidate runtime smoke test'
+pass "OpenCode 1 fixture $version_v1 loads Anvil config, agent, commands and skills"
 
 # V1 Markdown remains readable/searchable and search remains a no-write operation.
 memory_home="$tmp_root/memory-home"
@@ -294,7 +233,7 @@ python3 "$ROOT/tests/communication.py" || fail 'communication/artifact intellige
 pass 'Communication and artifact intelligence runs deterministic offline regressions'
 python3 "$ROOT/tests/engineering.py" || fail 'engineering state, interruption, stale evidence and direct-path regressions'
 python3 "$ROOT/tests/local_evaluation.py" || fail 'local OpenCode evaluation policy and trace privacy regressions'
-python3 "$ROOT/evals/engineering/run.py" --mode replay --repeats 2 --output "$tmp_root/engineering-eval.json" || fail 'ingestion and unrelated scheduler engineering replays'
+python3 "$ROOT/evals/engineering/run.py" --repeats 2 --output "$tmp_root/engineering-eval.json" || fail 'ingestion and unrelated scheduler engineering replays'
 pass 'Engineering models, atomic recovery, conformance, compaction and unrelated-domain replays'
 python3 "$ROOT/evals/engineering/adaptive.py" --output "$tmp_root/adaptive-eval.json" || fail 'task-local adaptive activation cases'
 python3 - "$tmp_root/adaptive-eval.json" <<'PY' || fail 'adaptive execution route and selective architecture evidence comparison'
@@ -317,14 +256,10 @@ python3 "$ROOT/tests/lifecycle_model.py" || fail 'lifecycle state normalization'
 python3 "$ROOT/tests/lifecycle_plan.py" || fail 'lifecycle planning'
 python3 "$ROOT/tests/lifecycle_execution.py" || fail 'lifecycle plan execution contract'
 python3 "$ROOT/tests/configure_first_install.py" || fail 'first-install configuration characterization'
-python3 "$ROOT/tests/lifecycle.py" "$ROOT" "$candidate_v2" "$version_v2" "$candidate_v1" "$version_v1" "$tmp_root" || fail 'upgrade/reforge/migrate-runtime/rollback lifecycle integration'
-python3 "$ROOT/tests/analytics_lifecycle.py" || fail 'Analytics fresh install, upgrade, dry-run and rollback integration'
+python3 "$ROOT/tests/lifecycle.py" "$ROOT" "$ROOT/tests/fixtures/bin/opencode" "$version_v1" "$tmp_root" || fail 'OpenCode 1 upgrade/reforge/rollback lifecycle integration'
 fi
 
 if [[ "$test_phase" != lifecycle ]]; then
-PYTHONPATH="$ROOT:$ROOT/tests/fixtures/network-denied" python3 -m unittest discover -s "$ROOT/tests/analytics" -p 'test_*.py' || fail 'Analytics runtime, catalog, query, transfer, BFF and tool regressions'
-pass 'Analytics offline contracts and failure paths'
-
 python3 - "$ROOT" "$tmp_root/stats-sample.json" <<'PY' || fail 'native stats formatter'
 import json,sys
 from pathlib import Path

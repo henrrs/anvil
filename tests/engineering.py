@@ -337,16 +337,15 @@ class EngineeringTests(unittest.TestCase):
         revised["requirements"]["items"][-1]["priority"] = "optional"
         self.assert_code("REQUIREMENT_CONFLICT", engine.replan, state, project, project / "specification.md", revised, "Convenient scope reduction")
 
-    def test_installed_helpers_work_on_both_runtime_profiles_without_state(self):
-        for major in (1, 2):
-            generated = self.base / f"config-{major}"
-            env = {**os.environ, "HOME": str(self.base / "home"), "XDG_CONFIG_HOME": str(self.base / "config"), "ANVIL_ROOT": str(ROOT)}
-            subprocess.run(["bash", "-c", 'source "$ANVIL_ROOT/scripts/lib/common.sh"; source "$ANVIL_ROOT/scripts/lib/install.sh"; anvil_build_config "$1" "" no "$2"', "_", str(generated), str(major)], env=env, check=True, capture_output=True)
-            request = self.base / "request.txt"
-            request.write_text("Rename a field")
-            result = subprocess.run([sys.executable, str(generated / "scripts/engineering.py"), "assess", "--request", str(request), "--format", "json"], env=env, capture_output=True, text=True, check=True)
-            self.assertEqual(json.loads(result.stdout)["workflow"], "DIRECT")
-            self.assertTrue((generated / "skills/anvil-system-design/SKILL.md").is_file())
+    def test_installed_helpers_work_on_opencode_1_without_state(self):
+        generated = self.base / "config"
+        env = {**os.environ, "HOME": str(self.base / "home"), "XDG_CONFIG_HOME": str(self.base / "config-home"), "ANVIL_ROOT": str(ROOT)}
+        subprocess.run(["bash", "-c", 'source "$ANVIL_ROOT/scripts/lib/common.sh"; source "$ANVIL_ROOT/scripts/lib/install.sh"; anvil_build_config "$1" ""', "_", str(generated)], env=env, check=True, capture_output=True)
+        request = self.base / "request.txt"
+        request.write_text("Rename a field")
+        result = subprocess.run([sys.executable, str(generated / "scripts/engineering.py"), "assess", "--request", str(request), "--format", "json"], env=env, capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(result.stdout)["workflow"], "DIRECT")
+        self.assertTrue((generated / "skills/anvil-system-design/SKILL.md").is_file())
         self.assertFalse(store.state_root().exists())
 
     def test_technical_case_structure_cannot_claim_semantic_pass(self):

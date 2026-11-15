@@ -7,7 +7,6 @@ import argparse
 import importlib.util
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 import urllib.error
@@ -69,13 +68,7 @@ def communication_state() -> dict:
     }
 
 
-def engineering_state(runtime_major: int | None = None) -> dict:
-    if runtime_major == 2:
-        compaction = {"mode": "optional_v2_native_hook", "fail_soft": True}
-    elif runtime_major == 1:
-        compaction = {"mode": "native_summary_plus_manual_read_only_resume", "fail_soft": True}
-    else:
-        compaction = {"mode": "runtime_not_detected; use manual read-only resume", "fail_soft": True}
+def engineering_state() -> dict:
     return {"status": "DISABLED" if os.environ.get("ANVIL_ENGINEERING") == "off" else "AVAILABLE",
             "activation": "progressive; short tasks use the direct workflow without state",
             "interface": "anvil-engineering / anvil-system-design skills and local engineering.py helper",
@@ -83,64 +76,12 @@ def engineering_state(runtime_major: int | None = None) -> dict:
             "capabilities": ["atomic_task_state", "requirements_coverage", "dependency_checks", "bounded_resume",
                              "repository_drift", "replanning", "architecture_invariants", "explicit_semantic_reviews",
                              "failure_aware_checks", "progressive_spark_references"],
-            "compaction_context": compaction,
+            "compaction_context": {"mode": "manual_read_only_resume", "fail_soft": True},
             "state": "XDG_STATE_HOME/anvil/engineering; separate from durable memory; created explicitly",
             "runtime_independent": True, "model_independent": True, "required_dependencies": [],
             "limitations": ["Semantic extraction/design/review require agent judgment.",
                             "Resume never executes work or proves external-operation idempotency.",
                             "Deterministic fixtures do not measure real-model task success."]}
-
-
-def analytics_state(readiness: dict) -> dict:
-    home = Path.home()
-    config_home = Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config"))).expanduser()
-    config_dir = config_home / "opencode"
-    package = config_dir / "scripts" / "analytics"
-    web_root = config_dir / "web" / "analytics"
-    port = os.environ.get("ANVIL_ANALYTICS_PORT", "8765")
-    try:
-        parsed_port = int(port)
-        if not 1 <= parsed_port <= 65535:
-            parsed_port = 8765
-    except ValueError:
-        parsed_port = 8765
-    installed = package.is_dir() and not package.is_symlink()
-    frontend = all((web_root / name).is_file() and not (web_root / name).is_symlink()
-                   for name in ("index.html", "app.js", "styles.css"))
-    shared = (config_dir / "scripts" / "databricks.py").is_file()
-    service_ready = readiness.get("service", {}).get("status") == "READY"
-    runtime_state = readiness.get("opencode", readiness.get("runtime", {}))
-    runtime_ready = runtime_state.get("status") == "READY"
-    canonical_ready = readiness.get("canonical_session", {}).get("status") == "READY"
-    duckdb = readiness.get("duckdb", {}).get("status") == "READY"
-    pyarrow = readiness.get("pyarrow", {}).get("status") == "READY"
-    catalog_state = readiness.get("catalog", {})
-    catalog_status = "AVAILABLE" if installed and shared and catalog_state.get("catalogs", 0) else catalog_state.get("status", "DEGRADED")
-    local_status = "READY" if duckdb else "DEGRADED"
-    materialization_status = "READY" if installed and shared and pyarrow else "DEGRADED"
-    databricks = readiness.get("databricks", {})
-    sql_workspace_status = "READY" if databricks.get("workspace") == "READY" else "DEGRADED"
-    overall = "READY" if installed and frontend and service_ready and runtime_ready and canonical_ready and duckdb and pyarrow else "DEGRADED"
-    return {
-        "status": overall,
-        "installed": installed,
-        "frontend": "READY" if frontend else "MISSING",
-        "url": f"http://anvil.localhost:{parsed_port}",
-        "service": "READY" if service_ready else "NOT_READY",
-        "context_store": "AVAILABLE" if sqlite3.sqlite_version else "UNAVAILABLE",
-        "catalog": catalog_status,
-        "sql_workspace": sql_workspace_status,
-        "ask_anvil": "READY" if service_ready and runtime_ready and canonical_ready else "DEGRADED",
-        "local_analytics": local_status,
-        "materialization": materialization_status,
-        "runtime_generation": runtime_state.get("generation"),
-        "canonical_session": canonical_ready,
-        "dependencies": {"duckdb": duckdb, "pyarrow": pyarrow, "sqlite": sqlite3.sqlite_version},
-        "readiness": readiness,
-        "data_root": str(home / ".anvil" / "analytics"),
-        "host_reachability": "NOT_CHECKED",
-        "limitations": ["A Windows-to-WSL browser check requires the user's Windows host."],
-    }
 
 
 def databricks_module():
@@ -158,19 +99,17 @@ def main() -> int:
     parser.add_argument("--format", choices=("json", "text"), default="text")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--binary")
-    parser.add_argument("--major", type=int)
     args = parser.parse_args()
     adapter = databricks_module()
     observed = resolve_lifecycle()
     selected = observed.active_runtime.get("runtime") or {}
-    runtime_state = runtime.capabilities(args.binary, args.major, observed_runtime=selected)
+    runtime_state = runtime.capabilities(args.binary, observed_runtime=selected)
     databricks_state = observed.databricks
     databricks_capabilities = adapter.capabilities(databricks_state)
     communication = communication_state()
     analysis = analysis_state()
     runtime_major = runtime_state.get("runtime", {}).get("major")
-    engineering = engineering_state(runtime_major if isinstance(runtime_major, int) else None)
-    analytics = analytics_state(observed.analytics)
+    engineering = engineering_state()
     if args.format == "json":
         print(json.dumps({
             "schema_version": 1,
@@ -181,14 +120,13 @@ def main() -> int:
             "communication": communication,
             "analysis": analysis,
             "engineering": engineering,
-            "analytics": analytics,
         }, indent=2))
         return 0
 
     result = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "runtime.py"), "capabilities", "--format", "text", *(
             ["--binary", args.binary] if args.binary else []
-        ), *(["--major", str(args.major)] if args.major is not None else [])],
+        )],
         check=False,
     )
     if result.returncode:
@@ -222,17 +160,6 @@ def main() -> int:
     print("  Models                 Requirements, architecture, work (separate from memory)")
     print("  Resume                 Bounded, stale-aware; no automatic execution")
     print("  Compaction             " + engineering["compaction_context"]["mode"])
-    print()
-    print("Analytics Workspace")
-    print(f"  Status                 {analytics['status']}")
-    print(f"  Catalog                {analytics['catalog']}")
-    print(f"  SQL Workspace          {analytics['sql_workspace']}")
-    print(f"  Ask Anvil              {analytics['ask_anvil']}")
-    print(f"  Local Analytics        {analytics['local_analytics']}")
-    print(f"  Materialization        {analytics['materialization']}")
-    print(f"  Service                {analytics['service']} ({analytics['url']})")
-    print(f"  Context Store          {analytics['context_store']}")
-    print("  WSL reachability       NOT_CHECKED")
     return 0
 
 

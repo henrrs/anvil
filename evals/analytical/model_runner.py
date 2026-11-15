@@ -61,7 +61,7 @@ def installed_analysis_helper() -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def _project_permissions(runtime_major: int, workspace: Path, helper: Path) -> dict[str, Any]:
+def _project_permissions(workspace: Path, helper: Path) -> dict[str, Any]:
     workspace_pattern = str(workspace / "**")
     dataset_path = shlex.quote(str(workspace / "dataset.csv"))
     plan_path_resource = str(workspace / "analysis-plan.json")
@@ -71,38 +71,22 @@ def _project_permissions(runtime_major: int, workspace: Path, helper: Path) -> d
                         f"{helper_command} execute {dataset_path} {plan_path}")
     helper_directory = str(helper.parent)
     helper_patterns = (helper_directory, helper_directory + "/*", helper_directory + "/**")
-    if runtime_major == 1:
-        external_rules = {"*": "deny", **{pattern: "allow" for pattern in helper_patterns}}
-        read_rules = {"*": "deny", workspace_pattern: "allow",
-                      **{pattern: "allow" for pattern in helper_patterns}}
-        shell_rules = {"*": "deny", **{pattern: "allow" for pattern in command_patterns}}
-        return {"$schema": "https://opencode.ai/config.json",
-                "agent": {"anvil": {"permission": {
-                    "*": "deny",
-                    "external_directory": external_rules,
-                    "read": read_rules,
-                    "edit": {"*": "deny", plan_path_resource: "allow"},
-                    "bash": shell_rules,
-                    "skill": {"*": "deny", "anvil-communication": "allow"},
-                }}}}
-    if runtime_major == 2:
-        permissions = [
-            {"action": "*", "resource": "*", "effect": "deny"},
-            {"action": "external_directory", "resource": "*", "effect": "deny"},
-            {"action": "read", "resource": workspace_pattern, "effect": "allow"},
-            {"action": "edit", "resource": plan_path_resource, "effect": "allow"},
-            *({"action": "shell", "resource": pattern, "effect": "allow"} for pattern in command_patterns),
-            {"action": "skill", "resource": "anvil-communication", "effect": "allow"},
-        ]
-        permissions.extend({"action": "external_directory", "resource": pattern, "effect": "allow"}
-                           for pattern in helper_patterns)
-        permissions.extend({"action": "read", "resource": pattern, "effect": "allow"}
-                           for pattern in helper_patterns)
-        return {"$schema": "https://opencode.ai/config.json", "agents": {"anvil": {"permissions": permissions}}}
-    raise ValueError("only OpenCode runtime majors 1 and 2 are supported")
+    external_rules = {"*": "deny", **{pattern: "allow" for pattern in helper_patterns}}
+    read_rules = {"*": "deny", workspace_pattern: "allow",
+                  **{pattern: "allow" for pattern in helper_patterns}}
+    shell_rules = {"*": "deny", **{pattern: "allow" for pattern in command_patterns}}
+    return {"$schema": "https://opencode.ai/config.json",
+            "agent": {"anvil": {"permission": {
+                "*": "deny",
+                "external_directory": external_rules,
+                "read": read_rules,
+                "edit": {"*": "deny", plan_path_resource: "allow"},
+                "bash": shell_rules,
+                "skill": {"*": "deny", "anvil-communication": "allow"},
+            }}}}
 
 
-def prepare_blind_workspace(workspace: str | Path, source: str | Path, *, runtime_major: int = 2,
+def prepare_blind_workspace(workspace: str | Path, source: str | Path, *,
                             analysis_helper: str | Path | None = None) -> Path:
     """Populate a fresh model workspace with a public CSV and restrictive local policy."""
     root, source_path = Path(workspace), Path(os.path.abspath(Path(source).expanduser()))
@@ -123,7 +107,7 @@ def prepare_blind_workspace(workspace: str | Path, source: str | Path, *, runtim
     data_copy.write_bytes(source_path.read_bytes())
     os.chmod(data_copy, 0o600)
     config = root / "opencode.json"
-    config.write_text(json.dumps(_project_permissions(runtime_major, root, helper), ensure_ascii=False, indent=2) + "\n",
+    config.write_text(json.dumps(_project_permissions(root, helper), ensure_ascii=False, indent=2) + "\n",
                        encoding="utf-8")
     os.chmod(config, 0o600)
     return data_copy
@@ -332,9 +316,9 @@ def run_blind_once(fixture_id: str, model: str, *, dataset_path: str | Path | No
         raise ValueError("timeout_seconds must be between 1 and 900")
     prompt = PROMPT_PATH.read_text(encoding="utf-8")
     runtime = _runtime_version(selected_binary)
-    runtime_match = re.search(r"\b([12])\.\d+(?:\.\d+)?\b", runtime or "")
+    runtime_match = re.search(r"\b(1)\.\d+(?:\.\d+)?\b", runtime or "")
     if not runtime_match:
-        return {"run_id": run_id, "status": "BLOCKED", "blocker": "Could not identify a supported OpenCode runtime major.",
+        return {"run_id": run_id, "status": "BLOCKED", "blocker": "The analytical evaluation requires OpenCode 1.x.",
                 "candidate": None, "model": model, "runtime": runtime, "duration_ms": 0,
                 "tool_calls": None, "tokens": None, "prompt_version": PROMPT_VERSION}
     runtime_major = int(runtime_match.group(1))
@@ -347,8 +331,7 @@ def run_blind_once(fixture_id: str, model: str, *, dataset_path: str | Path | No
     try:
         with tempfile.TemporaryDirectory(prefix="anvil-blind-eval-") as temporary:
             workspace = Path(temporary)
-            data_copy = prepare_blind_workspace(workspace, source, runtime_major=runtime_major,
-                                                analysis_helper=helper)
+            data_copy = prepare_blind_workspace(workspace, source, analysis_helper=helper)
             project_config = workspace / "opencode.json"
             config_root = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")).expanduser() / "opencode"
             execution_context = {"agent": "anvil", "output_format": "json",

@@ -101,7 +101,6 @@ anvil_recover_pending() {
   backup_valid="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("backup_valid",False))' "$transaction")"
   error="$(python3 -c 'import json,sys; v=json.loads(sys.argv[1]); print(v.get("backup_error") or v.get("error") or "")' "$transaction")"
   operation="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("operation") or "")' "$transaction")"
-  operation_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("operation_id") or "")' "$transaction")"
   if [[ -L "$ANVIL_CONFIG_DIR" || -L "$ANVIL_INSTALL_ROOT" || -L "$ANVIL_INSTALL_BIN" ]]; then
     anvil_error 'A managed config or installer path became a symlink after interruption. Automatic recovery stopped for manual review.'
     return 1
@@ -126,13 +125,6 @@ PY
     return 1
   fi
   if [[ "$action" == ABORT_STAGING && "$valid" == True ]]; then
-    if [[ -n "$operation_id" ]]; then
-      python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" abort \
-        --data-root "$ANVIL_DATA_HOME" --operation-id "$operation_id" >/dev/null || {
-          anvil_error "Interrupted pre-activation staging could not be cleaned safely. Journal operation $operation_id remains for retry."
-          return 1
-        }
-    fi
     python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" clear || return 1
     anvil_cleanup_interrupted_config_staging
     anvil_ok "Interrupted upgrade stopped before activation. Staged artifacts were discarded; the active installation remains unchanged."
@@ -140,18 +132,6 @@ PY
     return 0
   fi
   if [[ "$action" == FINALIZE_TARGET && "$valid" == True ]]; then
-    local operation_marker="$ANVIL_DATA_HOME/anvil/analytics/operations/$operation_id.json"
-    if [[ -e "$operation_marker" || -L "$operation_marker" ]]; then
-      [[ ! -L "$operation_marker" && -f "$operation_marker" ]] || {
-        anvil_error 'The committed target has an unsafe Analytics operation marker; preserve state for manual review.'
-        return 1
-      }
-      python3 "$ANVIL_ROOT/scripts/analytics_dependencies.py" finalize \
-        --data-root "$ANVIL_DATA_HOME" --operation-id "$operation_id" >/dev/null || {
-          anvil_error "The target is installed, but Analytics runtime finalization failed for operation $operation_id. Retry the lifecycle command to resume safely."
-          return 1
-        }
-    fi
     python3 "$ANVIL_ROOT/scripts/lifecycle_transaction.py" clear || return 1
     anvil_cleanup_interrupted_config_staging
     anvil_ok 'The committed Anvil target was already installed; pending finalization is complete.'

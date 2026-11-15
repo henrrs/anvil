@@ -56,13 +56,6 @@ class RuntimeState:
 
 
 @dataclass(frozen=True)
-class AnalyticsSessionState:
-    document: Document
-    canonical_session_present: bool = False
-    runtime_generation: int | None = None
-
-
-@dataclass(frozen=True)
 class DatabricksState:
     document: Document
     configured: bool = False
@@ -83,7 +76,6 @@ class PersistedState:
     installation: InstallationState
     managed_manifest: ManagedManifestState
     runtime: RuntimeState
-    analytics_session: AnalyticsSessionState
     databricks: DatabricksState
     memory: MemoryState
 
@@ -125,7 +117,7 @@ def _string(value: Any) -> str | None:
 
 
 def _major(value: Any) -> int | None:
-    return value if type(value) is int and value in (1, 2) else None
+    return value if type(value) is int and value == 1 else None
 
 
 def normalize_installation(path: Path) -> InstallationState:
@@ -152,12 +144,6 @@ def normalize_runtime(path: Path) -> RuntimeState:
         return RuntimeState(Document(DocumentStatus.INVALID, document.schema_version, "invalid runtime record"))
     return RuntimeState(document, _string(runtime.get("executable")), _string(runtime.get("version")),
                         _major(runtime.get("generation")), _string(runtime.get("adapter")))
-
-
-def normalize_analytics_session(path: Path) -> AnalyticsSessionState:
-    value, document = _object(path, 1)
-    return AnalyticsSessionState(document, bool(_string(value.get("canonical_session_id"))),
-                                 _major(value.get("runtime_generation")))
 
 
 def normalize_databricks(path: Path) -> DatabricksState:
@@ -192,7 +178,6 @@ def resolve_persisted(home: Path, config_home: Path, data_home: Path) -> Persist
         normalize_installation(anvil_data / "installation.json"),
         normalize_managed_manifest(config_home / "opencode" / ".anvil-managed.json"),
         normalize_runtime(anvil_data / "runtime.json"),
-        normalize_analytics_session(home / ".anvil" / "analytics" / "runtime.json"),
         normalize_databricks(config_home / "anvil" / "databricks.json"),
         normalize_memory(anvil_data / "memory"),
     )

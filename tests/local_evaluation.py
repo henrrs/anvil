@@ -77,6 +77,55 @@ class LocalEvaluationTests(unittest.TestCase):
             self.assertNotIn("DATABRICKS_TOKEN", child)
             self.assertTrue(pathlib.Path(child["XDG_DATA_HOME"]).is_relative_to(pathlib.Path(tempfile.gettempdir())))
 
+    def test_runtime_log_diagnostics_read_xdg_logs_without_retaining_messages(self):
+        with tempfile.TemporaryDirectory(prefix="anvil-eval-runtime-log-") as temporary:
+            root = pathlib.Path(temporary)
+            data_home = root / "user-data"
+            log = data_home / "opencode/log/opencode.log"
+            log.parent.mkdir(parents=True)
+            log.write_text(
+                '{"level":"error","provider":"openai","error":{"status":401,'
+                '"message":"Unauthorized sk-private-example"}}\n',
+                encoding="utf-8",
+            )
+            prompt_history = root / "state/opencode/prompt-history.jsonl"
+            prompt_history.parent.mkdir(parents=True)
+            prompt_history.write_text('{"prompt":"PRIVATE USER PROMPT"}\n', encoding="utf-8")
+
+            evidence = local_runner._run.inspect_runtime_logs(
+                root / "home", data_home, root / "state", root / "cache"
+            )
+            serialized = json.dumps(evidence)
+
+            self.assertEqual(evidence["provider_category"], "AUTHENTICATION_OR_PROVIDER_ACCESS")
+            self.assertEqual(evidence["http_status"], 401)
+            self.assertEqual(evidence["provider_id"], "openai")
+            self.assertEqual(evidence["files"], 1)
+            self.assertEqual(evidence["bytes"], log.stat().st_size)
+            self.assertNotIn("Unauthorized", serialized)
+            self.assertNotIn("sk-private-example", serialized)
+            self.assertNotIn("PRIVATE USER PROMPT", serialized)
+            self.assertIn("sha256", serialized)
+
+            stale = local_runner._run.inspect_runtime_logs(
+                root / "home", data_home, root / "state", root / "cache",
+                since_epoch=log.stat().st_mtime + 1,
+            )
+            self.assertEqual(stale["files"], 0)
+
+    def test_local_runtime_database_failure_is_classified_without_retaining_stderr(self):
+        with tempfile.TemporaryDirectory(prefix="anvil-eval-runtime-error-") as temporary:
+            trace = pathlib.Path(temporary) / "trace.jsonl"
+            process = subprocess.Popen(
+                [sys.executable, "-c", "import sys; sys.stderr.write('Database is not empty and has no session table')"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+            )
+            metrics = local_runner._run.stream_metrics(process, 10, 4096, trace)
+
+            self.assertEqual(metrics["failure_class"], "LOCAL_RUNTIME_STATE_ERROR")
+            self.assertIsNone(metrics["provider_category"])
+            self.assertNotIn("Database is not empty", trace.read_text(encoding="utf-8"))
+
     def test_treatment_task_prompt_is_neutral(self):
         prompt = local_runner.challenge_prompt()
         self.assertIn("repository-provided instructions and skills when applicable", prompt)

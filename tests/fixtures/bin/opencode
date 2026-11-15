@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small offline OpenCode CLI contract fixture for both Anvil runtime profiles."""
+"""Small offline OpenCode 1 CLI contract fixture."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from urllib.parse import urlsplit
 
 args = sys.argv[1:]
 version = os.environ.get("ANVIL_FIXTURE_VERSION", "1.18.18")
-major = 1 if version.startswith("1.") else 2
 config_dir = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "opencode"
 config_path = config_dir / "opencode.jsonc"
 server_record = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "anvil-fixture-server.json"
@@ -51,7 +50,7 @@ def output(value):
 
 
 def api_server():
-    plugin = [{"id": "anvil-core", "state": {"status": "active"}}] if (config_dir / "plugins/anvil-core/index.ts").is_file() else []
+    plugin = [{"id": "anvil-core", "state": {"status": "active"}}] if (config_dir / "plugins/anvil-core-v1.ts").is_file() else []
     references = [{"name": "anvil-knowledge", "path": "fixture-knowledge"}] if load_config().get("references") else []
     mapping = {
         "/api/command": {"data": commands()},
@@ -97,11 +96,8 @@ elif args[:2] == ["debug", "paths"]:
     print(f"state {Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'opencode'}")
 elif args[:2] == ["debug", "config"]:
     config = load_config()
-    if major == 1:
-        config["command"] = {item["name"]: {} for item in commands()}
-        output(config)
-    else:
-        output([{"type": "document", "info": config}])
+    config["command"] = {item["name"]: {} for item in commands()}
+    output(config)
 elif args[:2] == ["debug", "skill"]:
     output(skills())
 elif args and args[0] == "stats":

@@ -89,8 +89,7 @@ except RuntimeError as exc:
 COMMUNICATION_VERSION = SKILL_INTRODUCED.get("anvil-communication", (2, 7, 0))
 ENGINEERING_VERSION = SKILL_INTRODUCED.get("anvil-engineering", (2, 9, 0))
 ANALYSIS_INTELLIGENCE_VERSION = (2, 13, 0)
-ANALYTICS_WORKSPACE_VERSION = (2, 16, 0)
-ANALYTICS_RUNTIME_CONVERGENCE_VERSION = (2, 17, 0)
+V1_PLUGIN_VERSION = (2, 16, 0)
 DATABRICKS_PROVIDER_VERSION = (2, 3, 0)
 USER_PREFERENCES = {"cli.json", "tui.json", "tui.jsonc"}
 SHARED_PROFILE_KEYS = {
@@ -101,25 +100,20 @@ BASE_REQUIRED_SCRIPTS = {
     "scripts/memory.py", "scripts/source_registry.py", "scripts/runtime.py", "scripts/runtime_state.py",
 }
 DATABRICKS_SCRIPTS = {"scripts/databricks.py", "scripts/databricks_finops.py"}
-OPTIONAL_MANAGED_PREFIXES = ("scripts/analytics/", "web/analytics/")
+REMOVED_CAPABILITY_PREFIXES = ("scripts/analytics/", "web/analytics/")
 RELEASE_CONTROL_FILES = {
     "scripts/anvil_upgrade.sh", "scripts/upgrade.sh", "scripts/reforge.sh", "scripts/rollback.sh",
     "scripts/lib/common.sh", "scripts/lib/install.sh", "scripts/lib/backup.sh",
     "scripts/lib/lifecycle-operation.sh", "scripts/managed_config.py", "scripts/release_authority.py",
     "scripts/lifecycle_state.py", "scripts/lifecycle_plan.py", "scripts/lifecycle_contributors.py",
     "scripts/lifecycle_executor.py", "scripts/lifecycle_verify.py", "scripts/lifecycle_transaction.py",
-    "scripts/lifecycle_recovery.py", "scripts/lifecycle_baseline.py", "scripts/analytics_schema.py",
-    "scripts/analytics_service.py", "scripts/analytics_dependencies.py", "scripts/state.py",
+    "scripts/lifecycle_recovery.py", "scripts/state.py",
 }
 
 
-def _analytics_workspace_files() -> set[str]:
-    return (_shipped_package("scripts/analytics", "scripts/analytics")
-            | _shipped_package("web/analytics", "web/analytics", exclude_dirs={"dev"}))
-
-
 def _is_optional_managed_file(relative: str) -> bool:
-    return any(relative.startswith(prefix) for prefix in OPTIONAL_MANAGED_PREFIXES)
+    # Permit an old managed workspace to be pruned when preparing its removal.
+    return any(relative.startswith(prefix) for prefix in REMOVED_CAPABILITY_PREFIXES)
 
 
 def _release_source_path(relative: str, major: int) -> str | None:
@@ -129,14 +123,10 @@ def _release_source_path(relative: str, major: int) -> str | None:
     for prefix in ("commands/", "skills/"):
         if relative.startswith(prefix):
             return f"config/{relative}"
+    if relative == "plugins/anvil-core-v1.ts" and major == 1:
+        return "config/plugins-v1/anvil-core.ts"
     if relative.startswith("plugins/"):
-        if major == 1 and relative == "plugins/anvil-core-v1.ts":
-            return "config/plugins-v1/anvil-core.ts"
-        if major == 2 and relative.startswith("plugins/anvil-core/"):
-            return f"config/{relative}"
         return None
-    if relative == "runtime/analytics-requirements.lock":
-        return "config/analytics-requirements.lock"
     if relative in {"VERSION", "config/runtime-policy.json"}:
         return relative
     if relative in {
@@ -144,9 +134,7 @@ def _release_source_path(relative: str, major: int) -> str | None:
         "scripts/databricks.py", "scripts/databricks_finops.py", "scripts/artifacts.py",
         "scripts/engineering.py", "scripts/public_errors.py", "scripts/analyze.py", "scripts/lifecycle_model.py",
     } or relative.startswith(("scripts/engineering/", "scripts/communication/",
-                              "scripts/databricks_providers/", "scripts/analysis/", "scripts/analytics/")):
-        return relative
-    if relative.startswith("web/analytics/") and len(PurePosixPath(relative).parts) == 3:
+                              "scripts/databricks_providers/", "scripts/analysis/")):
         return relative
     return None
 
@@ -155,11 +143,7 @@ def _release_artifacts_for_major(major: int) -> dict[str, str | None]:
     if RELEASE_ARTIFACT_ERROR:
         raise ManagedConfigError(RELEASE_ARTIFACT_ERROR)
     files = dict(RELEASE_ARTIFACTS)
-    if major == 1:
-        files = {path: digest for path, digest in files.items() if not path.startswith("plugins/anvil-core/")}
-    elif major == 2:
-        files.pop("plugins/anvil-core-v1.ts", None)
-    else:
+    if major != 1:
         raise ManagedConfigError(f"unsupported OpenCode runtime major: {major}")
     return files
 
@@ -244,7 +228,7 @@ def release_checkout_changes(root: Path = ROOT, *, test_mode: bool | None = None
         return ["VERSION", "config/managed-inventory.json"]
     source_paths = {"VERSION", "config/managed-inventory.json", *(control_files or RELEASE_CONTROL_FILES)}
     for relative in artifacts:
-        for major in (1, 2):
+        for major in (1,):
             source = _release_source_path(str(relative), major)
             if source:
                 source_paths.add(source)
@@ -327,10 +311,10 @@ def _shipped_package(prefix: str, repository_dir: str, *,
             and not (set(path.relative_to(root).parts) & (exclude_dirs or set()))}
 
 
-def _shipped_plugin_paths(major: int = 2) -> set[str]:
-    if major == 1:
-        return {"plugins/anvil-core-v1.ts"}
-    return _shipped_package("plugins/anvil-core", "config/plugins/anvil-core")
+def _shipped_plugin_paths(major: int = 1) -> set[str]:
+    if major != 1:
+        raise ManagedConfigError("Anvil supports only OpenCode 1.x")
+    return {"plugins/anvil-core-v1.ts"}
 
 
 def _relative(value: str) -> PurePosixPath:
@@ -431,23 +415,15 @@ def _profile_skills(root: Path) -> tuple[int | None, set[str]]:
         raise ManagedConfigError(f"installed OpenCode profile cannot be read: {exc}") from exc
     if not isinstance(config, dict):
         raise ManagedConfigError("installed OpenCode profile root is not an object")
-    v1 = isinstance(config.get("agent"), dict) and "anvil" in config.get("agent", {})
-    major = 1 if v1 else 2 if isinstance(config.get("agents"), dict) and "anvil" in config.get("agents", {}) else None
-    if major == 1:
-        permission = config["agent"]["anvil"].get("permission", {})
-        permission = permission if isinstance(permission, dict) else {}
-        skills = permission.get("skill", {})
-        if not isinstance(skills, dict):
-            raise ManagedConfigError("installed OpenCode 1 skill policy is invalid")
-        return major, {name for name, effect in skills.items() if name != "*" and effect == "allow"}
-    if major == 2:
-        permissions = config["agents"]["anvil"].get("permissions", [])
-        if not isinstance(permissions, list):
-            raise ManagedConfigError("installed OpenCode 2 permission policy is invalid")
-        return major, {str(rule.get("resource")) for rule in permissions
-                       if isinstance(rule, dict) and rule.get("action") == "skill"
-                       and rule.get("effect") == "allow" and rule.get("resource") != "*"}
-    raise ManagedConfigError("installed OpenCode config is not a recognized Anvil profile")
+    agents = config.get("agent")
+    if not isinstance(agents, dict) or "anvil" not in agents:
+        raise ManagedConfigError("installed OpenCode config is not a recognized Anvil 1 profile")
+    permission = agents["anvil"].get("permission", {})
+    permission = permission if isinstance(permission, dict) else {}
+    skills = permission.get("skill", {})
+    if not isinstance(skills, dict):
+        raise ManagedConfigError("installed OpenCode 1 skill policy is invalid")
+    return 1, {name for name, effect in skills.items() if name != "*" and effect == "allow"}
 
 
 def _legacy_owned(root: Path, source_version: str | None, *, allow_missing: bool = False) -> tuple[set[str], list[str]]:
@@ -480,9 +456,7 @@ def _legacy_owned(root: Path, source_version: str | None, *, allow_missing: bool
         required.update(BASE_REQUIRED_SCRIPTS)
     if version and version >= DATABRICKS_PROVIDER_VERSION:
         required.update(DATABRICKS_SCRIPTS)
-    if major == 2:
-        required.update(_shipped_plugin_paths(2))
-    if major == 1 and version and version >= ANALYTICS_WORKSPACE_VERSION:
+    if version and version >= V1_PLUGIN_VERSION:
         required.update(_shipped_plugin_paths(1))
     if version and version >= COMMUNICATION_VERSION:
         required.update({"scripts/artifacts.py", "skills/anvil-communication/SKILL.md", "commands/review.md"})
@@ -491,8 +465,6 @@ def _legacy_owned(root: Path, source_version: str | None, *, allow_missing: bool
     if version and version >= ANALYSIS_INTELLIGENCE_VERSION:
         required.add("scripts/analyze.py")
         required.update(_shipped_package("scripts/analysis", "scripts/analysis"))
-    if version and version >= ANALYTICS_RUNTIME_CONVERGENCE_VERSION:
-        required.update({"VERSION", "config/runtime-policy.json", "runtime/analytics-requirements.lock"})
     if version is None and "anvil-communication" in skills:
         required.update(path for path in ("scripts/artifacts.py", "skills/anvil-communication/SKILL.md", "commands/review.md")
                         if path in actual or path in symlinks or path in other)
@@ -516,11 +488,6 @@ def _legacy_owned(root: Path, source_version: str | None, *, allow_missing: bool
     if version and version >= ANALYSIS_INTELLIGENCE_VERSION:
         owned.add("scripts/analyze.py")
         owned.update(_shipped_package("scripts/analysis", "scripts/analysis"))
-    if version and version >= ANALYTICS_WORKSPACE_VERSION:
-        owned.update(path for path in _analytics_workspace_files()
-                     if path in actual or path in symlinks or path in other)
-    if version and version >= ANALYTICS_RUNTIME_CONVERGENCE_VERSION:
-        owned.update({"VERSION", "config/runtime-policy.json", "runtime/analytics-requirements.lock"})
     for skill in skills:
         introduced = SKILL_INTRODUCED.get(skill)
         if version is not None and introduced is not None and version < introduced:
@@ -528,9 +495,7 @@ def _legacy_owned(root: Path, source_version: str | None, *, allow_missing: bool
         shipped_skill = ROOT / "config" / "skills" / skill
         if shipped_skill.is_dir():
             owned.update(_shipped_package(f"skills/{skill}", f"config/skills/{skill}"))
-    if major == 2:
-        owned.update(_shipped_plugin_paths(2))
-    if major == 1 and version and version >= ANALYTICS_WORKSPACE_VERSION:
+    if version and version >= V1_PLUGIN_VERSION:
         owned.update(_shipped_plugin_paths(1))
     owned.update(path for path in actual if path in {"AGENTS.md", "opencode.jsonc"}
                  or (path.startswith("commands/") and Path(path).stem in commands))
@@ -637,16 +602,16 @@ def inspect_source(root: Path, source_version: str | None = None,
             raise ManagedConfigError("Anvil managed file manifest is missing")
         if allow_external and not parse_version(source_version):
             profile = actual.get("opencode.jsonc")
+            config = {}
             has_anvil_profile = False
             if profile is not None:
                 try:
                     config = parse_jsonc(_read_regular(root, "opencode.jsonc").decode("utf-8"), str(profile))
                 except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
                     raise ManagedConfigError(f"existing OpenCode profile cannot be safely inspected: {exc}") from exc
-                has_anvil_profile = (isinstance(config, dict)
-                                     and any(isinstance(config.get(key), dict)
-                                             and isinstance(config[key].get("anvil"), dict)
-                                             for key in ("agent", "agents")))
+            has_anvil_profile = (isinstance(config, dict)
+                                     and isinstance(config.get("agent"), dict)
+                                     and isinstance(config["agent"].get("anvil"), dict))
             if not has_anvil_profile:
                 return _external_source_state(root, actual, symlinks, other)
         owned, _ = _legacy_owned(root, source_version, allow_missing=recover_managed)
@@ -685,17 +650,16 @@ def _target_manifest(root: Path, target_version: str, *, excluded: set[str] | No
     config = parse_jsonc(_read_regular(root, "opencode.jsonc").decode("utf-8"), str(root / "opencode.jsonc"))
     if not isinstance(config, dict):
         raise ManagedConfigError("target OpenCode profile root is not an object")
-    agents_key = "agent" if isinstance(config.get("agent"), dict) else "agents"
-    agents = config.get(agents_key, {})
+    agents = config.get("agent", {})
     if not isinstance(agents, dict):
-        raise ManagedConfigError("target OpenCode profile has an invalid agent map")
+        raise ManagedConfigError("target OpenCode 1 profile has an invalid agent map")
     managed_agents = sorted((set(agents) & (BUILTINS | {"anvil"})))
-    template_path = ROOT / "config" / ("runtimes/opencode-v1.jsonc" if agents_key == "agent" else "opencode.jsonc")
+    template_path = ROOT / "config" / "runtimes/opencode-v1.jsonc"
     template = parse_jsonc(template_path.read_text(encoding="utf-8"), str(template_path))
     if not isinstance(template, dict):
         raise ManagedConfigError("Anvil profile template has an invalid root")
     managed_top_level = sorted(set(template) - SHARED_PROFILE_KEYS)
-    template_plugins = template.get("plugins" if agents_key == "agents" else "plugin", [])
+    template_plugins = template.get("plugin", [])
     managed_plugins = sorted({value for value in template_plugins
                               if isinstance(value, str) and value == ANVIL_PLUGIN}) if isinstance(template_plugins, list) else []
     template_references = template.get("references", {})
@@ -827,9 +791,8 @@ def _config_data(root: Path) -> dict[str, Any] | None:
 
 
 def _has_anvil_profile(value: dict[str, Any] | None) -> bool:
-    return bool(value and any(isinstance(value.get(key), dict)
-                              and isinstance(value[key].get("anvil"), dict)
-                              for key in ("agent", "agents")))
+    return bool(value and isinstance(value.get("agent"), dict)
+                and isinstance(value["agent"].get("anvil"), dict))
 
 
 def _write_config(root: Path, value: dict[str, Any]) -> None:
@@ -885,12 +848,10 @@ def restore_merge(source: Path, target: Path) -> dict[str, Any]:
     target_config = _config_data(target)
     if source_config is not None:
         if _has_anvil_profile(target_config):
-            target_major = 1 if isinstance(target_config.get("agent"), dict) else 2
-            merge_prior_configuration(target_config, source, target_major)
+            merge_prior_configuration(target_config, source)
             _write_config(target, target_config)
         else:
-            target_major = 1 if isinstance(target_config or source_config, dict) and isinstance((target_config or source_config).get("agent"), dict) else 2
-            user_config = extract_user_configuration(source, target_major)
+            user_config = extract_user_configuration(source)
             if target_config is None:
                 merged_config = user_config
             else:

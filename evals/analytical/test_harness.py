@@ -81,16 +81,18 @@ def _fixture_scope() -> None:
         workspace = Path(temporary) / "model-workspace"
         workspace.mkdir(mode=0o700)
         copied = prepare_blind_workspace(workspace, root / "fixtures" / "operations-v1.csv",
-                                         runtime_major=2, analysis_helper=ROOT / "scripts" / "analyze.py")
+                                         analysis_helper=ROOT / "scripts" / "analyze.py")
         check(sorted(item.name for item in workspace.iterdir()) == ["dataset.csv", "opencode.json"],
               "model workspace contains files beyond the public fixture and controlled runtime policy")
         check(copied.read_bytes() == expected["operations-v1"]["csv"], "model workspace fixture copy changed")
         config = json.loads((workspace / "opencode.json").read_text(encoding="utf-8"))
-        rules = config["agents"]["anvil"]["permissions"]
-        check(all(rule["resource"] != str(ROOT / "evals" / "analytical" / "ground_truth" / "operations-v1.json")
-                  for rule in rules), "project permissions expose hidden ground truth")
-        check(not any(rule["action"] == "shell" and rule["effect"] == "allow" and "analyze.py" not in rule["resource"]
-                      for rule in rules), "project permissions allow arbitrary shell commands")
+        permission = config["agent"]["anvil"]["permission"]
+        check(str(ROOT / "evals" / "analytical" / "ground_truth" / "operations-v1.json")
+              not in json.dumps(permission), "project permissions expose hidden ground truth")
+        shell_allow = [command for command, effect in permission["bash"].items() if effect == "allow"]
+        check(len(shell_allow) == 2 and all("analyze.py" in command and "dataset.csv" in command
+                                           for command in shell_allow),
+              "project permissions allow shell commands beyond fixed profile/execute operations")
         prompt = (Path(__file__).parent / "prompts" / "blind-analysis-v1.0.md").read_text(encoding="utf-8").casefold()
         for hidden in ("operations-v1", "population composition", "retained cohort", "upper tail", "coverage decline", "quality_score"):
             check(hidden not in prompt, f"blind prompt leaked hidden phenomenon or fixture detail: {hidden}")
@@ -323,36 +325,27 @@ def _model_scope() -> None:
         fake_home = Path(temporary)
         managed = fake_home / ".opencode" / "bin" / "opencode"
         managed.parent.mkdir(parents=True)
-        managed.write_text("#!/bin/sh\n[ \"$1\" = \"--version\" ] && printf 'OpenCode 2.0.0\\n' || exit 2\n", encoding="utf-8")
+        managed.write_text("#!/bin/sh\n[ \"$1\" = \"--version\" ] && printf 'OpenCode 1.19.5\\n' || exit 2\n", encoding="utf-8")
         managed.chmod(0o700)
         isolated_env = {"HOME": str(fake_home), "PATH": "", "XDG_CONFIG_HOME": str(fake_home / "config"),
                         "XDG_DATA_HOME": str(fake_home / "data"), "XDG_STATE_HOME": str(fake_home / "state")}
         with patch.dict(os.environ, isolated_env, clear=True):
             discovered = resolve_opencode_binary()
         check(discovered == str(managed), "model runner failed to discover an Anvil-managed runtime hidden from PATH")
-    for major in (1, 2):
-        with tempfile.TemporaryDirectory(prefix="anvil-eval-policy-") as temporary:
-            workspace = Path(temporary) / "workspace with spaces"
-            workspace.mkdir(mode=0o700)
-            prepare_blind_workspace(workspace, FIXTURES / "operations-v1.csv", runtime_major=major,
-                                    analysis_helper=ROOT / "scripts" / "analyze.py")
-            config = json.loads((workspace / "opencode.json").read_text(encoding="utf-8"))
-            check(("agent" if major == 1 else "agents") in config, f"OpenCode {major} project policy uses the wrong config schema")
-            plan = str(workspace / "analysis-plan.json")
-            if major == 1:
-                permission = config["agent"]["anvil"]["permission"]
-                edit_allow = {path for path, effect in permission["edit"].items() if effect == "allow"}
-                shell_allow = {command for command, effect in permission["bash"].items() if effect == "allow"}
-            else:
-                permissions = config["agents"]["anvil"]["permissions"]
-                edit_allow = {item["resource"] for item in permissions
-                              if item["action"] == "edit" and item["effect"] == "allow"}
-                shell_allow = {item["resource"] for item in permissions
-                               if item["action"] == "shell" and item["effect"] == "allow"}
-            check(edit_allow == {plan}, f"OpenCode {major} policy allows edits beyond its bounded analysis plan")
-            check(len(shell_allow) == 2 and all("analyze.py" in command and "dataset.csv" in command
-                                               for command in shell_allow),
-                  f"OpenCode {major} policy allows shell commands beyond the fixed profile/execute operations")
+    with tempfile.TemporaryDirectory(prefix="anvil-eval-policy-") as temporary:
+        workspace = Path(temporary) / "workspace with spaces"
+        workspace.mkdir(mode=0o700)
+        prepare_blind_workspace(workspace, FIXTURES / "operations-v1.csv",
+                                analysis_helper=ROOT / "scripts" / "analyze.py")
+        config = json.loads((workspace / "opencode.json").read_text(encoding="utf-8"))
+        permission = config["agent"]["anvil"]["permission"]
+        plan = str(workspace / "analysis-plan.json")
+        edit_allow = {path for path, effect in permission["edit"].items() if effect == "allow"}
+        shell_allow = {command for command, effect in permission["bash"].items() if effect == "allow"}
+        check(edit_allow == {plan}, "project policy allows edits beyond its bounded analysis plan")
+        check(len(shell_allow) == 2 and all("analyze.py" in command and "dataset.csv" in command
+                                           for command in shell_allow),
+              "project policy allows shell commands beyond fixed profile/execute operations")
 
     first = {"status": "COMPLETE", "duration_ms": 100, "tool_calls": 2, "tokens": {"input": 50, "output": 20},
              "evaluation": {"levels": {"L2": {"model_candidate": {"score": 0.5}},
@@ -389,7 +382,7 @@ def _model_scope() -> None:
         truth = json.loads((GROUND_TRUTH / "operations-v1.json").read_text(encoding="utf-8"))
         base_result, _ = evaluate_fixture("operations-v1")
         candidate_result = evaluate_candidate(base_result, _candidate(), truth, model="provider/model",
-                                              runtime="OpenCode 2.0.0", run_id="review-overlay-1",
+                                              runtime="OpenCode 1.19.5", run_id="review-overlay-1",
                                               duration_ms=100, tool_calls=3)
         original_report = {"run_id": "source-run"}
         original_runs = {"model_runs": [{"fixture_id": "operations-v1", "run_id": "review-overlay-1",

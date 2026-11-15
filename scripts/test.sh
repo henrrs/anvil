@@ -30,11 +30,8 @@ case "$ANVIL_TEST_PHASE" in
 esac
 export ANVIL_DATABRICKS_CLI="$fixture_bin/databricks"
 export ANVIL_DATABRICKS_SCENARIO=valid
-printf 'Testing offline OpenCode 1 %s, OpenCode 1 compatibility floor %s, and OpenCode 2 %s\n' \
-  "1.18.18" "1.18.18" "2.0.0"
+printf 'Testing offline OpenCode 1 %s\n' "1.18.18"
 
 bash "$ROOT/tests/run.sh" \
-  "$fixture_bin/opencode-v2" "2.0.0" \
-  "$fixture_bin/opencode-v1" "1.18.18" \
   "$fixture_bin/opencode-v1" "1.18.18" \
   "$tmp_root"

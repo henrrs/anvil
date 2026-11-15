@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Validate the immutable ChangePlan handed to the shared shell executor."""
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ PLAN_OPERATIONS = {
     "anvil-upgrade": "upgrade",
     "reforge": "reforge",
     "update-runtime": "update-runtime",
-    "migrate-runtime": "migrate-runtime",
     "rollback": "rollback",
 }
 
@@ -27,25 +27,14 @@ REQUIRED = {
                 OperationKind.VERIFY, OperationKind.COMMIT},
     "update-runtime": {OperationKind.SNAPSHOT, OperationKind.INSTALL_RUNTIME,
                        OperationKind.VERIFY, OperationKind.COMMIT},
-    "migrate-runtime": {OperationKind.SNAPSHOT, OperationKind.INSTALL_RUNTIME,
-                         OperationKind.MIGRATE_ADAPTER, OperationKind.VERIFY,
-                         OperationKind.COMMIT},
     "rollback": {OperationKind.RESTORE, OperationKind.VERIFY},
 }
 
 ALLOWED = {
-    "upgrade": REQUIRED["upgrade"] | {OperationKind.SYNC_DEPENDENCIES,
-                                      OperationKind.INITIALIZE_MEMORY,
-                                      OperationKind.ENSURE_SERVICE,
-                                      OperationKind.CAPTURE_ANALYTICS_STATE},
+    "upgrade": REQUIRED["upgrade"] | {OperationKind.INITIALIZE_MEMORY},
     "reforge": REQUIRED["reforge"] | {OperationKind.INSTALL_RUNTIME,
-                                      OperationKind.SYNC_DEPENDENCIES,
-                                      OperationKind.INITIALIZE_MEMORY,
-                                      OperationKind.CAPTURE_ANALYTICS_STATE},
-    "update-runtime": REQUIRED["update-runtime"] | {OperationKind.MIGRATE_ADAPTER,
-                                                    OperationKind.SYNC_DEPENDENCIES},
-    "migrate-runtime": REQUIRED["migrate-runtime"] | {OperationKind.SYNC_DEPENDENCIES,
-                                                      OperationKind.INITIALIZE_MEMORY},
+                                      OperationKind.INITIALIZE_MEMORY},
+    "update-runtime": REQUIRED["update-runtime"],
     "rollback": REQUIRED["rollback"],
 }
 
@@ -67,6 +56,8 @@ def validate(plan_path: Path, execution_operation: str, runtime_major: int | Non
     change_plan = ChangePlan.from_dict(raw)
     if change_plan.desired.operation != expected_desired:
         raise ValueError("change plan does not match the lifecycle operation being executed")
+    if runtime_major not in {None, 1}:
+        raise ValueError("Anvil supports only OpenCode 1.x")
     if runtime_major is not None and change_plan.desired.runtime_major != runtime_major:
         raise ValueError("change plan runtime major does not match the validated runtime candidate")
     if change_plan.blockers:
@@ -79,18 +70,16 @@ def validate(plan_path: Path, execution_operation: str, runtime_major: int | Non
     if unexpected:
         raise ValueError("change plan contains operation(s) this executor cannot apply: "
                          + ", ".join(sorted(item.value for item in unexpected)))
-    # The transaction runner uses this profile to record config phases only
-    # when the serialized plan actually includes a configuration mutation.
     if expected_desired == "rollback":
         return "rollback"
-    return "config" if kinds & {OperationKind.REPLACE_MANAGED, OperationKind.MIGRATE_ADAPTER} else "runtime"
+    return "config" if OperationKind.REPLACE_MANAGED in kinds else "runtime"
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--operation", required=True)
+    parser.add_argument("--operation", required=True, choices=PLAN_OPERATIONS)
     parser.add_argument("--plan-file", required=True, type=Path)
-    parser.add_argument("--runtime-major", type=int)
+    parser.add_argument("--runtime-major", type=int, choices=(1,))
     args = parser.parse_args()
     print(validate(args.plan_file, args.operation, args.runtime_major))
     return 0

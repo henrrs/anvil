@@ -709,8 +709,7 @@ def start_sql_transfer(statement: str, warehouse_id: str, *, profile: str | None
     warehouse = next((item for item in all_warehouses if item.get("warehouse_id") == warehouse_id), None)
     if warehouse is None:
         raise DatabricksError("WAREHOUSE_NOT_FOUND", "the selected SQL warehouse is not available in this workspace")
-    # Materialization is an explicit user action, so this is the one Analytics
-    # flow that may start a stopped warehouse without a separate manual step.
+    # Materialization is explicit, so this operation may start its selected warehouse.
     warehouse = ensure_warehouse_running(warehouse, selected)
     if on_warehouse_ready:
         on_warehouse_ready()
@@ -900,7 +899,7 @@ def ensure_warehouse_running(warehouse: dict[str, Any], profile: str, *,
     """Start a stopped selected warehouse once, then wait through its state transitions."""
     warehouse_id = str(warehouse.get("warehouse_id") or "")
     name = str(warehouse.get("name") or warehouse_id or "selected warehouse")
-    limit = float(start_timeout or os.environ.get("ANVIL_ANALYTICS_WAREHOUSE_START_TIMEOUT", "600"))
+    limit = float(start_timeout or os.environ.get("ANVIL_DATABRICKS_WAREHOUSE_START_TIMEOUT", "600"))
     limit = max(30.0, min(limit, 1800.0))
     state = str(warehouse.get("state") or "UNKNOWN").upper()
     deadline = time.monotonic() + limit

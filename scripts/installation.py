@@ -19,7 +19,7 @@ def main() -> int:
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--config-dir", type=Path, help="Installed config root whose Anvil manifest is recorded")
     parser.add_argument("--opencode-version", required=True)
-    parser.add_argument("--opencode-major", type=int)
+    parser.add_argument("--opencode-major", type=int, choices=(1,))
     parser.add_argument("--anvil-version", required=True)
     parser.add_argument("--binary", required=True)
     parser.add_argument("--release-json", type=Path)
@@ -34,8 +34,8 @@ def main() -> int:
     if args.anvil_only and args.runtime_only:
         parser.error("--anvil-only and --runtime-only cannot be combined")
     runtime_major = args.opencode_major or int(args.opencode_version.split(".", 1)[0])
-    if runtime_major not in (1, 2) or int(args.opencode_version.split(".", 1)[0]) != runtime_major:
-        parser.error("OpenCode version and runtime major do not match a supported adapter")
+    if runtime_major != 1 or int(args.opencode_version.split(".", 1)[0]) != 1:
+        parser.error("Anvil supports only OpenCode 1.x")
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     destination = args.destination
     if args.anvil_only:

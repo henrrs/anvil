@@ -1,193 +1,32 @@
 # Architecture
 
-## Responsibility boundary
+Anvil is a repository-managed OpenCode harness with a small set of runtime assets, local helpers, and explicit lifecycle commands.
 
-OpenCode owns providers, model selection, authentication, sessions, TUI, filesystem and shell execution, runtime state, and native compaction. Anvil owns the user-global harness, lifecycle safety, allowlisted skills, explicit Markdown memory, source registry, and runtime-independent task workflows.
+## Module map
 
-The repository-wide component inventory, state/data-flow map, public target inventory and external dependencies are maintained in the [Anvil system map](system-map.md). The [full-system quality audit](quality-audit.md) records tested confidence, lifecycle evidence and unverified integration boundaries.
+| Area | Responsibilities |
+| --- | --- |
+| `config/` | OpenCode 1 profile template, agent instructions, skills, slash commands, plugin, and managed artifact inventory |
+| `scripts/lib/` | Shared shell paths, diagnostics, managed config application, backup, and transaction helpers |
+| `scripts/lifecycle_*.py` | Read-only state projection, pure operation planning, plan validation, transaction journal, recovery, and postflight verification |
+| `scripts/runtime*.py` | OpenCode 1 discovery, version validation, and recorded runtime provenance |
+| `scripts/managed_config.py`, `configure.py` | Ownership audit, profile merge, artifact verification, and release staging |
+| `scripts/databricks.py`, `scripts/databricks_providers/` | Optional CLI setup, provider discovery, local readiness checks, and bounded workspace operations |
+| `scripts/memory.py`, `source_registry.py` | Explicit Markdown memory, provenance, search, and source tracking |
+| `scripts/engineering/`, `engineering.py` | Progressive engineering task models, repository checks, and bounded recovery |
+| `scripts/analysis/`, `analyze.py` | Local deterministic data profiling and analysis primitives |
+| `scripts/communication/`, `artifacts.py` | Evidence-based communication planning and local artifact review |
+| `evals/` | Optional deterministic evaluation fixtures and local OpenCode evaluation runners |
+| `tests/` | Offline unit, command-contract, and isolated lifecycle checks |
 
-`scripts/lifecycle_state.py` is the shared local evaluator for Anvil-managed config, installation metadata, runtime, memory, verified backups, and pending lifecycle transactions. It evaluates the installed profile against its recorded source release, compares source and checkout versions semantically, and reports `MIGRATION_REQUIRED`, `UNSUPPORTED`, `CORRUPTED`, or `RECOVERY_REQUIRED` separately. Databricks readiness remains a separate optional integration state. The public command surface and exit behavior are documented in the [command contract matrix](command-contracts.md).
+## Runtime boundary
 
-Anvil's product release is independent of the OpenCode major. `config/runtime-policy.json` records supported runtime majors, minimum versions, the first-install default, and the prohibition on automatic major upgrades. `scripts/runtime.py` centralizes runtime inspection and capability reporting. The V1 and V2 config templates live beside each other; common `AGENTS.md`, commands, skills, memory helpers and source registry are shared.
+Anvil supports OpenCode 1.x only. The user's OpenCode process, selected model, provider, authentication, and session/data paths remain owned by OpenCode. Anvil does not create a shadow runtime profile or copy credentials during ordinary lifecycle operations.
 
-## Lifecycle and managed configuration
+The generated global profile is assembled from the OpenCode 1 template plus Anvil-managed instructions, commands, skills, and the memory-search plugin. The installer stages that profile before applying it. Release hashes in `config/managed-inventory.json` define which files Anvil owns.
 
-Anvil versions, installed config, and transitions are separate facts. The source config is audited for its runtime generation and source-release invariants; a staged target is audited strictly against the current release. The supported automatic source window is the same Anvil major and current plus eleven prior minor releases. Anvil 2.18 extends the window by one minor so the previously supported 2.6 source line remains upgradeable. A checkout older than the installed Anvil release is unsupported; both upgrade and reforge reject it before taking a snapshot or changing managed files.
+## Lifecycle boundary
 
-New installations include `.anvil-managed.json`, a manifest of Anvil-owned paths and file hashes plus the Anvil-owned keys in the shared OpenCode profile. The installation record pins the manifest hash. Integrity checks follow the manifest or the deterministic inventory for a supported legacy source; filesystem location alone does not imply Anvil ownership. User plugins, MCP servers, provider settings, additional references, custom agents, runtime preferences and unknown profile keys remain user-owned or shared and are merged when an Anvil profile is rebuilt. Unowned files, package-manager trees, and symlinks are not followed or hashed as managed state. Rebuilds preserve regular extras and symlink objects, including broken links, without resolving their targets. If a user-owned regular file occupies a new Anvil path, planning permits it only when its bytes exactly match the hash-verified target artifact; the file remains user-owned and its metadata is preserved. Any differing file, symlink, special node, or parent/child collision stops planning before a live change.
+The shell commands are adapters around common state inspection, planning, backup, application, and verification helpers. Plans describe requested changes before mutations. Backup manifests record exact scope and content hashes. Rollback restores only paths captured by the selected verified snapshot and rechecks the restored installation.
 
-`config/managed-inventory.json` versions the introduction release for shipped skills and commands and pins SHA-256 hashes for every managed artifact in the target release. The target set is checked for both OpenCode generations. Staging fails if a managed path or hash differs from that release inventory, so a dirty source artifact cannot silently become an upgrade replacement. Inline agent ownership is recorded with the managed manifest, so migrations can preserve user-defined disabled agents and remove retired Anvil-owned agents without relying on a whole-set equality test.
-
-Installed managed drift is evaluated separately from manifest validity. A regular file whose installed hash changed is `RECOVERABLE` only when the installed manifest still proves Anvil ownership and the current target release inventory contains a matching, verified replacement. `make upgrade` snapshots the exact current file before activating the staged target; the snapshot therefore restores a local drifted version byte-for-byte. Missing files, symlinks, invalid manifest data, missing target membership, and hash failures remain unsafe and block automatic upgrade. Unowned files are reported as user-owned changes and preserved. `make doctor` recommends `make upgrade` for verified repairable drift; `make reforge` remains an explicit rebuild/recovery command.
-
-```mermaid
-flowchart TD
-    Drift[Managed file differs from installed hash] --> Ownership{Installed manifest proves ownership?}
-    Ownership -->|No| Block[Block: unsafe or unknown drift]
-    Ownership -->|Yes| Target{Target release manifest has a verified replacement?}
-    Target -->|No| Block
-    Target -->|Yes| Snapshot[Snapshot exact current state]
-    Snapshot --> Replace[Install verified target artifact]
-    Replace --> Upgrade[Continue upgrade and postflight]
-    User[Unowned user state] --> Preserve[Preserve without replacement]
-```
-
-Before mutation, lifecycle backup stores Anvil-owned files, shared profile/preferences, and a checksummed PreOperationState in a private verified snapshot. The baseline records the product release, managed manifest hash, selected OpenCode runtime facts, Analytics service active/enabled/health facts, the exact Analytics runtime.json bytes, managed service unit bytes, and a consistent SQLite backup of the Anvil-isolated OpenCode service database. The OpenCode database remains schema-opaque: Anvil uses SQLite's backup API and integrity check, and never inspects its tables or messages. The user's default OpenCode database, Analytics context database, and user datasets stay outside this service-database snapshot. External config files remain in place. Rollback restores prior Anvil-owned config without calling forward convergence, restores the captured runtime/unit/session state, and compares the result with PreOperationState; a degraded or inactive baseline is a successful restoration when those facts match. An active service is restarted in no-bootstrap mode so rollback does not create an OpenCode runtime or canonical session that was absent before the operation.
-
-An anvil-upgrade journal records snapshot-verified → staging → pre-activation-verification → activating → activation-completed → post-activation-verification → committing → completed and separately records whether activation started. A staging or pre-activation failure discards operation-owned staged artifacts and clears the journal without restoring or touching the active installation. After activation begins, failure restores and verifies the snapshot. A hard interruption before activation discards staging; after activation begins, the next lifecycle command verifies and restores the snapshot before retrying. Inspect and DRY_RUN=1 never write live paths; dry run refuses to perform pending recovery.
-
-Analytics dependencies are installed only into a hidden, operation-owned runtime directory. DuckDB, PyArrow and any additional lock entries are installed at their exact release pins and import-tested with the staged interpreter. Pre-activation verification also checks target managed artifacts, config policy, and a candidate service unit. Activation atomically publishes the verified runtime to its content-addressed path immediately before the managed config swap. The service unit references that final path, never the temporary stage directory.
-
-Package resolution uses one authoritative index per attempt. An explicit ANVIL_PACKAGE_INDEX_URL takes precedence, followed by configured corporate indexes discovered from pip configuration/environment, then other configured indexes. Corporate indexes are attempted before public PyPI; PIP_EXTRA_INDEX_URL values are not merged into a multi-index pip lookup. A corporate failure never falls through to PyPI unless ANVIL_ALLOW_PUBLIC_PYPI=true. With no corporate index configured, the plan reports the public-only source explicitly. make upgrade DRY_RUN=1 shows source policy and pinned packages without remote availability checks or downloads. Anvil never writes global pip configuration.
-
-Upgrade preflight verifies both backup capacity and write/search access to the config parent used for the atomic directory swap. A read-only parent is reported before process shutdown, snapshot creation, or transaction journaling.
-
-The managed config lives at `$XDG_CONFIG_HOME/opencode` (default `~/.config/opencode`). OpenCode data is under `$XDG_DATA_HOME/opencode`; state is under `$XDG_STATE_HOME/opencode`. Anvil memory, knowledge, source registry, installation metadata and backups are separate under `$XDG_DATA_HOME/anvil`. The knowledge directory is not the memory store.
-
-Project, system-managed, and organization settings are outside Anvil's global ownership boundary. They may affect effective behavior; inspect and doctor report visible project overrides without deleting user or team files.
-
-## Runtime profiles and agent policy
-
-OpenCode 1 uses its singular `agent`, `permission`, and `plugin` config fields. Anvil defines one model-neutral `anvil` primary agent, denies `task`, prompts for sensitive `.env` reads and destructive Git shell operations, and allowlists only the shipped Anvil skills. The V1 `anvil-core-v1` plugin uses OpenCode 1's custom tool API for Analytics actions; user plugins and MCP configuration are preserved.
-
-OpenCode 2 uses plural `agents` and `plugins` fields and ordered permissions. It defines the same model-neutral primary agent, denies subagents, prompts for sensitive `.env` reads and destructive Git shell operations, and allowlists the shipped skills plus bounded memory and Analytics tools. The Anvil core plugin is required; external plugins are merged alongside it. Anvil enables no MCP servers by default and preserves user-defined servers. Neither profile pins a model or replaces the provider's native system prompt.
-
-## Capabilities and progressive enhancement
-
-Callers use the central capability record rather than treating every Anvil release as one OpenCode generation. OpenCode 2 adds the native `anvil-core` plugin, `anvil-knowledge` Reference, ordered permissions, bounded tool output, and structured stats JSON. OpenCode 1 uses its V1 `anvil-core-v1` plugin, native config, commands/skills, and text stats; shared Python memory search and direct reads of explicitly named knowledge files provide the fallbacks. `scripts/capabilities.py` combines runtime, local/cached Databricks, communication/artifact, engineering, and Analytics capability records in one text or JSON result. Inventory commands do not contact Databricks; they show cached capability evidence and mark it stale after 15 minutes.
-
-## Analytics Workspace
-
-The Analytics Workspace is default-installed but remains outside traditional Anvil core dependencies. A local loopback BFF serves a same-origin UI; it composes the shared Anvil Databricks provider, runtime-specific OpenCode tool adapters, and isolated user data under Anvil XDG roots. SQLite WAL stores contextual metadata and session references. DuckDB and PyArrow run in a release-pinned Anvil-managed Python environment; DuckDB queries only locally materialized Parquet data with proven coverage. Explicit materialization uses a planned, bounded transfer and atomic publication. Lifecycle success requires the dependencies, managed service, OpenCode runtime and canonical session to converge. Its OpenCode server uses an Anvil-owned database under the Analytics state directory through `OPENCODE_DB`; the user's default OpenCode database stays untouched. Anvil does not read or copy credentials into Analytics state. The isolated service database is captured in lifecycle snapshots; context data and local datasets are not. See [Analytics architecture](analytics-workspace-architecture.md), [data plane](analytics-workspace-data-plane.md), and [operations](analytics-workspace-operations.md).
-
-## Adaptive engineering depth and long-horizon continuity
-
-The requested change governs activation; project size and existing task state do not. The always-loaded kernel keeps the understand/locate/act/proportionally-verify/stop loop. A task-local request normally leaves requirements, architecture and work state dormant even in a complex repository. Material uncertainty, public/component boundaries, persistent state, migrations, failure ownership or explicit continuation load only the relevant branch. Engineering depth rises or falls with the current decision.
-
-For genuine long-horizon work, the lazy `anvil-engineering` skill still provides separate Requirements, Architecture and Work models in atomic task state under XDG_STATE_HOME/anvil/engineering. Resume and completion gates remain strict. Architecture evidence is invalidated by changes inside its declared scope and milestone checkpoints evaluate only missing or stale relevant invariants; explicit unscoped `checkpoint` remains a full audit. These models remain independent of durable memory, lifecycle transactions and OpenCode compaction. [Core contracts](engineering-internals.md), [adaptive policy](adaptive-engineering.md), and [user guidance](engineering.md) describe operation and activation.
-
-```mermaid
-flowchart TD
-    Request --> Understand[Understand enough for the next decision]
-    Understand --> Clear{Is the next safe action clear?}
-    Clear -->|Yes| Locate[Locate minimum relevant evidence]
-    Locate --> Act[Act inside the known boundary]
-    Act --> Focused[Verify proportionally]
-    Focused --> Stop[Stop when sufficient evidence passes]
-    Clear -->|No / material risk| Expand[Identify the task-specific uncertainty or risk]
-    Expand --> Req[Relevant Requirements slice, if completeness is affected]
-    Expand --> Arch[Relevant Architecture boundary, if ownership/contract changes]
-    Expand --> Work[Relevant Work state, if coordination/resume is needed]
-    Expand --> Domain[Only relevant domain skill/evidence]
-    Req --> Decide[Resolve only the current decision]
-    Arch --> Decide
-    Work --> Decide
-    Domain --> Decide
-    Decide -->|Risk resolved| Locate
-    Decide -->|More evidence needed| Expand
-    Focused -->|Unexpected result| Expand
-```
-
-The agent owns semantic scope/risk judgment, specification extraction, design and diagnosis. Deterministic modules own state integrity, dependencies, coverage, mechanically testable invariants, command evidence, path-scoped stale detection and completion. Architecture protects declared boundaries; it does not supervise private helpers. Semantic reviews are attributed judgments, never mislabeled as observed tests. Resume reconstructs a bounded packet and executes nothing; partial effects require inspection/reconciliation. The compact task-local loop is always loaded; direct work leaves unrelated long-horizon state dormant. Native runtime ownership, permissions, plugins and memory remain unchanged.
-
-## Public command presentation
-
-Databricks domain operations return structured results. `databricks_providers/presentation.py` formats those results for people, while `--format json` returns the structured result for scripts. `VERBOSE=1` adds provider diagnostics; default output emphasizes readiness, warnings, and next steps. Presenters do not own provider or auth decisions. Setup, `status`, and doctor consume the same readiness engine. Doctor performs bounded, read-only identity and core-list requests when a profile exists; with no Anvil profile it remains local and reports `NOT_CONFIGURED`. Capabilities remains local and reports Supported, Available, and Verified separately.
-
-The V2 plugin uses the OpenCode 2 API to register only bounded, read-only `anvil_memory_search`. It does not add context hooks, prompt mutation, model routing, retries, memory writes, or custom compaction. Capabilities are visible through `make capabilities` and `make doctor`.
-
-## Skills and commands
-
-Native lazy skills cover memory, Spark performance, Delta Lake, Databricks, data ingestion, evidence-backed communication artifacts, engineering continuity and system design. Native Markdown commands provide `/remember`, `/recall`, `/distill`, and a generic `/review`, all assigned to the Anvil agent. Persistent memory writes require explicit `/remember`, `/distill`, or direct user intent.
-
-## Communication and artifact intelligence
-
-`scripts/analysis/` is the renderer-independent analytical core. It profiles explicitly named bounded tables; exposes candidate row grain, entity/cardinality, time, dimension and measure evidence with uncertainty; executes validated deterministic operations; and validates typed, evidence-linked claims, hypotheses and findings. It owns no communication contract, memory, layout, or artifact rendering. The local `scripts/analyze.py` CLI is stateless and exposes source-profile reuse so semantic inference is not repeated between plan construction and execution.
-
-The existing lazy `anvil-communication` skill compiles scope-preserving task briefs, chooses relevant questions/depth, interprets analytical evidence and builds narrative before layout. Direct answers use the same findings as reports and artifacts. Adapter direction is one-way: [`scripts/communication/analysis_adapter.py`](../scripts/communication/analysis_adapter.py) maps validated analysis results into communication contracts; `scripts/analysis` does not import communication or renderer code. Shared deterministic change/distribution arithmetic lives in `scripts/analysis/statistics.py`; communication adds its unit, epistemic, audience and presentation policy. The rest of `scripts/communication` owns bounded source extraction, artifact contracts, six audience/constraint policies, editorial selection and critique, semantic visual intent, Markdown materialization, architecture SVG and deterministic review. `/review` reviews an explicitly named artifact without modifying it; `scripts/artifacts.py critique` returns plan-level candidate signals without a model call.
-
-```mermaid
-flowchart LR
-    Intent[Original user request] --> Analysis[Analytical Intelligence<br/>profile · grain · entities · metrics · claims]
-    Data[Named data / evidence] --> Analysis
-    Analysis --> Findings[Validated evidence and findings]
-    Findings --> Terminal[Direct response]
-    Findings --> Communication[Communication / Artifact Intelligence]
-    Communication --> Report[Markdown report]
-    Communication --> SVG[Architecture SVG]
-```
-
-`make capabilities` reports supported source types and output renderers. Markdown reports and slide outlines and accessible architecture SVG are available. DOCX/PPTX/PDF binary rendering, chart rendering, OCR, embedded-media interpretation, and animation are not claimed. PDF text extraction requires the optional local `pdftotext` utility. The helper does no remote source discovery, Databricks query, or memory write on its own; remote evidence remains subject to existing explicit provider workflows.
-
-The analysis result validator checks evidence references, row versus distinct-key counts, two-period versus trend language, cohort references, explicit breadth thresholds, causal classification and measured coverage changes. These checks establish consistency with bounded deterministic results, not the truth of arbitrary natural-language claims. The artifact plan validator recomputes its derived numeric fields from observations, requires measured values and diagram claims to resolve to provenance records, checks audience and hard-constraint structure, and keeps `semantic_claim_review: PENDING_MODEL` for the model/human reviewer. SVG layout validation rejects node collisions and edges crossing unrelated nodes; this deterministic check does not claim aesthetic quality.
-
-## Databricks capability
-
-Anvil 2.6's optional Databricks capability uses a per-capability resolver with an Anvil-owned configuration boundary. Setup gathers a workspace URL and environment label, stages `${XDG_CONFIG_HOME:-$HOME/.config}/anvil/databricks/databrickscfg`, creates an `anvil-*` profile, resolves cloud and topology, authenticates, validates the staged profile, and only then atomically activates it. External `.databrickscfg` profiles are diagnostic-only; they are never adopted, modified, or reauthenticated by Anvil. Existing Anvil provider metadata is stored separately in `anvil/databricks.json` and records profile ownership, workspace, authentication strategy, and provider without credentials.
-
-The CLI and Python SDK run with the same `DATABRICKS_CONFIG_FILE` and selected `DATABRICKS_CONFIG_PROFILE`. The shared environment wrapper removes inherited `DATABRICKS_*` values from Anvil child processes, so a user token or host override cannot silently supersede the selected Anvil profile. Azure workspaces prefer an existing Azure CLI session; remote contexts can use device-code login and local contexts can use Azure CLI interactive login. Databricks CLI OAuth U2M remains a supported fallback where topology permits it. Native CLI/SDK credential storage owns the resulting credentials. An optional SQL Connector uses its own supported OAuth U2M path because it does not consume the shared SDK profile; it remains a specialized provider. Databricks Connect is also specialized, and VS Code is assisted only.
-
-Databricks setup follows composable boundaries: `owned_config.py` owns config paths, environment isolation, staging and atomic writes; `topology.py` detects the execution context; `auth_strategy.py` selects a documented flow; `auth.py` runs official CLI/cloud authentication with a bounded progress watchdog; `readiness.py` advances explicit readiness states; and the presenter renders the result. Setup and a later session share `json_from_cli`, the deterministic resolver, normalized errors, the child environment, operation-specific timeouts, and bounded process runner. READY requires identity validation plus verified cluster-list and warehouse-list results; running compute and SQL/system-table access are not required. During explicit setup, a provider-specific CLI health failure may prepare the isolated SDK and repeat those same production probes; shared failures stop without fallback. The validated absolute SDK interpreter is reused across processes. Azure CLI auth is restricted to Azure workspaces and is configured as `auth_type=azure-cli` in the Anvil profile for supported Unified Authentication providers. Remote AWS/GCP or headless sessions do not select loopback browser auth. The official VS Code extension remains assisted; Anvil does not automate UI or inspect private IDE credentials.
-
-Readiness advances only with evidence at each transition:
-
-```text
-CONFIGURED
-  → AUTHENTICATED
-  → WORKSPACE_VALIDATED
-  → PROVIDER_VALIDATED
-  → CAPABILITIES_DISCOVERED
-  → READY
-```
-
-Configuration validation proves the Anvil-owned profile and host; authentication validation proves the intended credentials work; workspace validation requires a current-user response for that host; provider validation requires a production adapter call; capability discovery verifies both cluster and warehouse lists. A successful empty list is valid. Permissions remain attached to the individual capability. See the [readiness contract](databricks/readiness.md) for error scopes, fallback rules, freshness, and timeout budgets.
-
-CLI installation is attempted only by an explicit `make databricks-setup`; the user-local executable is downloaded from official releases and SHA-256 checked. General reforge and upgrade flows neither install Databricks clients nor probe workspace auth. Discovery remembers a verified absolute CLI path and reports whether it is visible through the current `PATH`. Provider health is revalidated when used. The integration works with OpenCode 1 and 2 and adds no plugin, MCP, or model dependency.
-
-The Databricks skill references a dated official system-table snapshot, focused schema notes, and query recipes. Live workspace discovery takes precedence for a task. SQL recipes aggregate and bound operational data before it enters model context. Remote execution requires a clear user request; compute and workload mutations are not exposed by the adapter, and stopped compute is never started automatically. FinOps output distinguishes measured usage identifiers, list-price estimates, and approximate shared-compute allocation, with a deterministic evidence-quality score.
-
-## Lifecycle dependency matrix
-
-| Command | Network required | May mutate OpenCode | May download OpenCode | Release lookup |
-|---|---:|---:|---:|---:|
-| `make inspect` | No | No | No | No |
-| `make test` | No | No | No | No |
-| `make reforge` with a healthy runtime | No | No; reuses exact runtime | No | No |
-| `make reforge` without a runtime | Yes, for provisioning | Yes; first install only | Yes | Yes |
-| `make upgrade` | No | No; config and Anvil metadata only | No | No |
-| `make update-runtime` | Yes | Yes | Yes | Yes, same major |
-| `make migrate-runtime OPENCODE_MAJOR=N` | Yes | Yes | Yes | Yes, requested major |
-| `make doctor` | Conditional* | No | No | No |
-| `make capabilities` | No | No | No | No |
-| `make stats` | No | No | No | No |
-| `make rollback` | No | Only when the selected backup has runtime scope | No | No |
-| `make databricks-setup DRY_RUN=1` | No | No | No | No |
-| `make databricks-setup` | May, for provider installation or workspace validation | No | No OpenCode; may install Databricks CLI/SDK | No OpenCode lookup |
-
-`make upgrade` validates local runtime and config, stages the Anvil target, rehearses against copied state, and checks that the backup path is safe and has enough space before it asks to stop OpenCode. Read-only process discovery identifies only the validated executable, same user, and matching configured OpenCode data roots. If the upgrade is running under a matched OpenCode ancestor, it aborts. After the cancellable countdown it sends SIGTERM, waits a bounded interval, uses SIGKILL only as a fallback, verifies that no matched process remains, then creates the Anvil-scoped backup and applies files. It preserves the exact OpenCode executable/version, OpenCode data/state, and Databricks preferences. `DRY_RUN=1` performs the discovery and reports process count without sending signals, writing runtime state, creating backups, or changing live files. OpenCode remains stopped after a real upgrade and must be started normally by the user.
-
-`make upgrade` also prints an owned-file source-to-target plan. It identifies additions, changed files, removals, unchanged managed files, and preserved user files. It does not treat target-only files as evidence that a compatible source install is corrupted.
-
-`make update-runtime` owns same-major runtime resolution and installation. It rehearses the new executable against the installed config and copied user state, backs up runtime/config/data/state, installs the candidate, runs doctor, and rolls back on failure while retaining the installed Anvil release and config manifest. `make migrate-runtime OPENCODE_MAJOR=N` is the explicit major change and rebuilds the Anvil config adapter; it requires Anvil to be current. `make reforge` reuses the exact supported runtime already installed; only a genuinely fresh installation provisions OpenCode.
-
-`make inspect`, `make doctor`, and `make capabilities` use central local runtime discovery. Doctor also probes Databricks read-only when an Anvil-owned profile is configured; without one, it stays local. `make capabilities` uses only local inventory and cached readiness evidence. Network-dependent runtime behavior is limited to fresh provisioning, `update-runtime`, and `migrate-runtime`; Databricks doctor requests are separate read-only workspace checks.
-
-`*` `make doctor` makes bounded read-only identity, cluster-list, and warehouse-list requests only when an Anvil Databricks profile exists. See the [readiness contract](databricks/readiness.md) for state transitions, fallback rules, and operation timeouts.
-
-## Backup and rollback boundary
-
-Backups are private, timestamped directories under `$XDG_DATA_HOME/anvil/backups/`. Checksums cover each archived artifact and each manifest records Anvil-only or runtime scope. An Anvil-only snapshot restores Anvil config and metadata while leaving OpenCode executable/data/state untouched. Runtime snapshots restore the saved config, installer runtime, data, and state instead of attempting a database downgrade.
-
-Anvil memory is outside the OpenCode config/runtime snapshot. Before rollback, current Markdown memory is archived separately under `$XDG_DATA_HOME/anvil/memory-backups/`, then remains at its normal path. Source registry and knowledge also remain in the Anvil data root.
-
-## Memory and source registry
-
-Markdown is the source of truth under `$XDG_DATA_HOME/anvil/memory/`. Historical entries remain readable without mass migration. Optional aliases, status, evidence, source sections, line ranges, repository and content-hash provenance are handled when present. Lexical search normalizes Unicode accents and falls back to the standard library when `rg` is unavailable.
-
-The file-based source registry lives at `$XDG_DATA_HOME/anvil/sources/`, one atomic JSON record per explicitly distilled local source. It records source identity/hash, available Git metadata, timestamps and linked memory IDs. `/distill` inspects and plans only sources named by the user. Unchanged sources can be skipped; changed or missing sources mark linked memory as potentially stale and are surfaced for review instead of causing destructive rewrites. Knowledge files remain untouched.
-
-Distillation is a model-guided semantic workflow defined in `config/commands/distill.md`, not an automatic parser or chunker. It asks the Anvil agent to assess claims, check relevant active code paths and tests where useful, distinguish normative requirements from implementation behavior, preserve meaningful conflicts and historical status, deduplicate, and record honest provenance. Deterministic tests cover the registry and workflow evidence rules, not an LLM's semantic quality.
-
-## Runtime controls and installation record
-
-Each installation record stores Anvil version separately from OpenCode runtime major/version and release artifact digest when available, plus the managed-config manifest checksum. Metadata is written after config activation. The local runtime-state cache stores an absolute executable path, version, generation, adapter, file identity hash, and verification time; discovery re-executes the binary and checks policy before use. Native stats use the current runtime interface and do not maintain a separate telemetry store. See [runtime compatibility](runtime-compatibility.md) for tested versions and capability gaps.
+Databricks and local analytical helpers are optional capabilities. They do not participate in OpenCode runtime selection. The standalone evaluation tools are development and certification utilities; normal agent tasks do not invoke them.
