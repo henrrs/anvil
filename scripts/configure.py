@@ -204,6 +204,23 @@ def _merge_plugin_values(previous: Any, target: Any) -> Any:
         return copy.deepcopy(target)
     raise ValueError("existing OpenCode plugin configuration has an incompatible shape; it was not replaced")
 
+
+def _json_plugin_values(config_dir: Path) -> Any:
+    """Import only the user's existing plugin declarations from opencode.json."""
+    path = config_dir / "opencode.json"
+    if not os.path.lexists(path):
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("existing OpenCode JSON configuration is not a regular file; plugins were not merged")
+    try:
+        value = parse_jsonc(path.read_text(encoding="utf-8"), str(path))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"existing OpenCode JSON configuration cannot be safely read: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError("existing OpenCode JSON configuration root is not an object; plugins were not merged")
+    return value.get("plugin")
+
+
 def merge_prior_configuration(data: dict[str, Any], prior_config_dir: Path) -> None:
     """Merge user-owned OpenCode 1 settings while keeping Anvil fields authoritative."""
     previous_path = prior_config_dir / "opencode.jsonc"
@@ -220,8 +237,11 @@ def merge_prior_configuration(data: dict[str, Any], prior_config_dir: Path) -> N
     if providers:
         data["provider"] = providers
     data["agent"].update(_user_agents(prior_config_dir))
+    plugins = _json_plugin_values(prior_config_dir)
     if "plugin" in previous:
-        data["plugin"] = _merge_plugin_values(previous["plugin"], data.get("plugin"))
+        plugins = _merge_plugin_values(plugins, previous["plugin"])
+    if plugins is not None:
+        data["plugin"] = _merge_plugin_values(plugins, data.get("plugin"))
     if isinstance(previous.get("mcp"), dict):
         data["mcp"] = _merge_user_mapping(previous["mcp"], data.get("mcp", {}))
     if isinstance(previous.get("references"), dict):

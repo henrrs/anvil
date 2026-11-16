@@ -241,6 +241,12 @@ def reforge_first_install_test(root: Path) -> None:
     home = root / "home"
     home.mkdir(parents=True, exist_ok=True)
     (home / ".bashrc").write_text("# user shell config\n", encoding="utf-8")
+    existing_config = root / "xdg-config/opencode"
+    (existing_config / "plugins").mkdir(parents=True)
+    original_json = json.dumps({"plugin": ["@company/opencode-audit", "./plugins/company-plugin.ts",
+                                            "./plugins/anvil-core-v1.ts"]}) + "\n"
+    (existing_config / "opencode.json").write_text(original_json, encoding="utf-8")
+    (existing_config / "plugins/company-plugin.ts").write_text("// existing corporate plugin\n", encoding="utf-8")
     env = environment(root, candidate=CANDIDATE, ANVIL_YES="1", PATH="/usr/bin:/bin")
     run(["/usr/bin/make", "--no-print-directory", "reforge"], env)
     paths = {"config": root / "xdg-config/opencode",
@@ -250,6 +256,13 @@ def reforge_first_install_test(root: Path) -> None:
     record = json.loads(paths["record"].read_text(encoding="utf-8"))
     check(record["runtime_major"] == 1 and record["version"] == VERSION,
           "first reforge did not install the selected OpenCode 1 candidate")
+    profile = json.loads((paths["config"] / "opencode.jsonc").read_text(encoding="utf-8"))
+    check(profile["plugin"] == ["@company/opencode-audit", "./plugins/company-plugin.ts"],
+          "reforge did not retain only the existing user plugin declarations")
+    check((paths["config"] / "opencode.json").read_text(encoding="utf-8") == original_json,
+          "reforge modified the user's original OpenCode JSON configuration")
+    check((paths["config"] / "plugins/company-plugin.ts").read_text(encoding="utf-8") ==
+          "// existing corporate plugin\n", "reforge changed a user-owned corporate plugin")
     first_config = tree(paths["config"])
     run(["/usr/bin/make", "--no-print-directory", "reforge"], env)
     check(tree(paths["config"]) == first_config, "repeating reforge changed the managed config")

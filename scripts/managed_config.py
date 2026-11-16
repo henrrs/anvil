@@ -103,6 +103,7 @@ DATABRICKS_SCRIPTS = {"scripts/databricks.py", "scripts/databricks_finops.py"}
 REMOVED_CAPABILITY_PREFIXES = ("scripts/analytics/", "web/analytics/")
 RELEASE_CONTROL_FILES = {
     "scripts/anvil_upgrade.sh", "scripts/upgrade.sh", "scripts/reforge.sh", "scripts/rollback.sh",
+    "scripts/configure.py",
     "scripts/lib/common.sh", "scripts/lib/install.sh", "scripts/lib/backup.sh",
     "scripts/lib/lifecycle-operation.sh", "scripts/managed_config.py", "scripts/release_authority.py",
     "scripts/lifecycle_state.py", "scripts/lifecycle_plan.py",

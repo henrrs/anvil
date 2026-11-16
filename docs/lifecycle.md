@@ -17,6 +17,8 @@ Use `make upgrade DRY_RUN=1` to review an Anvil upgrade plan. Dry run does not c
 
 Anvil-owned profile files are listed by the installed `.anvil-managed.json` and validated against the repository's release inventory. Shared OpenCode settings are merged. User-owned files and settings are retained. A conflict that cannot be classified safely blocks an operation for manual review.
 
+During `reforge`, Anvil carries existing user `plugin` entries from `opencode.json` and `opencode.jsonc` into the managed profile, removes duplicate Anvil plugin entries, and preserves the original configuration files and local plugin files. It does not run plugin installation or update commands.
+
 Anvil stores lifecycle metadata and backups under the configured XDG data directory. OpenCode authentication and session data remain in OpenCode's configured directories. Anvil does not read, copy, or modify credential contents during upgrade or reforge.
 
 ## Snapshots and recovery
